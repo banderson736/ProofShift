@@ -89,7 +89,7 @@ No generalized feature breadth beyond the first member slice.
 
 ### PS-0.5 First vertical slice
 
-Status: Implementation underway; PS-0.4 gate passed. The PS-0.5 slice adds a shadow-only target contract, PostgreSQL schema-per-run and filesystem directory-per-run connectors, deterministic supported transformations, a Projection Journal, read-back fingerprinting, and `proofshift project`. The 10-member synthetic fixture deliberately includes one unknown status code; that projection must fail with retained partial output, while a corrected rerun must succeed in separate shadow state. Acceptance remains pending the Docker-backed PS-0.5 CI run.
+Status: Accepted. The PS-0.5 Docker-backed [GitHub Actions run 37177385707](https://github.com/banderson736/ProofShift/actions/runs/37177385707/job/111362742298) passed all 82 tests with zero failures and zero skips. The slice adds a shadow-only target contract, PostgreSQL schema-per-run and filesystem directory-per-run connectors, deterministic supported transformations, a Projection Journal, read-back fingerprinting, and `proofshift project`. The 10-member synthetic fixture proves the unknown status fails with retained partial output and a corrected rerun succeeds in isolated shadow state. PS-0.6 is not started.
 
 Scenario:
 

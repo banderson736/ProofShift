@@ -103,3 +103,5 @@ PS-0.5 projection must not begin until PostgreSQL and SQL Server Testcontainers 
 Status: Accepted
 
 PS-0.5 writes only through `IShadowTargetConnector` contexts for systems with role `shadow-target`. PostgreSQL schemas and filesystem directories are isolated per run; the append-only Projection Journal records execution ancestry, and a versioned fingerprint is computed from read-back materialized state. Projection is not evidence of correctness. Merge/chained execution is deferred where deterministic semantics are undefined. See `docs/adr/0006-shadow-projection-runtime.md`.
+
+Acceptance status: accepted after [GitHub Actions run 37177385707](https://github.com/banderson736/ProofShift/actions/runs/37177385707/job/111362742298), which passed all 82 tests with zero failures and zero skips.

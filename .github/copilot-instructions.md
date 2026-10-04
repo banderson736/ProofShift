@@ -38,7 +38,7 @@ Never violate these without an explicit ADR and user approval:
 
 ## Current work boundary
 
-PS-0.4 has been accepted after the Docker-backed GitHub Actions suite passed with 67 tests, zero failures, and zero skips. The active milestone is PS-0.5 Shadow Projection, implemented only to the acceptance criteria in `docs/adr/0006-shadow-projection-runtime.md` and the user-provided `ProofShift Copilot Prompt — PS-0.5 Shadow Projection`. PS-0.5 acceptance still requires its own Docker-backed CI run with no required integration skips. Do not begin PS-0.6 or broaden scope.
+PS-0.4 was accepted after Docker-backed GitHub Actions run 37173803105 passed 67 tests with zero failures and zero skips. PS-0.5 Shadow Projection was accepted after run 37177385707 passed 82 tests with zero failures and zero skips. Do not begin PS-0.6 unless explicitly assigned; keep work within the currently authorized milestone and do not broaden scope.
 
 Do not skip ahead to UI, SaaS, Kubernetes, AI, FHIR, or enterprise infrastructure.
 

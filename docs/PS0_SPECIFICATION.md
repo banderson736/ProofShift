@@ -328,7 +328,7 @@ PS-0.5 consumes live source observations through PS-0.4 connectors, executes dir
 
 The JSONL Projection Journal records what was written, excluded, failed, or retained as metadata-only, including artifact ancestry, edge/version, transformations/versions, and recovery metadata. It is not verification evidence. `proofshift-projection-fingerprint-v1` is computed over actual read-back values. Failure and cancellation retain partial shadow state and journal; neither status reports success. PS-0.5 does not create source snapshots, execute rollback, verify correctness, or write production targets. Merge and chained target-input execution are explicitly deferred because join/scheduling semantics are not defined.
 
-The reusable 10-member configuration, database setup SQL, CSV, and document fixture are in `scenarios/pension-modernization/ps05/`. PS-0.5 acceptance requires the full Docker-capable CI suite to execute the PostgreSQL/SQL Server projection tests without skips.
+The reusable 10-member configuration, database setup SQL, CSV, and document fixture are in `scenarios/pension-modernization/ps05/`. PS-0.5 acceptance is complete: Docker-backed [GitHub Actions run 37177385707](https://github.com/banderson736/ProofShift/actions/runs/37177385707/job/111362742298) reports 82 passed, 0 failed, and 0 skipped, including the PostgreSQL/SQL Server projection and CLI scenarios. PS-0.6 remains unstarted and is outside this accepted slice.
 
 ## PS-0 non-goals
 

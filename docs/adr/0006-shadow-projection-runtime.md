@@ -43,4 +43,4 @@ Rejected because the graph model does not yet define join/group semantics, keys,
 - Projection run/journal models belong to the Projection assembly, not Domain or Evidence.
 - PS-0.5 depends on Engine, Graph, and connector abstractions; concrete targets remain outside core projects.
 - Operators must manage retained shadow state explicitly. No cleanup/rollback command is introduced.
-- Docker CI must execute the SQL Server/PostgreSQL mixed-source scenario and PostgreSQL target integration tests without skips before PS-0.5 is accepted.
+- Acceptance gate satisfied by Docker-backed [GitHub Actions run 37177385707](https://github.com/banderson736/ProofShift/actions/runs/37177385707/job/111362742298): 82 passed, 0 failed, 0 skipped, including SQL Server/PostgreSQL projection and CLI scenarios.
