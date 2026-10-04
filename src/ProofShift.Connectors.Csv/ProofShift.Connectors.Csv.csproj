@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>ProofShift.Connectors.Csv</RootNamespace>
+    <AssemblyName>ProofShift.Connectors.Csv</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ProofShift.Domain/ProofShift.Domain.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.Abstractions/ProofShift.Connectors.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

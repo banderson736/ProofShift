@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>ProofShift.Domain</RootNamespace>
+    <AssemblyName>ProofShift.Domain</AssemblyName>
+  </PropertyGroup>
+</Project>

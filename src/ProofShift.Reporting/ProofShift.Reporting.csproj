@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>ProofShift.Reporting</RootNamespace>
+    <AssemblyName>ProofShift.Reporting</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ProofShift.Domain/ProofShift.Domain.csproj" />
+    <ProjectReference Include="../ProofShift.Evidence/ProofShift.Evidence.csproj" />
+    <ProjectReference Include="../ProofShift.Recovery/ProofShift.Recovery.csproj" />
+  </ItemGroup>
+</Project>

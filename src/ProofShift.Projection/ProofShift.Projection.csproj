@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>ProofShift.Projection</RootNamespace>
+    <AssemblyName>ProofShift.Projection</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ProofShift.Domain/ProofShift.Domain.csproj" />
+    <ProjectReference Include="../ProofShift.Engine/ProofShift.Engine.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.Abstractions/ProofShift.Connectors.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

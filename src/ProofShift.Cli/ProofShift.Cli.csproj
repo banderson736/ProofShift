@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>ProofShift.Cli</RootNamespace>
+    <AssemblyName>ProofShift.Cli</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ProofShift.Domain/ProofShift.Domain.csproj" />
+    <ProjectReference Include="../ProofShift.Configuration/ProofShift.Configuration.csproj" />
+    <ProjectReference Include="../ProofShift.Graph/ProofShift.Graph.csproj" />
+    <ProjectReference Include="../ProofShift.Engine/ProofShift.Engine.csproj" />
+    <ProjectReference Include="../ProofShift.Reporting/ProofShift.Reporting.csproj" />
+  </ItemGroup>
+</Project>
