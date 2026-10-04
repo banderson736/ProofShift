@@ -8,6 +8,14 @@ public enum EvidenceResult
     NotApplicable
 }
 
+public enum EvidenceSeverity
+{
+    Critical,
+    Error,
+    Warning,
+    Info
+}
+
 public enum EvidenceType
 {
     Observation,
@@ -32,16 +40,43 @@ public sealed record EvidenceReference
 {
     public ArtifactId? ArtifactId { get; }
     public EvidenceId? EvidenceId { get; }
+    public RuleId? RuleId { get; }
+    public MigrationEdgeId? MigrationEdgeId { get; }
+    public RunId? RunId { get; }
+    public CheckpointId? CheckpointId { get; }
+    public RunId? ProjectionRunId { get; }
+    public MigrationNodeId? GraphNodeId { get; }
 
-    public EvidenceReference(ArtifactId? artifactId = null, EvidenceId? evidenceId = null)
+    public EvidenceReference(
+        ArtifactId? artifactId = null,
+        EvidenceId? evidenceId = null,
+        RuleId? ruleId = null,
+        MigrationEdgeId? migrationEdgeId = null,
+        RunId? runId = null,
+        CheckpointId? checkpointId = null,
+        RunId? projectionRunId = null,
+        MigrationNodeId? graphNodeId = null)
     {
-        if ((artifactId is null) == (evidenceId is null))
+        var referenceCount = new object?[] { artifactId, evidenceId, ruleId, migrationEdgeId, runId, checkpointId, projectionRunId }
+            .Count(value => value is not null);
+        if (referenceCount != 1)
         {
-            throw new ArgumentException("An evidence reference must identify exactly one artifact or evidence record.");
+            throw new ArgumentException("An evidence reference must identify exactly one supported domain object.");
         }
+
+        if (graphNodeId is not null && artifactId is null)
+            throw new ArgumentException("Graph node scope can only qualify an artifact reference.", nameof(graphNodeId));
 
         ArtifactId = artifactId is { } artifact ? DomainGuard.Required(artifact, nameof(artifactId)) : null;
         EvidenceId = evidenceId is { } evidence ? DomainGuard.Required(evidence, nameof(evidenceId)) : null;
+        RuleId = ruleId is { } rule ? DomainGuard.Required(rule, nameof(ruleId)) : null;
+        MigrationEdgeId = migrationEdgeId is { } edge ? DomainGuard.Required(edge, nameof(migrationEdgeId)) : null;
+        RunId = runId is { } run ? DomainGuard.Required(run, nameof(runId)) : null;
+        CheckpointId = checkpointId is { } checkpoint
+            ? new CheckpointId(DomainGuard.Required(checkpoint.Value, nameof(checkpointId)))
+            : null;
+        ProjectionRunId = projectionRunId is { } projection ? DomainGuard.Required(projection, nameof(projectionRunId)) : null;
+        GraphNodeId = graphNodeId is { } node ? DomainGuard.Required(node, nameof(graphNodeId)) : null;
     }
 }
 
@@ -58,6 +93,8 @@ public sealed record EvidenceRecord
     public EvidenceValue? Actual { get; }
     public string Explanation { get; }
     public DateTimeOffset EvaluatedAt { get; }
+    public EvidenceSeverity Severity { get; }
+    public string? Code { get; }
 
     public EvidenceRecord(
         EvidenceId id,
@@ -70,7 +107,9 @@ public sealed record EvidenceRecord
         string explanation,
         DateTimeOffset evaluatedAt,
         EvidenceValue? expected = null,
-        EvidenceValue? actual = null)
+        EvidenceValue? actual = null,
+        EvidenceSeverity severity = EvidenceSeverity.Error,
+        string? code = null)
     {
         Id = DomainGuard.Required(id, nameof(id));
         RunId = DomainGuard.Required(runId, nameof(runId));
@@ -83,6 +122,8 @@ public sealed record EvidenceRecord
         Actual = actual;
         Explanation = DomainGuard.Required(explanation, nameof(explanation));
         EvaluatedAt = evaluatedAt;
+        Severity = severity;
+        Code = string.IsNullOrWhiteSpace(code) ? null : code.Trim();
     }
 }
 

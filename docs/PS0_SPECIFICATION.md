@@ -338,7 +338,25 @@ PostgreSQL and SQL Server checkpoint reads use provider-supported consistent tra
 
 `proofshift snapshot <config>` creates the checkpoint. `proofshift project <config> --checkpoint <id-or-path>` validates the checkpoint and uses it as the only source provider; graph/configuration/source coverage mismatch, tampering, or missing data fails before target preparation. Replay retains original artifact identity and provenance and adds checkpoint provenance. Shadow projection remains distinct from verification and never writes to production targets.
 
-Focused storage tests cover all normalized value kinds, relationships/temporal metadata, binary round-trip, tamper rejection, incomplete-state rejection, and selector mismatch. The Docker pension scenario captures all three source nodes, changes CSV/document inputs, stops SQL Server, and reproduces the live projection fingerprint from the checkpoint. Full local solution validation passed 86 tests with 0 failures and 2 Windows symlink-permission skips. PS-0.6 remote CI acceptance remains pending; PS-0.7 and later remain out of scope.
+Focused storage tests cover all normalized value kinds, relationships/temporal metadata, binary round-trip, tamper rejection, incomplete-state rejection, and selector mismatch. The Docker pension scenario captures all three source nodes, changes CSV/document inputs, stops SQL Server, and reproduces the live projection fingerprint from the checkpoint. PS-0.6 was accepted after Docker-backed [GitHub Actions run 37180351598, job 111371493382](https://github.com/banderson736/ProofShift/actions/runs/37180351598/job/111371493382) passed 88 tests with 0 failures and 0 skips.
+
+## PS-0.7 Semantic Verification and Evidence Graph
+
+PS-0.7 verifies a completed shadow projection against the exact complete source checkpoint and configuration graph that produced it. Verification must never read live source systems. Expected target records are recomputed using the same deterministic transformation and identity semantics as Projection; actual target state is independently read through connector abstractions.
+
+The run must fail closed when the checkpoint, projection manifest, journal, configuration, graph, source-node coverage, selectors, target-node coverage, or connector versions do not match. Only terminal `produced` journal entries establish expected materialized targets. Pending or failed entries cannot prove materialization. Every source artifact receives one graph-scoped disposition, and every physical target receives graph-scoped source/edge lineage. Graph-node scope is required because split target nodes may share an `ArtifactId`.
+
+Generic rules cover source accounting, target lineage/presence, unexplained targets, uniqueness, and transformed attribute comparison. Domain packs provide typed domain-specific rule implementations without adding domain dependencies to core. Findings are structured, versioned evidence linked to rules, checkpoint, projection, graph edges, and graph-scoped artifacts. Raw source/target values and resolved secrets must not appear in normal evidence output; comparisons use typed canonical values and safe fingerprints. Persisted evidence must support integrity verification and deterministic graph fingerprints.
+
+Acceptance requires:
+
+- exact assertions for seeded missing-target, unexpected-target, duplicate-identity, wrong-status, and wrong-normalized-field defects, followed by a clean repaired replay;
+- changed physical target state changes evidence, changed rule configuration changes the rule-set fingerprint, and repeated clean replay has a deterministic evidence fingerprint;
+- rule exceptions and cancellation do not create completed verification results;
+- tampered evidence storage is rejected;
+- full solution validation and Docker-backed CI pass without required skips.
+
+PS-0.7 is the active milestone and is not accepted until all acceptance criteria pass. PS-0.8 and later are deferred.
 
 ## PS-0 non-goals
 

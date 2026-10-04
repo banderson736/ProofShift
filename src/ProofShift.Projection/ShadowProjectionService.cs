@@ -248,7 +248,14 @@ public sealed class ShadowProjectionService
                 await destination.Connector.CompleteAsync(destination.Context, cancellationToken).ConfigureAwait(false);
             }
 
-            var readBack = await FingerprintReadBackAsync(destinationContexts, graph.GraphHash, cancellationToken).ConfigureAwait(false);
+            var readBack = await MaterializedTargetFingerprint.ComputeAsync(
+                destinationContexts.Select(destination => new MaterializedTargetReadback(
+                    destination.Node.Name,
+                    destination.Node.Selector,
+                    destination.Connector,
+                    destination.Context)),
+                graph.GraphHash,
+                cancellationToken).ConfigureAwait(false);
             if (readBack.RecordCount != targetCount)
             {
                 throw new ProjectionExecutionException("PSPROJ_READBACK_COUNT", "Materialized shadow output count did not match successful writes.");
@@ -471,47 +478,6 @@ public sealed class ShadowProjectionService
         TransformationStepType.CodeMap => "code-map",
         _ => type.ToString().ToLowerInvariant()
     };
-
-    private static async Task<(string Fingerprint, long RecordCount)> FingerprintReadBackAsync(
-        IReadOnlyCollection<(MigrationNode Node, IShadowTargetConnector Connector, ShadowTargetContext Context)> destinations,
-        string graphHash,
-        CancellationToken cancellationToken)
-    {
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        AppendFingerprintPart(hash, "proofshift-projection-fingerprint-v1");
-        AppendFingerprintPart(hash, graphHash);
-        var recordCount = 0L;
-        foreach (var destination in destinations.OrderBy(item => item.Node.Name, StringComparer.Ordinal))
-        {
-            await foreach (var record in destination.Connector.ReadAsync(
-                new ReadRequest(destination.Context, destination.Node.Selector), cancellationToken)
-                .WithCancellation(cancellationToken).ConfigureAwait(false))
-            {
-                recordCount++;
-                AppendFingerprintPart(hash, "record-v1");
-                AppendFingerprintPart(hash, destination.Node.Name);
-                AppendFingerprintPart(hash, record.Artifact.Identity);
-                AppendFingerprintPart(hash, record.SemanticType);
-                AppendFingerprintPart(hash, record.Values.Count.ToString(CultureInfo.InvariantCulture));
-                foreach (var value in record.Values.OrderBy(pair => pair.Key, StringComparer.Ordinal))
-                {
-                    AppendFingerprintPart(hash, value.Key);
-                    AppendFingerprintPart(hash, ProjectionIdentity.CanonicalValue(value.Value));
-                }
-            }
-        }
-
-        return (Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant(), recordCount);
-    }
-
-    private static void AppendFingerprintPart(IncrementalHash hash, string value)
-    {
-        var bytes = Encoding.UTF8.GetBytes(value);
-        Span<byte> length = stackalloc byte[sizeof(int)];
-        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(length, bytes.Length);
-        hash.AppendData(length);
-        hash.AppendData(bytes);
-    }
 
     private sealed class ProjectionJournalWriter : IAsyncDisposable
     {

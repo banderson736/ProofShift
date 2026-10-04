@@ -15,7 +15,9 @@ using ProofShift.Connectors.SqlServer;
 using ProofShift.Domain;
 using ProofShift.Engine;
 using ProofShift.Projection;
+using ProofShift.Packs.Pension;
 using ProofShift.Snapshots;
+using ProofShift.Verification;
 using Testcontainers.MsSql;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -170,6 +172,101 @@ public sealed class ShadowProjectionPensionIntegrationTests
             Assert.Equal(capture.Id.Value.ToString("N", CultureInfo.InvariantCulture), replayed.CheckpointId);
             Assert.Equal(capture.Checkpoint.SourceFingerprint, replayed.CheckpointSourceFingerprint);
             Assert.Equal(capture.Checkpoint.ManifestHash, replayed.CheckpointManifestHash);
+
+            var projectionManifestHash = await ProjectionRunManifestStore.WriteAsync(projectRoot, replayed,
+                TestContext.Current.CancellationToken);
+            var manifest = await ProjectionRunManifestStore.ReadAsync(projectRoot, replayed.Id, TestContext.Current.CancellationToken);
+            var binding = new ProjectionVerificationBinding(replayed.Id, replayed.ConfigurationHash, replayed.GraphHash,
+                capture.Id, capture.Checkpoint.ManifestHash!, capture.Checkpoint.SourceFingerprint!, replayed.Fingerprint!,
+                replayed.FingerprintVersion, replayed.SourceArtifactCount, replayed.TargetArtifactCount, "succeeded", projectionManifestHash,
+                replayed.JournalPath, replayed.ConnectorVersions);
+            Assert.Equal(projectionManifestHash, manifest.ManifestHash);
+
+            var targetRuntimes = graph.Nodes.Where(node => node.Type is MigrationNodeType.Target or MigrationNodeType.Archive)
+                .Select(node => new VerificationTargetRuntime(node.Name,
+                    targetConnectors.Resolve(configuration.Systems.Single(system => system.Id == node.SystemId)
+                        .StorageEndpoints.Single(endpoint => endpoint.Id == node.EndpointId).Connector),
+                    new ShadowTargetContext(new RuntimeConnectorContextFactory(environment).Create(configuration, node),
+                        replayed.Id, SystemRole.ShadowTarget))).ToArray();
+            var ruleRegistry = new VerificationRuleRegistry([new GenericVerificationRuleProvider(), new PensionPack()]);
+            var ruleSet = ruleRegistry.Resolve(CreateVerificationRules());
+            var verificationService = new VerificationService(checkpointStore);
+            var clean = await verificationService.VerifyAsync(configuration, graph, binding, ruleSet, projectRoot,
+                Path.Combine(projectRoot, ".proofshift", "temporary"), "0.1.0", targetRuntimes,
+                TestContext.Current.CancellationToken);
+            Assert.Equal(VerificationOutcome.Passed, clean.Run.Outcome);
+            Assert.Equal(21, clean.Dispositions.Count);
+            Assert.Equal(31, clean.Lineage.Count);
+
+            using (var cancelled = new CancellationTokenSource())
+            {
+                cancelled.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => verificationService.VerifyAsync(configuration, graph,
+                    binding, ruleSet, projectRoot, Path.Combine(projectRoot, ".proofshift", "temporary"), "0.1.0",
+                    targetRuntimes, cancelled.Token));
+            }
+
+            var throwingRules = new VerificationRuleRegistry([new ThrowingRuleProvider()]).Resolve(
+                [new VerificationRuleDefinition(new RuleId("throwing-test"), "throwing-test", "1", EvidenceSeverity.Error)]);
+            var ruleFailure = await Assert.ThrowsAsync<VerificationRuleException>(() => verificationService.VerifyAsync(
+                configuration, graph, binding, throwingRules, projectRoot, Path.Combine(projectRoot, ".proofshift", "temporary"),
+                "0.1.0", targetRuntimes, TestContext.Current.CancellationToken));
+            Assert.Equal(VerificationIssueCodes.RuleExecutionFailure, ruleFailure.Code);
+
+            var verifiedSchema = $"proofshift_shadow_{replayed.Id.Value:N}";
+            await using (var mutate = new NpgsqlConnection(postgresContainer.GetConnectionString()))
+            {
+                await mutate.OpenAsync(TestContext.Current.CancellationToken);
+                await using var seedDefects = mutate.CreateCommand();
+                seedDefects.CommandText = $"""
+                    UPDATE "{verifiedSchema}".member_status SET status = 'RETIRED' WHERE id = 1;
+                    UPDATE "{verifiedSchema}".participant SET first_name = 'broken name' WHERE id = 3;
+                    DELETE FROM "{verifiedSchema}".participant WHERE id = 2;
+                    INSERT INTO "{verifiedSchema}".participant VALUES (999, 'UNEXPLAINED', 'ACTIVE', 1, DATE '1990-02-03', TIMESTAMP '2025-01-02 03:04:05', 'synthetic');
+                    ALTER TABLE "{verifiedSchema}".participant DROP CONSTRAINT participant_pkey;
+                    INSERT INTO "{verifiedSchema}".participant SELECT * FROM "{verifiedSchema}".participant WHERE id = 1;
+                    """;
+                Assert.Equal(5, await seedDefects.ExecuteNonQueryAsync(TestContext.Current.CancellationToken));
+                await using var statusCheck = mutate.CreateCommand();
+                statusCheck.CommandText = $"SELECT status FROM \"{verifiedSchema}\".member_status WHERE id = 1";
+                Assert.Equal("RETIRED", (string)(await statusCheck.ExecuteScalarAsync(TestContext.Current.CancellationToken))!);
+            }
+
+            var changed = await verificationService.VerifyAsync(configuration, graph, binding, ruleSet, projectRoot,
+                Path.Combine(projectRoot, ".proofshift", "temporary"), "0.1.0", targetRuntimes,
+                TestContext.Current.CancellationToken);
+            Assert.Equal(VerificationOutcome.Failed, changed.Run.Outcome);
+            Assert.Contains(changed.Findings, finding => finding.Code == "MaterializedTargetChanged");
+            Assert.Contains(changed.Findings, finding => finding.Code == "AttributeMismatch" && finding.StableKey.Contains("member-status-attributes", StringComparison.Ordinal));
+            Assert.Contains(changed.Findings, finding => finding.Code == "AttributeMismatch" && finding.StableKey.Contains("participant-name-attributes", StringComparison.Ordinal));
+            Assert.Contains(changed.Findings, finding => finding.Code == "MissingTarget");
+            Assert.Contains(changed.Findings, finding => finding.Code == "UnexpectedTarget");
+            Assert.Contains(changed.Findings, finding => finding.Code == "DuplicateTarget");
+            Assert.NotEqual(clean.Run.EvidenceFingerprint, changed.Run.EvidenceFingerprint);
+
+            await using (var repair = new NpgsqlConnection(postgresContainer.GetConnectionString()))
+            {
+                await repair.OpenAsync(TestContext.Current.CancellationToken);
+                await using var repairTargets = repair.CreateCommand();
+                repairTargets.CommandText = $"""
+                    UPDATE "{verifiedSchema}".member_status SET status = 'ACTIVE' WHERE id = 1;
+                    UPDATE "{verifiedSchema}".participant SET first_name = 'MEMBER 3' WHERE id = 3;
+                    DELETE FROM "{verifiedSchema}".participant WHERE id = 999;
+                    DELETE FROM "{verifiedSchema}".participant WHERE id = 1;
+                    INSERT INTO "{verifiedSchema}".participant VALUES (1, 'ADA LOVELACE', 'ACTIVE', 12345678901234567890.12345678, DATE '1990-02-03', TIMESTAMP '2025-01-02 03:04:05', NULL);
+                    INSERT INTO "{verifiedSchema}".participant VALUES (2, 'MEMBER 2', 'ACTIVE', 12345678901234567890.12345678, DATE '1990-02-03', TIMESTAMP '2025-01-02 03:04:05', 'synthetic');
+                    ALTER TABLE "{verifiedSchema}".participant ADD CONSTRAINT participant_pkey PRIMARY KEY (id);
+                    """;
+                Assert.Equal(7, await repairTargets.ExecuteNonQueryAsync(TestContext.Current.CancellationToken));
+            }
+
+            var repaired = await verificationService.VerifyAsync(configuration, graph, binding, ruleSet, projectRoot,
+                Path.Combine(projectRoot, ".proofshift", "temporary"), "0.1.0", targetRuntimes,
+                TestContext.Current.CancellationToken);
+            Assert.Equal(VerificationOutcome.Passed, repaired.Run.Outcome);
+            Assert.Equal(clean.Run.EvidenceFingerprint, repaired.Run.EvidenceFingerprint);
+            var changedRuleSet = ruleRegistry.Resolve(CreateVerificationRules(attribute: "amount"));
+            Assert.NotEqual(ruleSet.Fingerprint, changedRuleSet.Fingerprint);
         }
         finally
         {
@@ -177,6 +274,48 @@ public sealed class ShadowProjectionPensionIntegrationTests
             Directory.Delete(csvRoot, recursive: true);
             Directory.Delete(shadowRoot, recursive: true);
             Directory.Delete(projectRoot, recursive: true);
+        }
+    }
+
+    private static IReadOnlyCollection<VerificationRuleDefinition> CreateVerificationRules(string attribute = "status") =>
+    [
+        new(new RuleId("source-accounting"), "source-artifact-accounting", "1", EvidenceSeverity.Error),
+        new(new RuleId("target-lineage"), "target-lineage", "1", EvidenceSeverity.Error),
+        new(new RuleId("target-presence"), "target-presence", "1", EvidenceSeverity.Error),
+        new(new RuleId("unexpected-targets"), "unexpected-target", "1", EvidenceSeverity.Error),
+        new(new RuleId("pension-member-accounting"), "pension-member-accounting", "1", EvidenceSeverity.Error,
+            [new KeyValuePair<string, string>("semanticType", "Pension.Member")]),
+        new(new RuleId("participant-uniqueness"), "pension-member-uniqueness", "1", EvidenceSeverity.Error,
+            [new KeyValuePair<string, string>("semanticType", "Pension.Member"), new KeyValuePair<string, string>("targetNode", "participant")]),
+        new(new RuleId("member-status-attributes"), "pension-member-attribute", "1", EvidenceSeverity.Error,
+            [new KeyValuePair<string, string>("semanticType", "Pension.Member"), new KeyValuePair<string, string>("targetNode", "member-status"),
+             new KeyValuePair<string, string>("attribute", attribute)]),
+        new(new RuleId("participant-name-attributes"), "attribute-comparison", "1", EvidenceSeverity.Error,
+            [new KeyValuePair<string, string>("semanticType", "Pension.Member"), new KeyValuePair<string, string>("targetNode", "participant"),
+             new KeyValuePair<string, string>("attribute", "first_name")])
+    ];
+
+    private sealed class ThrowingRuleProvider : IVerificationRuleProvider
+    {
+        public string Id => "test.throwing";
+        public string Version => "1";
+        public IReadOnlyCollection<VerificationRuleFactory> RuleFactories { get; } =
+            [new("throwing-test", definition => new ThrowingRule(definition.Id, definition.Version))];
+    }
+
+    private sealed class ThrowingRule(RuleId id, string version) : ProofShift.Verification.IVerificationRule
+    {
+        public RuleId Id => id;
+        public string Version => version;
+        public VerificationScope Scope => VerificationScope.Entity;
+
+        public async IAsyncEnumerable<VerificationFinding> EvaluateAsync(VerificationExecutionContext context,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Yield();
+            await Task.FromException(new InvalidOperationException("synthetic rule failure"));
+            yield break;
         }
     }
 
@@ -296,6 +435,21 @@ public sealed class ShadowProjectionPensionIntegrationTests
             Assert.Equal("succeeded", replayJson.RootElement.GetProperty("status").GetString());
             Assert.Equal(liveProjectionFingerprint, replayJson.RootElement.GetProperty("projectionFingerprint").GetString());
             Assert.Equal(checkpointId, replayJson.RootElement.GetProperty("checkpointId").GetString());
+
+            var projectionRunId = replayJson.RootElement.GetProperty("runId").GetString();
+            var verification = await RunCliAsync(cli, fixture, environment, "verify", "--checkpoint", checkpointId!,
+                "--projection", projectionRunId!, "--json");
+            Assert.True(verification.ExitCode == 0,
+                $"Verification CLI failed with exit code {verification.ExitCode}. stdout: {verification.StandardOutput} stderr: {verification.StandardError}");
+            Assert.DoesNotContain(sqlBuilder.ConnectionString, verification.StandardOutput, StringComparison.Ordinal);
+            Assert.DoesNotContain(postgresContainer.GetConnectionString(), verification.StandardOutput, StringComparison.Ordinal);
+            using var verificationJson = JsonDocument.Parse(verification.StandardOutput);
+            Assert.Equal("passed", verificationJson.RootElement.GetProperty("outcome").GetString());
+            Assert.Equal(57, verificationJson.RootElement.GetProperty("findings").GetInt32());
+            var verificationRunId = verificationJson.RootElement.GetProperty("runId").GetString();
+            var evidence = await RunCliAsync(cli, fixture, environment, "evidence", "--run", verificationRunId!, "--json");
+            Assert.Equal(0, evidence.ExitCode);
+            Assert.Contains("proofshift-evidence-store-v1", evidence.StandardOutput, StringComparison.Ordinal);
         }
         finally
         {

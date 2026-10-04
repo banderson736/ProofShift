@@ -140,11 +140,65 @@ public sealed class DomainFoundationTests
     }
 
     [Fact]
+    public void ScopedAccountingAndLineageDistinguishSameArtifactIdAcrossGraphNodes()
+    {
+        var participantNode = NewNodeId();
+        var statusNode = NewNodeId();
+        var sharedTarget = Artifact("target-member-1", "target-system");
+        var source = Artifact("source-member-1");
+        var edge = NewEdgeId();
+        var dispositions = new ArtifactDispositionLedger(
+        [
+            new ArtifactDispositionRecord(source, ArtifactDisposition.Transformed, [sharedTarget], sourceNodeId: participantNode),
+            new ArtifactDispositionRecord(source, ArtifactDisposition.Transformed, [sharedTarget], sourceNodeId: statusNode)
+        ]);
+        var lineages = new LineageLedger(
+        [
+            new LineageRecord(sharedTarget, [source], [edge], "graph-hash", participantNode),
+            new LineageRecord(sharedTarget, [source], [edge], "graph-hash", statusNode)
+        ]);
+
+        Assert.Empty(dispositions.ValidateScopedCoverage(
+        [new GraphArtifactReference(participantNode, source), new GraphArtifactReference(statusNode, source)]));
+        Assert.Empty(lineages.ValidateScopedCoverage(
+        [new GraphArtifactReference(participantNode, sharedTarget), new GraphArtifactReference(statusNode, sharedTarget)]));
+        Assert.Equal(participantNode,
+            new EvidenceReference(artifactId: sharedTarget.Id, graphNodeId: participantNode).GraphNodeId);
+    }
+
+    [Fact]
     public void EvidenceReferencesMustIdentifyExactlyOneInput()
     {
         Assert.Throws<ArgumentException>(() => new EvidenceReference());
         Assert.Throws<ArgumentException>(() => new EvidenceReference(new ArtifactId("artifact"), new EvidenceId(Guid.NewGuid())));
         Assert.Equal(new ArtifactId("artifact"), new EvidenceReference(artifactId: new ArtifactId("artifact")).ArtifactId);
+        Assert.Equal(new RuleId("member-status"), new EvidenceReference(ruleId: new RuleId("member-status")).RuleId);
+        var edgeId = NewEdgeId();
+        Assert.Equal(edgeId, new EvidenceReference(migrationEdgeId: edgeId).MigrationEdgeId);
+        Assert.Throws<ArgumentException>(() => new EvidenceReference(
+            runId: new RunId(Guid.NewGuid()), projectionRunId: new RunId(Guid.NewGuid())));
+    }
+
+    [Fact]
+    public void EvidenceRecordCarriesSeverityAndStableDiscrepancyCode()
+    {
+        var evidence = new EvidenceRecord(
+            new EvidenceId(Guid.NewGuid()),
+            new RunId(Guid.NewGuid()),
+            EvidenceType.Comparison,
+            new RuleId("member-status"),
+            "1",
+            EvidenceResult.Fail,
+            [new EvidenceReference(artifactId: new ArtifactId("member-7"))],
+            "Target status differs from the graph-derived expected value.",
+            DateTimeOffset.UnixEpoch,
+            new EvidenceValue(new StringValue("ACTIVE")),
+            new EvidenceValue(new StringValue("INACTIVE")),
+            EvidenceSeverity.Critical,
+            "AttributeMismatch");
+
+        Assert.Equal(EvidenceSeverity.Critical, evidence.Severity);
+        Assert.Equal("AttributeMismatch", evidence.Code);
     }
 
     [Fact]
@@ -180,4 +234,5 @@ public sealed class DomainFoundationTests
     private static MigrationNodeId NewNodeId() => new(Guid.NewGuid());
 
     private static MigrationEdgeId NewEdgeId() => new(Guid.NewGuid());
+
 }

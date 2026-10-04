@@ -113,7 +113,7 @@ Exact assertions required.
 
 ### PS-0.6 Source checkpoints and reproducible snapshots
 
-Status: Implemented and locally Docker-validated; remote CI acceptance pending. Storage, typed codecs, endpoint fingerprints, filesystem/CSV observed-read checks, relational transaction captures, checkpoint-backed source streams, and CLI `snapshot`/`project --checkpoint` are implemented. Full local solution tests pass 86/86 with 0 failures and 2 Windows symlink-permission skips. The Docker pension scenario proves source mutation/offline replay with the same projection fingerprint. The migration graph compiler is the authority for the exact source-node set.
+Status: Accepted. Docker-backed [GitHub Actions run 37180351598](https://github.com/banderson736/ProofShift/actions/runs/37180351598/job/111371493382) passed 88 tests with 0 failures and 0 skips. Storage, typed codecs, endpoint fingerprints, filesystem/CSV observed-read checks, relational transaction captures, checkpoint-backed source streams, and CLI `snapshot`/`project --checkpoint` are implemented. The Docker pension scenario proves source mutation/offline replay with the same projection fingerprint. The migration graph compiler is the authority for the exact source-node set.
 
 Acceptance requires:
 
@@ -126,13 +126,22 @@ Acceptance requires:
 - full pension modernization scenario with stable read-back projection fingerprint;
 - remote Docker-backed CI acceptance with no required skips.
 
-Do not begin PS-0.7 until PS-0.6 is accepted.
-
 ### PS-0.7 Evidence graph
 
-Ensure source observation → transformation → target observation → comparison → decision can be traced.
+Status: In progress. The active slice adds checkpoint/projection-bound semantic verification, generic and Pension rule providers, graph-scoped dispositions and lineage, hash-only SQLite working sets, physical shadow read-back comparison, deterministic Evidence Graphs, filesystem integrity storage, and CLI `verify`/`evidence` commands. Local full solution tests currently pass 94/96 with 0 failures and 2 Windows symlink-permission skips; Docker-backed verification/CLI scenarios pass locally. Remote PS-0.7 CI acceptance is still outstanding.
 
-Add evidence query/serialization.
+Acceptance requires:
+
+- strict configuration, graph, checkpoint, projection manifest, selector, source coverage, journal, and connector-version binding; incomplete or ambiguous inputs fail closed;
+- derive expected targets only by replaying the exact complete checkpoint through the configured graph transformations, and independently read every physical shadow target;
+- detect missing, unexpected, duplicate, and changed targets; compare normalized attributes without placing raw record values or secrets in normal evidence output;
+- exactly account for each graph-scoped source artifact and provide graph-scoped lineage for each physical target, including split outputs with colliding ArtifactIds;
+- produce a deterministic, versioned evidence graph linked to rules, checkpoint, projection, edges, and graph-scoped artifacts, with tamper-detecting persistence;
+- exact seeded-defect assertions and a clean repaired replay; changing target state or rules must change the relevant fingerprint;
+- cancellation and rule exceptions must not produce a completed verification result;
+- full solution tests and Docker-backed CI pass with no required skips.
+
+Do not begin PS-0.8 until PS-0.7 is accepted.
 
 ### PS-0.8 Recovery
 

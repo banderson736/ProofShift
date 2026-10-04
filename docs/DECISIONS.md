@@ -111,4 +111,4 @@ Status: Accepted
 
 PS-0.6 implements immutable materialized source checkpoints in a separate `ProofShift.Snapshots` assembly. The generic Projection source provider validates exact configuration/graph/source coverage and fails closed without live-read fallback. Relational connectors use provider-supported checkpoint transactions; filesystem/CSV remain observed reads with drift detection. Mixed-source checkpoints report `CrossSystemAtomic: false`. Incomplete checkpoints cannot be replayed, and integrity is checked before shadow destinations are prepared. See `docs/adr/0007-materialized-source-checkpoints.md`.
 
-PS-0.6 implementation is locally complete and Docker-validated but not yet accepted pending remote CI. PS-0.7 and later remain unstarted.
+PS-0.6 was accepted after Docker-backed [GitHub Actions run 37180351598](https://github.com/banderson736/ProofShift/actions/runs/37180351598/job/111371493382) passed 88 tests with zero failures and zero skips. PS-0.7 Semantic Verification & Evidence Graph is the active milestone; PS-0.8 and later remain deferred.

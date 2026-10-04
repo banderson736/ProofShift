@@ -146,6 +146,18 @@ public sealed record ArtifactReference
     }
 }
 
+public sealed record GraphArtifactReference
+{
+    public MigrationNodeId NodeId { get; }
+    public ArtifactReference Artifact { get; }
+
+    public GraphArtifactReference(MigrationNodeId nodeId, ArtifactReference artifact)
+    {
+        NodeId = DomainGuard.Required(nodeId, nameof(nodeId));
+        Artifact = DomainGuard.NotNull(artifact, nameof(artifact));
+    }
+}
+
 public abstract record ValueNode;
 
 public sealed record NullValue : ValueNode;

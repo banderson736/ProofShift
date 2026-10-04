@@ -7,10 +7,13 @@ using ProofShift.Connectors.Files;
 using ProofShift.Connectors.Postgres;
 using ProofShift.Connectors.SqlServer;
 using ProofShift.Engine;
+using ProofShift.Evidence;
 using ProofShift.Graph;
+using ProofShift.Packs.Pension;
 using ProofShift.Projection;
 using ProofShift.Snapshots;
 using ProofShift.Domain;
+using ProofShift.Verification;
 
 namespace ProofShift.Cli;
 
@@ -32,6 +35,8 @@ internal static class Program
 
         var jsonOutput = false;
         string? checkpoint = null;
+        string? projection = null;
+        string? verificationRun = null;
         for (var index = 2; index < args.Length; index++)
         {
             if (string.Equals(args[index], "--json", StringComparison.OrdinalIgnoreCase))
@@ -42,6 +47,16 @@ internal static class Program
                 index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
             {
                 checkpoint = args[++index];
+            }
+            else if (string.Equals(args[index], "--projection", StringComparison.OrdinalIgnoreCase) &&
+                index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                projection = args[++index];
+            }
+            else if (string.Equals(args[index], "--run", StringComparison.OrdinalIgnoreCase) &&
+                index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                verificationRun = args[++index];
             }
             else
             {
@@ -73,6 +88,16 @@ internal static class Program
         if (string.Equals(args[0], "snapshot", StringComparison.OrdinalIgnoreCase) && checkpoint is null)
         {
             return await SnapshotAsync(args[1], jsonOutput).ConfigureAwait(false);
+        }
+
+        if (string.Equals(args[0], "verify", StringComparison.OrdinalIgnoreCase) && checkpoint is not null && projection is not null)
+        {
+            return await VerifyAsync(args[1], checkpoint, projection, jsonOutput).ConfigureAwait(false);
+        }
+
+        if (string.Equals(args[0], "evidence", StringComparison.OrdinalIgnoreCase) && verificationRun is not null)
+        {
+            return await ReadEvidenceAsync(args[1], verificationRun, jsonOutput).ConfigureAwait(false);
         }
 
         WriteUsage();
@@ -378,6 +403,7 @@ internal static class Program
             try
             {
                 run = await service.ProjectAsync(loaded.Configuration, compilation.Graph, projectDirectory, cancellation.Token).ConfigureAwait(false);
+                await ProjectionRunManifestStore.WriteAsync(projectDirectory, run, CancellationToken.None).ConfigureAwait(false);
             }
             finally
             {
@@ -409,6 +435,161 @@ internal static class Program
                 Console.Error.WriteLine("Shadow projection could not be completed.");
             }
 
+            return 1;
+        }
+    }
+
+    private static async Task<int> VerifyAsync(string path, string checkpointId, string projectionRunId, bool jsonOutput)
+    {
+        using var cancellation = new CancellationTokenSource();
+        ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            cancellation.Cancel();
+        };
+        Console.CancelKeyPress += cancelHandler;
+        try
+        {
+            if (!Guid.TryParse(checkpointId, out var checkpointGuid) || !Guid.TryParse(projectionRunId, out var projectionGuid))
+            {
+                Console.Error.WriteLine("Checkpoint and projection identifiers must be GUIDs.");
+                return 2;
+            }
+
+            var loaded = await new ConfigurationLoader().LoadAsync(path).ConfigureAwait(false);
+            if (loaded.Configuration is null)
+            {
+                Console.Error.WriteLine("Configuration validation failed; verification was not started.");
+                return 1;
+            }
+
+            var compilation = MigrationGraphCompiler.Compile(loaded.Configuration);
+            if (!compilation.IsValid || compilation.Graph is null)
+            {
+                Console.Error.WriteLine("Migration graph validation failed; verification was not started.");
+                return 1;
+            }
+
+            var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(path))
+                ?? throw new InvalidOperationException("Project configuration directory is unavailable.");
+            var projection = await ProjectionRunManifestStore.ReadAsync(projectDirectory, new RunId(projectionGuid),
+                cancellation.Token).ConfigureAwait(false);
+            if (projection.CheckpointId is null || !Guid.TryParse(projection.CheckpointId, out var manifestCheckpoint) ||
+                manifestCheckpoint != checkpointGuid || projection.CheckpointManifestHash is null ||
+                projection.CheckpointSourceFingerprint is null || projection.ProjectionFingerprint is null)
+            {
+                Console.Error.WriteLine("Projection manifest does not match the requested complete checkpoint binding.");
+                return 1;
+            }
+
+            var binding = new ProjectionVerificationBinding(projection.RunId, projection.ConfigurationHash, projection.GraphHash,
+                new CheckpointId(checkpointGuid), projection.CheckpointManifestHash, projection.CheckpointSourceFingerprint,
+                projection.ProjectionFingerprint, projection.ProjectionFingerprintVersion, projection.SourceArtifactCount,
+                projection.TargetArtifactCount,
+                projection.Status.ToString().ToLowerInvariant(), projection.ManifestHash, projection.JournalPath,
+                projection.ConnectorVersions);
+            var targetConnectors = new ShadowTargetConnectorRegistry(
+            [
+                new PostgresShadowTargetConnector(),
+                new FilesystemShadowTargetConnector()
+            ]);
+            var contextFactory = new RuntimeConnectorContextFactory();
+            var targetRuntimes = compilation.Graph.Nodes
+                .Where(node => node.Type is MigrationNodeType.Target or MigrationNodeType.Archive)
+                .OrderBy(node => node.Name, StringComparer.Ordinal)
+                .Select(node =>
+                {
+                    var system = loaded.Configuration.Systems.Single(item => item.Id == node.SystemId);
+                    var endpoint = system.StorageEndpoints.Single(item => item.Id == node.EndpointId);
+                    var connector = targetConnectors.Resolve(endpoint.Connector);
+                    return new VerificationTargetRuntime(node.Name, connector,
+                        new ShadowTargetContext(contextFactory.Create(loaded.Configuration, node), projection.RunId, system.Role));
+                }).ToArray();
+            var registry = new VerificationRuleRegistry([new GenericVerificationRuleProvider(), new PensionPack()]);
+            var ruleSet = registry.Resolve(VerificationRuleConfigurationLoader.Load(loaded.Configuration));
+            var snapshotStore = new FileSystemSnapshotStore(Path.Combine(projectDirectory, ".proofshift", "checkpoints"));
+            var verificationService = new VerificationService(snapshotStore);
+            var result = await verificationService.VerifyAsync(loaded.Configuration, compilation.Graph, binding, ruleSet,
+                projectDirectory, Path.Combine(projectDirectory, ".proofshift", "temporary"), "0.1.0",
+                targetRuntimes, cancellation.Token).ConfigureAwait(false);
+            var evidenceStore = new FileSystemEvidenceStore(Path.Combine(projectDirectory, ".proofshift", "verifications"));
+            var receipt = await evidenceStore.SaveAsync(result.EvidenceGraph, cancellation.Token).ConfigureAwait(false);
+            var output = new VerificationOutput(result.Run.Id.Value.ToString("D", CultureInfo.InvariantCulture),
+                result.Run.Outcome.ToString().ToLowerInvariant(), result.Run.ConfigurationHash, result.Run.GraphHash,
+                result.Run.CheckpointId.Value.ToString("N", CultureInfo.InvariantCulture), result.Run.ProjectionRunId.Value.ToString("D", CultureInfo.InvariantCulture),
+                result.Run.ProjectionManifestHash, result.Run.RuleSetFingerprint, result.Run.EvidenceFingerprint, result.Findings.Count,
+                result.Run.FailedRules, result.Run.WarningRules, receipt.RelativePath);
+            if (jsonOutput) Console.WriteLine(JsonSerializer.Serialize(output, JsonOptions));
+            else
+            {
+                Console.WriteLine("ProofShift Semantic Verification");
+                Console.WriteLine($"Run: {output.RunId}");
+                Console.WriteLine($"Outcome: {output.Outcome.ToUpperInvariant()}");
+                Console.WriteLine($"Findings: {output.Findings}");
+                Console.WriteLine($"Failed Rules: {output.FailedRules}");
+                Console.WriteLine($"Warning Rules: {output.WarningRules}");
+                Console.WriteLine($"Evidence Fingerprint: {output.EvidenceFingerprint}");
+                Console.WriteLine($"Evidence: {output.EvidencePath}");
+            }
+
+            return result.Run.Outcome is VerificationOutcome.Passed or VerificationOutcome.PassedWithWarnings ? 0 : 1;
+        }
+        catch (OperationCanceledException) { return 130; }
+        catch (VerificationRuleException exception)
+        {
+            Console.Error.WriteLine($"Verification failed ({exception.Code}).");
+            return 1;
+        }
+        catch
+        {
+            Console.Error.WriteLine("Semantic verification could not be completed.");
+            return 1;
+        }
+        finally
+        {
+            Console.CancelKeyPress -= cancelHandler;
+        }
+    }
+
+    private static async Task<int> ReadEvidenceAsync(string path, string verificationRunId, bool jsonOutput)
+    {
+        try
+        {
+            if (!Guid.TryParse(verificationRunId, out var runGuid))
+            {
+                Console.Error.WriteLine("Verification run identifier must be a GUID.");
+                return 2;
+            }
+
+            var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(path))
+                ?? throw new InvalidOperationException("Project configuration directory is unavailable.");
+            var store = new FileSystemEvidenceStore(Path.Combine(projectDirectory, ".proofshift", "verifications"));
+            if (!await store.VerifyIntegrityAsync(new RunId(runGuid), CancellationToken.None).ConfigureAwait(false))
+            {
+                Console.Error.WriteLine("Evidence integrity verification failed.");
+                return 1;
+            }
+
+            await using var stream = await store.OpenReadAsync(new RunId(runGuid), CancellationToken.None).ConfigureAwait(false);
+            if (jsonOutput)
+            {
+                using var document = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
+                Console.WriteLine(JsonSerializer.Serialize(document.RootElement, JsonOptions));
+            }
+            else
+            {
+                using var document = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
+                Console.WriteLine("ProofShift Evidence Graph");
+                Console.WriteLine($"Run: {runGuid:D}");
+                Console.WriteLine($"Fingerprint: {document.RootElement.GetProperty("fingerprint").GetString()}");
+                Console.WriteLine($"Records: {document.RootElement.GetProperty("records").GetArrayLength()}");
+                Console.WriteLine("Integrity: VERIFIED");
+            }
+            return 0;
+        }
+        catch
+        {
+            Console.Error.WriteLine("Evidence graph could not be read.");
             return 1;
         }
     }
@@ -718,7 +899,7 @@ internal static class Program
         issue.Message);
 
     private static void WriteUsage() =>
-        Console.Error.WriteLine("Usage: proofshift validate <config> [--json] | proofshift plan <config> [--json] | proofshift inspect <config> [--json] | proofshift snapshot <config> [--json] | proofshift project <config> [--checkpoint <id-or-path>] [--json]");
+        Console.Error.WriteLine("Usage: proofshift validate <config> [--json] | proofshift plan <config> [--json] | proofshift inspect <config> [--json] | proofshift snapshot <config> [--json] | proofshift project <config> [--checkpoint <id-or-path>] [--json] | proofshift verify <config> --checkpoint <id> --projection <run-id> [--json] | proofshift evidence <config> --run <verification-run-id> [--json]");
 
     private sealed record SnapshotOutput(
         string CheckpointId,
@@ -788,6 +969,21 @@ internal static class Program
         string? CheckpointId,
         string? CheckpointSourceFingerprint,
         string? CheckpointManifestHash);
+
+    private sealed record VerificationOutput(
+        string RunId,
+        string Outcome,
+        string ConfigurationHash,
+        string GraphHash,
+        string CheckpointId,
+        string ProjectionRunId,
+        string ProjectionManifestHash,
+        string RuleSetFingerprint,
+        string EvidenceFingerprint,
+        int Findings,
+        int FailedRules,
+        int WarningRules,
+        string EvidencePath);
 
     private sealed record SourceColumnOutput(string Name, string DataType, bool Nullable, int? Ordinal);
 

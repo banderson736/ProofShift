@@ -453,20 +453,29 @@ public enum ArtifactDisposition
 public sealed record ArtifactDispositionRecord
 {
     public ArtifactReference Source { get; }
+    public MigrationNodeId? SourceNodeId { get; }
     public ArtifactDisposition Disposition { get; }
     public DomainList<ArtifactReference> Targets { get; }
+    public DomainList<MigrationNodeId> TargetNodeIds { get; }
     public string? Reason { get; }
 
     public ArtifactDispositionRecord(
         ArtifactReference source,
         ArtifactDisposition disposition,
         IEnumerable<ArtifactReference>? targets = null,
-        string? reason = null)
+        string? reason = null,
+        MigrationNodeId? sourceNodeId = null,
+        IEnumerable<MigrationNodeId>? targetNodeIds = null)
     {
         Source = DomainGuard.NotNull(source, nameof(source));
+        SourceNodeId = sourceNodeId is { } nodeId ? DomainGuard.Required(nodeId, nameof(sourceNodeId)) : null;
         Targets = new DomainList<ArtifactReference>(targets ?? Array.Empty<ArtifactReference>());
+        TargetNodeIds = new DomainList<MigrationNodeId>(targetNodeIds ?? []);
         Reason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim();
         Disposition = disposition;
+
+        if (TargetNodeIds.Count > 0 && TargetNodeIds.Count != Targets.Count)
+            throw new ArgumentException("Target graph-node scope must align with target artifact references.", nameof(targetNodeIds));
 
         if (disposition is ArtifactDisposition.Migrated or ArtifactDisposition.Transformed or ArtifactDisposition.Derived or ArtifactDisposition.Archived
             && Targets.Count == 0)
@@ -492,20 +501,23 @@ public enum ArtifactAccountingIssueCode
     MissingDisposition,
     UnexpectedDisposition,
     DuplicateDisposition,
-    UnaccountedArtifact
+    UnaccountedArtifact,
+    MissingNodeScope
 }
 
 public sealed record ArtifactAccountingIssue
 {
     public ArtifactAccountingIssueCode Code { get; }
     public ArtifactId ArtifactId { get; }
+    public MigrationNodeId? NodeId { get; }
     public string Message { get; }
 
-    public ArtifactAccountingIssue(ArtifactAccountingIssueCode code, ArtifactId artifactId, string message)
+    public ArtifactAccountingIssue(ArtifactAccountingIssueCode code, ArtifactId artifactId, string message, MigrationNodeId? nodeId = null)
     {
         Code = code;
         ArtifactId = DomainGuard.Required(artifactId, nameof(artifactId));
         Message = DomainGuard.Required(message, nameof(message));
+        NodeId = nodeId;
     }
 }
 
@@ -561,12 +573,51 @@ public sealed record ArtifactDispositionLedger
 
         return new DomainList<ArtifactAccountingIssue>(issues);
     }
+
+    public DomainList<ArtifactAccountingIssue> ValidateScopedCoverage(IEnumerable<GraphArtifactReference> sourceArtifacts)
+    {
+        ArgumentNullException.ThrowIfNull(sourceArtifacts);
+        var expected = sourceArtifacts.Select(item => (item.NodeId, item.Artifact.Id)).ToHashSet();
+        var scopedRecords = new List<(MigrationNodeId NodeId, ArtifactDispositionRecord Record)>();
+        var issues = new List<ArtifactAccountingIssue>();
+        foreach (var record in Records)
+        {
+            if (record.SourceNodeId is not { } nodeId)
+            {
+                issues.Add(new ArtifactAccountingIssue(ArtifactAccountingIssueCode.MissingNodeScope, record.Source.Id,
+                    "Verification disposition must identify its source graph node."));
+                continue;
+            }
+            scopedRecords.Add((nodeId, record));
+        }
+
+        foreach (var group in scopedRecords.GroupBy(item => (item.NodeId, item.Record.Source.Id)))
+        {
+            if (!expected.Contains(group.Key))
+                issues.Add(new ArtifactAccountingIssue(ArtifactAccountingIssueCode.UnexpectedDisposition, group.Key.Id,
+                    "Disposition references an unexpected graph-scoped source artifact.", group.Key.NodeId));
+            if (group.Count() > 1)
+                issues.Add(new ArtifactAccountingIssue(ArtifactAccountingIssueCode.DuplicateDisposition, group.Key.Id,
+                    "Graph-scoped source artifact has more than one final disposition.", group.Key.NodeId));
+            if (group.Any(item => item.Record.Disposition == ArtifactDisposition.Unaccounted))
+                issues.Add(new ArtifactAccountingIssue(ArtifactAccountingIssueCode.UnaccountedArtifact, group.Key.Id,
+                    "Graph-scoped source artifact is unaccounted.", group.Key.NodeId));
+        }
+
+        var recorded = scopedRecords.Select(item => (item.NodeId, item.Record.Source.Id)).ToHashSet();
+        foreach (var missing in expected.Except(recorded))
+            issues.Add(new ArtifactAccountingIssue(ArtifactAccountingIssueCode.MissingDisposition, missing.Id,
+                "Graph-scoped source artifact has no disposition.", missing.NodeId));
+        return new DomainList<ArtifactAccountingIssue>(issues);
+    }
 }
 
 public sealed record LineageRecord
 {
     public ArtifactReference Target { get; }
+    public MigrationNodeId? TargetNodeId { get; }
     public DomainList<ArtifactReference> Sources { get; }
+    public DomainList<MigrationNodeId> SourceNodeIds { get; }
     public DomainList<MigrationEdgeId> Path { get; }
     public string PlanHash { get; }
 
@@ -574,10 +625,14 @@ public sealed record LineageRecord
         ArtifactReference target,
         IEnumerable<ArtifactReference> sources,
         IEnumerable<MigrationEdgeId> path,
-        string planHash)
+        string planHash,
+        MigrationNodeId? targetNodeId = null,
+        IEnumerable<MigrationNodeId>? sourceNodeIds = null)
     {
         Target = DomainGuard.NotNull(target, nameof(target));
+        TargetNodeId = targetNodeId is { } nodeId ? DomainGuard.Required(nodeId, nameof(targetNodeId)) : null;
         Sources = new DomainList<ArtifactReference>(sources);
+        SourceNodeIds = new DomainList<MigrationNodeId>(sourceNodeIds ?? []);
         Path = new DomainList<MigrationEdgeId>(path);
         PlanHash = DomainGuard.Required(planHash, nameof(planHash));
 
@@ -590,6 +645,9 @@ public sealed record LineageRecord
         {
             throw new ArgumentException("Target lineage must reference at least one migration edge.", nameof(path));
         }
+
+        if (SourceNodeIds.Count > 0 && SourceNodeIds.Count != Sources.Count)
+            throw new ArgumentException("Source graph-node scope must align with source artifact references.", nameof(sourceNodeIds));
     }
 }
 
@@ -604,13 +662,15 @@ public sealed record LineageCoverageIssue
 {
     public LineageCoverageIssueCode Code { get; }
     public ArtifactId ArtifactId { get; }
+    public MigrationNodeId? NodeId { get; }
     public string Message { get; }
 
-    public LineageCoverageIssue(LineageCoverageIssueCode code, ArtifactId artifactId, string message)
+    public LineageCoverageIssue(LineageCoverageIssueCode code, ArtifactId artifactId, string message, MigrationNodeId? nodeId = null)
     {
         Code = code;
         ArtifactId = DomainGuard.Required(artifactId, nameof(artifactId));
         Message = DomainGuard.Required(message, nameof(message));
+        NodeId = nodeId;
     }
 }
 
@@ -655,6 +715,40 @@ public sealed record LineageLedger
                 $"Target artifact '{missingId}' has no lineage record."));
         }
 
+        return new DomainList<LineageCoverageIssue>(issues);
+    }
+
+    public DomainList<LineageCoverageIssue> ValidateScopedCoverage(IEnumerable<GraphArtifactReference> targetArtifacts)
+    {
+        ArgumentNullException.ThrowIfNull(targetArtifacts);
+        var expected = targetArtifacts.Select(item => (item.NodeId, item.Artifact.Id)).ToHashSet();
+        var scopedRecords = new List<(MigrationNodeId NodeId, LineageRecord Record)>();
+        var issues = new List<LineageCoverageIssue>();
+        foreach (var record in Records)
+        {
+            if (record.TargetNodeId is not { } nodeId)
+            {
+                issues.Add(new LineageCoverageIssue(LineageCoverageIssueCode.MissingLineage, record.Target.Id,
+                    "Verification lineage must identify its target graph node."));
+                continue;
+            }
+            scopedRecords.Add((nodeId, record));
+        }
+
+        foreach (var group in scopedRecords.GroupBy(item => (item.NodeId, item.Record.Target.Id)))
+        {
+            if (!expected.Contains(group.Key))
+                issues.Add(new LineageCoverageIssue(LineageCoverageIssueCode.UnexpectedLineage, group.Key.Id,
+                    "Lineage references an unexpected graph-scoped target artifact.", group.Key.NodeId));
+            if (group.Count() > 1)
+                issues.Add(new LineageCoverageIssue(LineageCoverageIssueCode.DuplicateLineage, group.Key.Id,
+                    "Graph-scoped target artifact has duplicate lineage records.", group.Key.NodeId));
+        }
+
+        var recorded = scopedRecords.Select(item => (item.NodeId, item.Record.Target.Id)).ToHashSet();
+        foreach (var missing in expected.Except(recorded))
+            issues.Add(new LineageCoverageIssue(LineageCoverageIssueCode.MissingLineage, missing.Id,
+                "Graph-scoped target artifact has no lineage record.", missing.NodeId));
         return new DomainList<LineageCoverageIssue>(issues);
     }
 }
