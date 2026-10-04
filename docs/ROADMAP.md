@@ -43,6 +43,8 @@ Acceptance focus:
 
 ### PS-0.2 Configuration
 
+Status: Implemented. Version-1 configuration loading, validation, canonicalization, SHA-256 fingerprinting, and `proofshift validate` are covered by focused tests. Migration graph semantics remain for PS-0.3.
+
 Implement:
 
 - YAML loading;
@@ -57,6 +59,8 @@ CLI: `proofshift validate`.
 
 ### PS-0.3 Migration graph compiler/validator
 
+Status: Implemented. Graph-v1 DTOs compile to immutable domain graphs with endpoint/reference, selector, cardinality, recovery, reachability, and cycle validation. `proofshift-graph-canonical-v1` hashing and `proofshift plan` are covered by focused tests. No connector access or migration execution is included.
+
 Parse config into domain graph and validate:
 
 - no dangling nodes;
@@ -70,14 +74,22 @@ CLI: `proofshift plan`.
 
 ### PS-0.4 First connectors
 
-Implement minimal:
+Status: Implementation complete; acceptance gate pending. Read-only PostgreSQL, SQL Server, filesystem, and CSV connectors are registered at the CLI composition root and exercised through `proofshift inspect`. Temporal/binary/CSV hardening and a Docker-capable Ubuntu CI workflow are present. Filesystem/CSV/runtime tests pass locally; PostgreSQL/SQL Server Testcontainers and Linux symlink tests must execute successfully in CI before PS-0.4 is considered accepted.
 
-- SQL Server source reader/snapshot inspection;
-- PostgreSQL shadow target writer/reader.
+Implemented:
+
+- PostgreSQL source inspection/reader;
+- SQL Server source inspection/reader;
+- filesystem artifact inspection/reader;
+- CSV source inspection/reader.
+
+This milestone does not create snapshots, write targets, or execute graph operations.
 
 No generalized feature breadth beyond the first member slice.
 
 ### PS-0.5 First vertical slice
+
+Status: Blocked until PS-0.4 Docker-backed CI integration tests pass. Do not start projection until that prerequisite is green.
 
 Scenario:
 

@@ -1,0 +1,13 @@
+id: modern-pension
+name: Synthetic Target System
+role: shadow-target
+
+storage:
+  pension-database:
+    connector: postgres
+    connection:
+      env: PROOFSHIFT_TEST_TARGET_DB
+  pension-documents:
+    connector: files
+    root:
+      env: PROOFSHIFT_TEST_TARGET_FILES

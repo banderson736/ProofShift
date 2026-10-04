@@ -1,0 +1,44 @@
+version: 1
+nodes:
+  legacy-member:
+    type: source
+    system: legacy
+    storage: member-store
+    semanticType: Generic.Member
+    selector:
+      kind: table
+      properties:
+        name: dbo.MEMBER
+      identity:
+        - MEMBER_ID
+  participant:
+    type: target
+    system: modern
+    storage: participant-store
+    semanticType: Generic.Member
+    selector:
+      kind: table
+      properties:
+        name: participant
+      identity:
+        - id
+edges:
+  member-migration:
+    from: [legacy-member]
+    to: [participant]
+    operation:
+      type: transform
+      version: "3"
+      fields:
+        status:
+          source: MEMBER_STATUS
+          pipeline:
+            - type: trim
+            - type: code-map
+              version: "2"
+              values:
+                A: ACTIVE
+                R: RETIRED
+    recovery:
+      mode: restore
+      requiresSnapshot: true

@@ -1,0 +1,14 @@
+version: 1
+nodes:
+  misplaced-source:
+    type: source
+    system: modern
+    storage: member-store
+    semanticType: Generic.Record
+    selector: { kind: table, properties: { name: source }, identity: [id] }
+edges:
+  exclude-source:
+    from: [misplaced-source]
+    to: []
+    operation: { type: exclude }
+    recovery: { mode: irreversible, justification: Explicit synthetic exclusion }

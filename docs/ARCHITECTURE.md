@@ -129,6 +129,12 @@ ProofShift.Engine
 ProofShift.Connectors.SqlServer
 ```
 
+The PS-0.3 graph compiler consumes the immutable generic YAML document tree produced by `ProofShift.Configuration`, maps it through graph-specific DTOs, and then creates domain graph objects. `ProofShift.Graph` does not parse YAML itself and does not reference concrete connectors or domain packs.
+
+PS-0.4 inspection orchestration lives in `ProofShift.Engine` and resolves only `ISourceConnector` abstractions. Concrete PostgreSQL, SQL Server, filesystem, and CSV registrations occur in the CLI composition root. Runtime configuration values are wrapped and redacted; inspection does not create snapshots, evidence, or target writes.
+
+Relational selectors are validated identifier sets, never arbitrary SQL. Reads are ordered by configured or discovered identity fields and stream records. Filesystem/CSV paths are endpoint-relative; file content hashes and large relational binary hashes are streamed. CSV identity collision checks use a temporary disk-backed fingerprint index.
+
 ## Migration Graph
 
 The Migration Graph describes how information moves and changes.
@@ -140,6 +146,10 @@ The Migration Graph describes how information moves and changes.
 - Archive
 - Derived
 - Aggregate
+
+Every node references a logical system, one of that system's storage endpoints, a symbolic semantic type, and a connector-neutral artifact selector. Selectors carry a kind, string properties, and ordered identity fields; connectors interpret their meaning.
+
+For PS-0.4, relational connectors interpret `kind: table`, filesystem connectors interpret `kind: file-pattern`, and CSV connectors interpret `kind: csv`. Physical interpretation, identifier quoting, row value conversion, and physical inspection remain inside each concrete connector.
 
 ### Edge categories
 
@@ -154,7 +164,11 @@ The Migration Graph describes how information moves and changes.
 - Exclude
 - Relationship
 
-Every graph edge is versioned and carries recovery metadata.
+Every graph edge is versioned, carries explicit recovery metadata, and has one or more source and target nodes. Exclusions are the explicit zero-target exception. Split, merge, and many-to-many operations are represented directly rather than expanded into unrelated edges.
+
+PS-0.3 graph canonicalization uses `proofshift-graph-canonical-v1`. Relationship-only cycles are reported as warnings; cycles involving execution or destructive operations are errors until a later scheduler can model more nuanced dependency semantics.
+
+Configuration node/edge keys remain external string identifiers. The compiler preserves these names and derives deterministic scoped internal GUIDs; it does not convert the configuration project key to `ProjectId`.
 
 The graph should eventually support impact analysis. If a transformation changes, ProofShift should be able to determine which downstream artifacts and verification rules may be affected.
 

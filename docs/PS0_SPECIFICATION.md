@@ -316,6 +316,12 @@ Do not prematurely lock command syntax if a better consistent CLI emerges, but p
 - human-readable report generated.
 - machine-readable JSON evidence/report generated.
 
+## PS-0.4 Connector Runtime Boundary
+
+PS-0.4 provides read-only physical inspection and streaming reads for PostgreSQL, SQL Server, filesystem, and CSV sources. This is not snapshotting: current observations are not claimed to be immutable or transactionally consistent. It does not write targets, execute graph operations, create evidence, or assign artifact dispositions/lineage. Relational integration tests use Testcontainers and require a Docker-compatible runtime; filesystem and CSV tests use synthetic local fixtures.
+
+Temporal fidelity preserves date-only values, UTC instants, explicit offsets, and local timestamps without assigning a timezone. Binary references carry a retrievable source reference, length, and SHA-256; content is reopened and transferred by stream. `.github/workflows/ci.yml` runs database Testcontainers and filesystem symlink checks on Ubuntu. PS-0.5 remains blocked until that Docker-backed CI suite reports success.
+
 ## PS-0 non-goals
 
 Do not add these unless a prerequisite forces a minimal abstraction:

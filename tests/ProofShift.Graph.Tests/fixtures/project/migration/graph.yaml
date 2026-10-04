@@ -1,0 +1,29 @@
+version: 1
+nodes:
+  legacy-member:
+    type: source
+    system: legacy
+    storage: member-store
+    semanticType: Generic.Member
+    selector:
+      kind: table
+      properties: { name: dbo.MEMBER }
+      identity: [MEMBER_ID]
+  participant:
+    type: target
+    system: modern
+    storage: participant-store
+    semanticType: Generic.Member
+    selector:
+      kind: api-resource
+      properties: { route: /participants }
+      identity: [id]
+edges:
+  member-map:
+    from: [legacy-member]
+    to: [participant]
+    operation:
+      type: transform
+      fields:
+        id: { source: MEMBER_ID }
+    recovery: { mode: reverse }

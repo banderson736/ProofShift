@@ -138,11 +138,19 @@ public sealed record IntegerValue(long Value) : ValueNode;
 public sealed record DecimalValue(decimal Value) : ValueNode;
 public sealed record BooleanValue(bool Value) : ValueNode;
 public sealed record DateValue(DateOnly Value) : ValueNode;
-public sealed record DateTimeValue(DateTimeOffset Value) : ValueNode;
-public sealed record BinaryReferenceValue(string Reference, string? Hash) : ValueNode;
+public sealed record InstantValue(DateTimeOffset Value) : ValueNode;
+public sealed record OffsetDateTimeValue(DateTimeOffset Value) : ValueNode;
+public sealed record LocalDateTimeValue(DateTime Value) : ValueNode;
+public sealed record BinaryReferenceValue(string Reference, long ContentLength, string Sha256) : ValueNode;
 public sealed record CollectionValue(IReadOnlyCollection<ValueNode> Values) : ValueNode;
 public sealed record ObjectValue(IReadOnlyDictionary<string, ValueNode> Values) : ValueNode;
 ```
+
+`InstantValue` represents an absolute instant normalized to UTC. `OffsetDateTimeValue` preserves an explicit source offset. `LocalDateTimeValue` preserves wall-clock fields without assigning a timezone. Date-only values remain `DateValue`. Connectors must not infer UTC for SQL `datetime`/`datetime2` or PostgreSQL `timestamp without time zone`.
+
+`BinaryReferenceValue` carries a content reference, byte length, and SHA-256. The reference is opened through the matching source connector's binary stream resolver; large binary values are never copied into record envelopes as `byte[]`.
+
+PS-0.4 maps database UUID/GUID values to invariant string values and decimals directly to `DecimalValue`. Floating-point source values remain invariant strings rather than being rounded through `decimal`.
 
 ## Relationships
 
@@ -221,6 +229,7 @@ public sealed record MigrationGraph
     public required IReadOnlyCollection<MigrationNode> Nodes { get; init; }
     public required IReadOnlyCollection<MigrationEdge> Edges { get; init; }
     public required string GraphHash { get; init; }
+    public string? GraphCanonicalizationVersion { get; init; }
 }
 ```
 
@@ -235,6 +244,14 @@ public sealed record MigrationNode
     public required string SemanticType { get; init; }
     public required string SystemId { get; init; }
     public required string EndpointId { get; init; }
+    public required ArtifactSelector Selector { get; init; }
+}
+
+public sealed record ArtifactSelector
+{
+    public required string Kind { get; init; }
+    public required IReadOnlyDictionary<string, string> Properties { get; init; }
+    public required IReadOnlyCollection<string> IdentityFields { get; init; }
 }
 
 public enum MigrationNodeType
@@ -253,20 +270,37 @@ public enum MigrationNodeType
 public sealed record MigrationEdge
 {
     public required MigrationEdgeId Id { get; init; }
-    public required MigrationNodeId From { get; init; }
-    public required MigrationNodeId To { get; init; }
+    public required string Name { get; init; }
+    public required IReadOnlyCollection<MigrationNodeId> Sources { get; init; }
+    public required IReadOnlyCollection<MigrationNodeId> Targets { get; init; }
     public required MigrationOperation Operation { get; init; }
     public required RecoveryDefinition Recovery { get; init; }
     public required string Version { get; init; }
 }
 ```
 
+Edges represent one-or-more inputs and outputs. An explicit `Exclude` operation may have no target nodes; other operations require target references. Graph compilation preserves the external edge key in `Name` and derives the strongly typed internal ID deterministically.
+
 ## Migration operations
 
-Base abstraction:
+Compiled operation definition:
 
 ```csharp
-public abstract record MigrationOperation;
+public sealed record MigrationOperation
+{
+    public required MigrationOperationType Type { get; init; }
+    public required IReadOnlyCollection<TransformationStep> Steps { get; init; }
+    public required IReadOnlyCollection<TransformationFieldDefinition> Fields { get; init; }
+    public required IReadOnlyDictionary<string, string> Parameters { get; init; }
+    public required bool IsDestructive { get; init; }
+}
+
+public sealed record TransformationFieldDefinition
+{
+    public required string Target { get; init; }
+    public string? Source { get; init; }
+    public required IReadOnlyCollection<TransformationStep> Pipeline { get; init; }
+}
 ```
 
 Expected operations:
@@ -287,6 +321,8 @@ Not every operation needs to be fully implemented in PS-0.1.
 ## Transformations
 
 Transformations are composable and versioned.
+
+Each field definition has a target name, optional source expression, and ordered pipeline. Steps have an explicit version; PS-0.3 assigns version `1` when a v1 graph omits one.
 
 Initial operations:
 
@@ -477,18 +513,43 @@ public interface ISourceConnector
     string Version { get; }
 
     Task<SourceInspection> InspectAsync(
-        StorageEndpointDefinition endpoint,
-        CancellationToken cancellationToken);
-
-    Task<EndpointSnapshot> SnapshotAsync(
-        StorageEndpointDefinition endpoint,
+        ConnectorContext context,
+        ArtifactSelector selector,
         CancellationToken cancellationToken);
 
     IAsyncEnumerable<RecordEnvelope> ReadAsync(
-        ReadRequest request,
+        ConnectorContext context,
+        ArtifactSelector selector,
+        ReadOptions options,
         CancellationToken cancellationToken);
 }
 
+public interface ISourceBinaryContentResolver
+{
+    ValueTask<Stream> OpenBinaryReadAsync(
+        ConnectorContext context,
+        ArtifactSelector selector,
+        ArtifactReference artifact,
+        BinaryReferenceValue binaryReference,
+        CancellationToken cancellationToken);
+}
+
+public sealed record SourceInspection
+{
+    public required SourceInspectionStatus Status { get; init; }
+    public required IReadOnlyCollection<SourceColumn> Columns { get; init; }
+    public required IReadOnlyCollection<string> PrimaryKeyFields { get; init; }
+    public required IReadOnlyCollection<string> IdentityFields { get; init; }
+    public long? EstimatedRecords { get; init; }
+    public long? Files { get; init; }
+    public long? Bytes { get; init; }
+    public required IReadOnlyCollection<ConnectorIssue> Issues { get; init; }
+}
+```
+
+The source/runtime contracts and metadata types live in `ProofShift.Connectors.Abstractions`, not in the domain assembly. Runtime configuration is redacted and separate from hashed endpoint identity.
+
+```csharp
 public interface ITargetConnector
 {
     ConnectorId Id { get; }
@@ -508,7 +569,7 @@ public interface ITargetConnector
 }
 ```
 
-A concrete connector may implement both.
+A concrete connector may implement both source and target interfaces. PS-0.4 implements only source access. Connector inspection/read results are observations only, not snapshots or evidence.
 
 ## Domain-pack contract
 

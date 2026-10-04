@@ -1,0 +1,7 @@
+id: synthetic-target
+name: Synthetic Target
+role: target
+storage:
+  target-artifacts:
+    connector: synthetic
+    namespace: test-only

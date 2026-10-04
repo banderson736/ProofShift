@@ -1,0 +1,7 @@
+id: legacy
+name: Synthetic Source
+role: source
+storage:
+  member-store:
+    connector: synthetic
+    location: source-members

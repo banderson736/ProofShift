@@ -1,0 +1,7 @@
+id: legacy-alt
+name: Synthetic Alternate Source
+role: source
+storage:
+  member-store:
+    connector: synthetic
+    location: alternate-members

@@ -1,0 +1,12 @@
+id: synthetic-source
+name: Synthetic Distributed Source
+role: source
+storage:
+  documents:
+    connector: files
+    root:
+      env: PROOFSHIFT_INSPECT_FILES
+  supplemental:
+    connector: csv
+    root:
+      env: PROOFSHIFT_INSPECT_CSV

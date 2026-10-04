@@ -1,0 +1,17 @@
+proofshift: 1
+project:
+  id: graph-test-project
+  name: Synthetic Graph Test
+systems:
+  source:
+    file: systems/source.yaml
+  source-alt:
+    file: systems/source-alt.yaml
+  target:
+    file: systems/target.yaml
+migration:
+  graph: migration/graph.yaml
+verification:
+  rules: rules/rules.yaml
+recovery:
+  policy: recovery/policy.yaml

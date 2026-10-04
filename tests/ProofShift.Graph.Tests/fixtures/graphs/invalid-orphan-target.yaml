@@ -1,0 +1,9 @@
+version: 1
+nodes:
+  unused-target:
+    type: target
+    system: modern
+    storage: participant-store
+    semanticType: Generic.Record
+    selector: { kind: table, properties: { name: target }, identity: [id] }
+edges: {}

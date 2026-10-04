@@ -108,6 +108,4 @@ Before implementing a milestone:
 
 ## Current status
 
-**Architecture / repository bootstrap. No implementation milestone is considered complete yet.**
-
-The repository skeleton is intentionally conservative. The first real engineering work is PS-0.1 (domain model) followed by PS-0.2 (configuration contract). See `docs/ROADMAP.md`.
+**PS-0.1 through PS-0.4 implementations are present.** Use `proofshift validate`, `proofshift plan`, and `proofshift inspect` to validate configuration, compile the graph, and physically inspect/read source selectors. Inspection is read-only and is not a snapshot; target mutation, projection, and migration execution remain deferred. PS-0.4 acceptance is pending a successful Docker-backed GitHub Actions run; the local environment has no Docker daemon. PS-0.5 must not begin until that gate is green. See `docs/ROADMAP.md`.

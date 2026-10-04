@@ -1,0 +1,38 @@
+version: 1
+nodes:
+  legacy-member:
+    type: source
+    system: legacy
+    storage: member-store
+    semanticType: Generic.Member
+    selector:
+      kind: table
+      properties: { name: dbo.MEMBER }
+      identity: [MEMBER_ID]
+  legacy-status:
+    type: source
+    system: legacy
+    storage: member-store
+    semanticType: Generic.MemberStatus
+    selector:
+      kind: table
+      properties: { name: dbo.MEMBER_STATUS }
+      identity: [MEMBER_ID, STATUS_DATE]
+  participant:
+    type: target
+    system: modern
+    storage: participant-store
+    semanticType: Generic.Participant
+    selector:
+      kind: api-resource
+      properties: { route: /participants }
+      identity: [id]
+edges:
+  merge-member:
+    from: [legacy-member, legacy-status]
+    to: [participant]
+    operation:
+      type: merge
+    recovery:
+      mode: compensate
+      strategy: restore-from-source-snapshot

@@ -1,0 +1,16 @@
+version: 1
+nodes:
+  self-node:
+    type: source
+    system: legacy
+    storage: member-store
+    semanticType: Generic.Record
+    selector: { kind: table, properties: { name: self }, identity: [id] }
+edges:
+  self-transform:
+    from: [self-node]
+    to: [self-node]
+    operation:
+      type: transform
+      fields: { id: { source: SOURCE_ID } }
+    recovery: { mode: reverse }

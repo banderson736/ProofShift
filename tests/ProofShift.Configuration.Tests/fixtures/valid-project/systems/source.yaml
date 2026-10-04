@@ -1,0 +1,13 @@
+id: legacy-pension
+name: Synthetic Legacy System
+role: source
+
+storage:
+  member-database:
+    connector: sqlserver
+    connection:
+      secret: PROOFSHIFT_TEST_SOURCE_DB
+  member-documents:
+    connector: files
+    root:
+      env: PROOFSHIFT_TEST_SOURCE_FILES

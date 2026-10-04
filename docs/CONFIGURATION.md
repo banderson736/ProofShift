@@ -65,6 +65,12 @@ storage:
     connector: files
     root:
       env: PROOFSHIFT_LEGACY_DOCUMENTS
+
+  supplemental-members:
+    connector: csv
+    root:
+      env: PROOFSHIFT_LEGACY_EXPORTS
+    delimiter: ";"
 ```
 
 No secret values should be stored directly in committed configuration.
@@ -95,23 +101,27 @@ version: 1
 
 nodes:
   legacy-member:
+    type: source
     system: legacy-pension
     storage: member-database
-    type: source
     semanticType: Pension.Member
-    source:
-      table: dbo.MEMBER
-      key:
+    selector:
+      kind: table
+      properties:
+        name: dbo.MEMBER
+      identity:
         - MEMBER_ID
 
   participant:
+    type: target
     system: new-pension
     storage: pension-database
-    type: target
     semanticType: Pension.Member
-    target:
-      table: participant
-      key:
+    selector:
+      kind: table
+      properties:
+        name: participant
+      identity:
         - id
 
 edges:
@@ -123,6 +133,7 @@ edges:
 
     operation:
       type: transform
+      version: "1"
       fields:
         legacyId:
           source: MEMBER_ID
@@ -130,19 +141,20 @@ edges:
         firstName:
           source: FIRST_NM
           pipeline:
-            - trim
-            - normalize-string
+            - type: trim
+            - type: normalize-string
 
         lastName:
           source: LAST_NM
           pipeline:
-            - trim
-            - normalize-string
+            - type: trim
+            - type: normalize-string
 
         status:
           source: MEMBER_STATUS
           pipeline:
             - type: code-map
+              version: "1"
               values:
                 A: ACTIVE
                 R: RETIRED
@@ -152,6 +164,8 @@ edges:
       mode: restore
       requiresSnapshot: true
 ```
+
+Graph `version` is independent of the root `proofshift` configuration version. Edges use `from` and `to` sequences; `exclude` may have an empty `to` sequence. A graph is compiled and canonically fingerprinted by PS-0.3, without loading a connector or domain pack.
 
 ## Historical mapping
 
@@ -285,3 +299,19 @@ approval:
 - Environment/secret substitution must occur without accidentally storing resolved secret values in hashes/logs/evidence.
 - Diagnostics must provide file/path/location and actionable validation messages.
 - Avoid premature configuration features not needed for the active milestone.
+
+## PS-0.4 Selector Access
+
+The connector runtime resolves endpoint `env:` and `secret:` references again into a redacting runtime-only context. Relational connectors require a `connection` or `connectionString` setting containing a connection string reference. Filesystem and CSV connectors require a `root` setting; CSV may also set an endpoint `delimiter` (comma is the default). The resolved values are never copied into graph/domain data, inspection reports, hashes, or CLI output.
+
+Relational table selectors accept `name: schema.table`, or separate `schema` and `table` properties, plus optional comma-separated `columns`. Identity fields are explicit or discovered from a primary key. `file-pattern` selectors use `pattern`; CSV selectors use relative `path`, optional `delimiter`, and required identity fields. Paths remain inside their endpoint root. These values describe access only: inspection is not a snapshot and does not change the source or target.
+
+## PS-0.2 Implementation Boundary
+
+Version 1 is parsed into immutable configuration DTOs, validated, and then used to construct domain system and storage-endpoint definitions. The project ID remains a validated string in the root DTO; `ProofShift.Domain.ProjectId` is a GUID and there is not yet an approved stable conversion rule. Migration graph, verification-rule, and recovery-policy files are loaded as generic immutable YAML document trees. PS-0.3 compiles the graph tree into separate graph DTOs and then domain graph objects.
+
+Canonical form `proofshift-config-canonical-v1` sorts mapping entries ordinally, preserves sequence order, ignores comments and scalar presentation style, and encodes scalar categories explicitly. It includes normalized project-relative file paths and every referenced file. The lowercase SHA-256 fingerprint is computed over this canonical representation. Environment and secret references contribute their names, while resolved values are checked for availability but never retained in normalized configuration or included in the fingerprint.
+
+## PS-0.4 Runtime Boundary
+
+At runtime the CLI/Engine resolves endpoint reference identities into callback-only redacting settings and passes those values to the selected source connector. Concrete connectors receive a `ConnectorContext`, not the original loaded configuration. The graph continues to contain symbolic selectors; SQL Server/PostgreSQL interpret `table`, filesystem interprets `file-pattern`, and CSV interprets `csv`. Connector inspection is read-only and does not imply a source snapshot.

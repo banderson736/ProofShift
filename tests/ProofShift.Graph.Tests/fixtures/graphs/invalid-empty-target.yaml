@@ -1,0 +1,14 @@
+version: 1
+nodes:
+  source:
+    type: source
+    system: legacy
+    storage: member-store
+    semanticType: Generic.Record
+    selector: { kind: table, properties: { name: source }, identity: [id] }
+edges:
+  no-target:
+    from: [source]
+    to: []
+    operation: { type: copy }
+    recovery: { mode: reverse }

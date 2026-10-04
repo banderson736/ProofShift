@@ -1,0 +1,24 @@
+proofshift: 1
+
+project:
+  id: synthetic-pension
+  name: Synthetic Pension Modernization
+
+pack:
+  id: proofshift.example
+  version: "0.1"
+
+systems:
+  source:
+    file: systems/source.yaml
+  target:
+    file: systems/target.yaml
+
+migration:
+  graph: migration/graph.yaml
+
+verification:
+  rules: rules/pension.yaml
+
+recovery:
+  policy: recovery/policy.yaml

@@ -1,0 +1,103 @@
+version: 1
+nodes:
+  source-one:
+    type: source
+    system: legacy
+    storage: member-store
+    semanticType: Generic.Record
+    selector: { kind: table, properties: { name: source_one }, identity: [id] }
+  source-two:
+    type: source
+    system: legacy
+    storage: member-store
+    semanticType: Generic.Record
+    selector: { kind: table, properties: { name: source_two }, identity: [id] }
+  target-one:
+    type: target
+    system: modern
+    storage: participant-store
+    semanticType: Generic.Record
+    selector: { kind: api-resource, properties: { route: /one }, identity: [id] }
+  target-two:
+    type: target
+    system: modern
+    storage: participant-store
+    semanticType: Generic.Record
+    selector: { kind: api-resource, properties: { route: /two }, identity: [id] }
+  archive-one:
+    type: archive
+    system: modern
+    storage: participant-store
+    semanticType: Generic.Record
+    selector: { kind: file-pattern, properties: { pattern: archive/** }, identity: [path] }
+  derived-one:
+    type: derived
+    system: modern
+    storage: participant-store
+    semanticType: Generic.Derived
+    selector: { kind: api-resource, properties: { route: /derived }, identity: [id] }
+  aggregate-one:
+    type: aggregate
+    system: modern
+    storage: participant-store
+    semanticType: Generic.Aggregate
+    selector: { kind: api-resource, properties: { route: /aggregate }, identity: [id] }
+edges:
+  copy-edge:
+    from: [source-one]
+    to: [target-one]
+    operation: { type: copy }
+    recovery: { mode: reverse }
+  map-edge:
+    from: [source-one]
+    to: [target-one]
+    operation:
+      type: map
+      fields:
+        identifier: { source: SOURCE_ID, pipeline: [{ type: rename, version: "3", to: id }] }
+    recovery: { mode: reverse }
+  transform-edge:
+    from: [source-one]
+    to: [target-one]
+    operation:
+      type: transform
+      fields:
+        status:
+          source: STATUS
+          pipeline: [{ type: trim }, { type: normalize-string }]
+    recovery: { mode: restore, requiresSnapshot: true }
+  split-edge:
+    from: [source-one]
+    to: [target-one, target-two]
+    operation: { type: split }
+    recovery: { mode: reverse }
+  merge-edge:
+    from: [source-one, source-two]
+    to: [target-one]
+    operation: { type: merge }
+    recovery: { mode: compensate, strategy: rehydrate-merged-record }
+  aggregate-edge:
+    from: [source-one, source-two]
+    to: [aggregate-one]
+    operation: { type: aggregate, groupBy: [department], function: count }
+    recovery: { mode: restore, requiresSnapshot: true }
+  derive-edge:
+    from: [source-two]
+    to: [derived-one]
+    operation: { type: derive }
+    recovery: { mode: reverse }
+  archive-edge:
+    from: [source-one]
+    to: [archive-one]
+    operation: { type: archive }
+    recovery: { mode: restore, requiresSnapshot: true }
+  exclude-edge:
+    from: [source-two]
+    to: []
+    operation: { type: exclude }
+    recovery: { mode: irreversible, justification: Explicit synthetic test exclusion }
+  relationship-edge:
+    from: [source-one]
+    to: [target-two]
+    operation: { type: relationship, relation: HAS_REFERENCE }
+    recovery: { mode: reverse }

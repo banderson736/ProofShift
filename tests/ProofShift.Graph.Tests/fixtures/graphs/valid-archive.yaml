@@ -1,0 +1,30 @@
+version: 1
+nodes:
+  legacy-document:
+    type: source
+    system: legacy
+    storage: member-store
+    semanticType: Generic.Document
+    selector:
+      kind: file-pattern
+      properties: { pattern: documents/**/*.pdf }
+      identity: [relativePath]
+  archived-document:
+    type: archive
+    system: modern
+    storage: participant-store
+    semanticType: Generic.Document
+    selector:
+      kind: file-pattern
+      properties: { pattern: archive/**/*.pdf }
+      identity: [relativePath]
+edges:
+  archive-document:
+    from: [legacy-document]
+    to: [archived-document]
+    operation:
+      type: archive
+      deleteSource: true
+    recovery:
+      mode: restore
+      requiresSnapshot: true

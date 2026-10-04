@@ -167,7 +167,8 @@ public sealed class DomainFoundationTests
         new(new StorageEndpointId(id), new ConnectorId("synthetic"));
 
     private static MigrationNode Node(MigrationNodeId id) =>
-        new(id, "node", MigrationNodeType.Source, "Generic.Record", new SystemId("system"), new StorageEndpointId("endpoint"));
+        new(id, "node", MigrationNodeType.Source, "Generic.Record", new SystemId("system"), new StorageEndpointId("endpoint"),
+            new ArtifactSelector("table", [new KeyValuePair<string, string>("name", "synthetic")], ["record_id"]));
 
     private static ArtifactReference Artifact(string id, string systemId = "source-system") =>
         new(new ArtifactId(id), new SystemId(systemId), new StorageEndpointId("endpoint"), "record", id);

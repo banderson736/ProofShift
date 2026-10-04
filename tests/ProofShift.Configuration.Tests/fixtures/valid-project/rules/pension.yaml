@@ -1,0 +1,4 @@
+rules:
+  source-accounting:
+    type: source-artifact-accounting
+    severity: critical

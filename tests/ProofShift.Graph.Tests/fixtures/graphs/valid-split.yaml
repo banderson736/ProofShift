@@ -1,0 +1,38 @@
+version: 1
+nodes:
+  legacy-member:
+    type: source
+    system: legacy
+    storage: member-store
+    semanticType: Generic.Member
+    selector:
+      kind: table
+      properties: { name: dbo.MEMBER }
+      identity: [MEMBER_ID]
+  participant:
+    type: target
+    system: modern
+    storage: participant-store
+    semanticType: Generic.Participant
+    selector:
+      kind: api-resource
+      properties: { route: /participants }
+      identity: [id]
+  participant-search:
+    type: target
+    system: modern
+    storage: participant-store
+    semanticType: Generic.SearchRecord
+    selector:
+      kind: search-index
+      properties: { name: participants }
+      identity: [participantId]
+edges:
+  split-member:
+    from: [legacy-member]
+    to: [participant, participant-search]
+    operation:
+      type: split
+    recovery:
+      mode: restore
+      requiresSnapshot: true

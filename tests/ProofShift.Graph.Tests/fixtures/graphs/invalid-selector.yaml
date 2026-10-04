@@ -1,0 +1,9 @@
+version: 1
+nodes:
+  source:
+    type: source
+    system: legacy
+    storage: member-store
+    semanticType: Generic.Record
+    selector: { properties: { name: source }, identity: [id] }
+edges: {}

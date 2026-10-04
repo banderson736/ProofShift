@@ -9,6 +9,28 @@ public enum MigrationNodeType
     Aggregate
 }
 
+public sealed record ArtifactSelector
+{
+    public string Kind { get; }
+    public DomainDictionary<string> Properties { get; }
+    public DomainList<string> IdentityFields { get; }
+
+    public ArtifactSelector(
+        string kind,
+        IEnumerable<KeyValuePair<string, string>>? properties = null,
+        IEnumerable<string>? identityFields = null)
+    {
+        Kind = DomainGuard.Required(kind, nameof(kind));
+        Properties = new DomainDictionary<string>(properties ?? Array.Empty<KeyValuePair<string, string>>());
+        IdentityFields = new DomainList<string>((identityFields ?? Array.Empty<string>())
+            .Select(field => DomainGuard.Required(field, nameof(identityFields))));
+        if (IdentityFields.Distinct(StringComparer.Ordinal).Count() != IdentityFields.Count)
+        {
+            throw new ArgumentException("Selector identity fields must be unique.", nameof(identityFields));
+        }
+    }
+}
+
 public sealed record MigrationNode
 {
     public MigrationNodeId Id { get; }
@@ -17,6 +39,7 @@ public sealed record MigrationNode
     public string SemanticType { get; }
     public SystemId SystemId { get; }
     public StorageEndpointId EndpointId { get; }
+    public ArtifactSelector Selector { get; }
 
     public MigrationNode(
         MigrationNodeId id,
@@ -24,7 +47,8 @@ public sealed record MigrationNode
         MigrationNodeType type,
         string semanticType,
         SystemId systemId,
-        StorageEndpointId endpointId)
+        StorageEndpointId endpointId,
+        ArtifactSelector selector)
     {
         Id = DomainGuard.Required(id, nameof(id));
         Name = DomainGuard.Required(name, nameof(name));
@@ -32,6 +56,7 @@ public sealed record MigrationNode
         SemanticType = DomainGuard.Required(semanticType, nameof(semanticType));
         SystemId = DomainGuard.Required(systemId, nameof(systemId));
         EndpointId = DomainGuard.Required(endpointId, nameof(endpointId));
+        Selector = DomainGuard.NotNull(selector, nameof(selector));
     }
 }
 
@@ -86,18 +111,42 @@ public sealed record MigrationOperation
 {
     public MigrationOperationType Type { get; }
     public DomainList<TransformationStep> Steps { get; }
+    public DomainList<TransformationFieldDefinition> Fields { get; }
+    public DomainDictionary<string> Parameters { get; }
     public bool IsDestructive { get; }
 
     public MigrationOperation(
         MigrationOperationType type,
         IEnumerable<TransformationStep>? steps = null,
-        bool isDestructive = false)
+        bool isDestructive = false,
+        IEnumerable<TransformationFieldDefinition>? fields = null,
+        IEnumerable<KeyValuePair<string, string>>? parameters = null)
     {
         Type = type;
         Steps = new DomainList<TransformationStep>(steps ?? Array.Empty<TransformationStep>());
+        Fields = new DomainList<TransformationFieldDefinition>(fields ?? Array.Empty<TransformationFieldDefinition>());
+        Parameters = new DomainDictionary<string>(parameters ?? Array.Empty<KeyValuePair<string, string>>());
         IsDestructive = isDestructive ||
             type == MigrationOperationType.Exclude ||
-            Steps.Any(step => step.Type == TransformationStepType.Exclude);
+            Steps.Any(step => step.Type == TransformationStepType.Exclude) ||
+            Fields.Any(field => field.Pipeline.Any(step => step.Type == TransformationStepType.Exclude));
+    }
+}
+
+public sealed record TransformationFieldDefinition
+{
+    public string Target { get; }
+    public string? Source { get; }
+    public DomainList<TransformationStep> Pipeline { get; }
+
+    public TransformationFieldDefinition(
+        string target,
+        string? source = null,
+        IEnumerable<TransformationStep>? pipeline = null)
+    {
+        Target = DomainGuard.Required(target, nameof(target));
+        Source = string.IsNullOrWhiteSpace(source) ? null : source.Trim();
+        Pipeline = new DomainList<TransformationStep>(pipeline ?? Array.Empty<TransformationStep>());
     }
 }
 
@@ -132,6 +181,11 @@ public sealed record RecoveryDefinition
             throw new ArgumentException("Irreversible recovery requires a justification.", nameof(justification));
         }
 
+        if (mode == RecoveryMode.Compensate && string.IsNullOrWhiteSpace(strategy))
+        {
+            throw new ArgumentException("Compensating recovery requires a strategy.", nameof(strategy));
+        }
+
         Mode = mode;
         Strategy = string.IsNullOrWhiteSpace(strategy) ? null : strategy.Trim();
         RequiresSnapshot = requiresSnapshot;
@@ -142,16 +196,18 @@ public sealed record RecoveryDefinition
 public sealed record MigrationEdge
 {
     public MigrationEdgeId Id { get; }
-    public MigrationNodeId From { get; }
-    public MigrationNodeId To { get; }
+    public string Name { get; }
+    public DomainList<MigrationNodeId> Sources { get; }
+    public DomainList<MigrationNodeId> Targets { get; }
     public MigrationOperation Operation { get; }
     public RecoveryDefinition? Recovery { get; }
     public string Version { get; }
 
     public MigrationEdge(
         MigrationEdgeId id,
-        MigrationNodeId from,
-        MigrationNodeId to,
+        string name,
+        IEnumerable<MigrationNodeId> sources,
+        IEnumerable<MigrationNodeId> targets,
         MigrationOperation operation,
         string version,
         RecoveryDefinition? recovery = null)
@@ -163,10 +219,22 @@ public sealed record MigrationEdge
         }
 
         Id = DomainGuard.Required(id, nameof(id));
-        From = DomainGuard.Required(from, nameof(from));
-        To = DomainGuard.Required(to, nameof(to));
+        Name = DomainGuard.Required(name, nameof(name));
+        Sources = new DomainList<MigrationNodeId>(sources.Select(source => DomainGuard.Required(source, nameof(sources))));
+        Targets = new DomainList<MigrationNodeId>(targets.Select(target => DomainGuard.Required(target, nameof(target))));
         Recovery = recovery;
         Version = DomainGuard.Required(version, nameof(version));
+    }
+
+    public MigrationEdge(
+        MigrationEdgeId id,
+        MigrationNodeId from,
+        MigrationNodeId to,
+        MigrationOperation operation,
+        string version,
+        RecoveryDefinition? recovery = null)
+        : this(id, id.Value.ToString("N"), [from], [to], operation, version, recovery)
+    {
     }
 }
 
@@ -174,6 +242,8 @@ public enum MigrationGraphIssueCode
 {
     DuplicateNodeId,
     DuplicateEdgeId,
+    EdgeHasNoSource,
+    EdgeHasNoTarget,
     DanglingFromNode,
     DanglingToNode
 }
@@ -204,17 +274,22 @@ public sealed record MigrationGraph
     public DomainList<MigrationNode> Nodes { get; }
     public DomainList<MigrationEdge> Edges { get; }
     public string GraphHash { get; }
+    public string? GraphCanonicalizationVersion { get; }
 
     public MigrationGraph(
         MigrationGraphId id,
         IEnumerable<MigrationNode> nodes,
         IEnumerable<MigrationEdge> edges,
-        string graphHash)
+        string graphHash,
+        string? graphCanonicalizationVersion = null)
     {
         Id = DomainGuard.Required(id, nameof(id));
         Nodes = new DomainList<MigrationNode>(nodes);
         Edges = new DomainList<MigrationEdge>(edges);
         GraphHash = DomainGuard.Required(graphHash, nameof(graphHash));
+        GraphCanonicalizationVersion = string.IsNullOrWhiteSpace(graphCanonicalizationVersion)
+            ? null
+            : graphCanonicalizationVersion.Trim();
     }
 
     public DomainList<MigrationGraphIssue> Validate()
@@ -243,22 +318,44 @@ public sealed record MigrationGraph
                     edgeId: edge.Id));
             }
 
-            if (!nodeIds.Contains(edge.From))
+            if (edge.Sources.Count == 0)
             {
                 issues.Add(new MigrationGraphIssue(
-                    MigrationGraphIssueCode.DanglingFromNode,
-                    $"Migration edge '{edge.Id}' references missing source node '{edge.From}'.",
-                    edgeId: edge.Id,
-                    nodeId: edge.From));
+                    MigrationGraphIssueCode.EdgeHasNoSource,
+                    $"Migration edge '{edge.Name}' has no source nodes.",
+                    edgeId: edge.Id));
             }
 
-            if (!nodeIds.Contains(edge.To))
+            if (edge.Targets.Count == 0 && edge.Operation.Type != MigrationOperationType.Exclude)
             {
                 issues.Add(new MigrationGraphIssue(
-                    MigrationGraphIssueCode.DanglingToNode,
-                    $"Migration edge '{edge.Id}' references missing target node '{edge.To}'.",
-                    edgeId: edge.Id,
-                    nodeId: edge.To));
+                    MigrationGraphIssueCode.EdgeHasNoTarget,
+                    $"Migration edge '{edge.Name}' has no target nodes.",
+                    edgeId: edge.Id));
+            }
+
+            foreach (var source in edge.Sources)
+            {
+                if (!nodeIds.Contains(source))
+                {
+                    issues.Add(new MigrationGraphIssue(
+                        MigrationGraphIssueCode.DanglingFromNode,
+                        $"Migration edge '{edge.Name}' references missing source node '{source}'.",
+                        edgeId: edge.Id,
+                        nodeId: source));
+                }
+            }
+
+            foreach (var target in edge.Targets)
+            {
+                if (!nodeIds.Contains(target))
+                {
+                    issues.Add(new MigrationGraphIssue(
+                        MigrationGraphIssueCode.DanglingToNode,
+                        $"Migration edge '{edge.Name}' references missing target node '{target}'.",
+                        edgeId: edge.Id,
+                        nodeId: target));
+                }
             }
         }
 

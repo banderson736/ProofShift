@@ -72,4 +72,29 @@ No Kafka/Redis/Kubernetes merely because the team knows them. Add only from meas
 ### D-014 — Canonical fingerprints are defined by the compiler
 Status: Accepted
 
-PS-0.1 stores graph and configuration fingerprints as opaque required values. PS-0.2/PS-0.3 must define and test versioned canonical encoding before computing them. See `docs/adr/0002-graph-fingerprint-canonicalization.md`.
+PS-0.2 defines `proofshift-config-canonical-v1`; PS-0.3 defines `proofshift-graph-canonical-v1`. Both compute SHA-256 fingerprints without resolved secret values. See `docs/adr/0002-graph-fingerprint-canonicalization.md`.
+
+### D-015 — Configuration project identifiers remain distinct from domain IDs
+Status: Accepted
+
+The version-1 configuration project ID is a validated string identifier. The PS-0.1 `ProjectId` is a GUID, and no stable conversion contract is specified. PS-0.2 retains the configured project as a DTO instead of inventing an identity mapping; plan binding must define the relationship explicitly.
+
+### D-016 — Compile graph keys to deterministic internal IDs
+Status: Accepted
+
+PS-0.3 compiles connector-neutral selectors and many-to-many edges, derives scoped deterministic UUIDv8-style GUIDs from external graph keys, and hashes `proofshift-graph-canonical-v1`. Relationship-only cycles are warnings; execution/destructive cycles are errors. See `docs/adr/0003-migration-graph-compilation.md`.
+
+### D-017 — Read-only connector inspection and runtime secret boundary
+Status: Accepted
+
+PS-0.4 places read-only source contracts and redacting runtime settings in connector abstractions, inspection orchestration in Engine, and concrete registrations in the CLI composition root. Relational identifiers are validated/quoted, CSV duplicate checks use a temporary disk-backed identity index, and file/binary hashes stream. Inspection/read is not snapshotting or evidence. See `docs/adr/0004-source-connector-runtime.md`.
+
+### D-018 — Preserve timestamp semantics and retrievable binary references
+Status: Accepted
+
+PS-0.4 source values distinguish instants, explicit offsets, and local timestamps without assigning a machine timezone. Binary values carry reference, length, and SHA-256, and source binary content is reopened as a stream through connector abstractions. See `docs/adr/0005-source-value-fidelity.md`.
+
+### D-019 — PS-0.5 is gated on Docker-backed connector acceptance
+Status: Accepted
+
+PS-0.5 projection must not begin until PostgreSQL and SQL Server Testcontainers integration tests pass in Docker-capable CI. Local skips do not satisfy this gate. The Ubuntu workflow runs the full suite, including the Linux symlink-boundary test.

@@ -1,0 +1,41 @@
+version: 1
+nodes:
+  legacy-member:
+    type: source
+    system: legacy
+    storage: member-store
+    semanticType: Generic.Member
+    selector:
+      kind: table
+      properties: { name: dbo.MEMBER }
+      identity: [MEMBER_ID]
+  legacy-address:
+    type: source
+    system: legacy
+    storage: member-store
+    semanticType: Generic.Address
+    selector:
+      kind: table
+      properties: { name: dbo.ADDRESS }
+      identity: [MEMBER_ID, ADDRESS_ID]
+  participant:
+    type: target
+    system: modern
+    storage: participant-store
+    semanticType: Generic.Participant
+    selector:
+      kind: api-resource
+      properties: { route: /participants }
+      identity: [id]
+edges:
+  participant-build:
+    from: [legacy-member, legacy-address]
+    to: [participant]
+    operation:
+      type: transform
+      fields:
+        participantId:
+          source: MEMBER_ID
+    recovery:
+      mode: compensate
+      strategy: rebuild-participant

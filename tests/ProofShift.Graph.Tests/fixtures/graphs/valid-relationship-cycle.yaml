@@ -1,0 +1,25 @@
+version: 1
+nodes:
+  source-member:
+    type: source
+    system: legacy
+    storage: member-store
+    semanticType: Generic.Member
+    selector: { kind: table, properties: { name: dbo.MEMBER }, identity: [id] }
+  target-beneficiary:
+    type: target
+    system: modern
+    storage: participant-store
+    semanticType: Generic.Beneficiary
+    selector: { kind: api-resource, properties: { route: /beneficiaries }, identity: [id] }
+edges:
+  member-has-beneficiary:
+    from: [source-member]
+    to: [target-beneficiary]
+    operation: { type: relationship, relation: HAS_BENEFICIARY }
+    recovery: { mode: reverse }
+  beneficiary-refers-to-member:
+    from: [target-beneficiary]
+    to: [source-member]
+    operation: { type: relationship, relation: BELONGS_TO }
+    recovery: { mode: reverse }

@@ -15,6 +15,15 @@
     <ProjectReference Include="../../src/ProofShift.Connectors.SqlServer/ProofShift.Connectors.SqlServer.csproj" />
     <ProjectReference Include="../../src/ProofShift.Connectors.Postgres/ProofShift.Connectors.Postgres.csproj" />
     <ProjectReference Include="../../src/ProofShift.Connectors.Files/ProofShift.Connectors.Files.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Connectors.Csv/ProofShift.Connectors.Csv.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Connectors.Abstractions/ProofShift.Connectors.Abstractions.csproj" />
     <ProjectReference Include="../../src/ProofShift.Packs.Pension/ProofShift.Packs.Pension.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="Testcontainers.MsSql" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="fixtures/**/*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

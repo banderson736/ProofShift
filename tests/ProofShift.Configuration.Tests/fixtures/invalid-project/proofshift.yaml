@@ -1,0 +1,15 @@
+proofshift: 999
+project:
+  id: invalid-project
+  name: Intentionally Invalid Configuration
+systems:
+  source:
+    file: ../outside.yaml
+  target:
+    file: systems/missing.yaml
+migration:
+  graph: migration/missing.yaml
+verification:
+  rules: rules/missing.yaml
+recovery:
+  policy: recovery/missing.yaml

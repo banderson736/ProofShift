@@ -160,17 +160,61 @@ public sealed record BooleanValue(bool Value) : ValueNode;
 
 public sealed record DateValue(DateOnly Value) : ValueNode;
 
+public sealed record InstantValue : ValueNode
+{
+    public DateTimeOffset Value { get; }
+
+    public InstantValue(DateTimeOffset value) => Value = value.ToUniversalTime();
+}
+
+public sealed record OffsetDateTimeValue : ValueNode
+{
+    public DateTimeOffset Value { get; }
+
+    public OffsetDateTimeValue(DateTimeOffset value) => Value = value;
+}
+
+public sealed record LocalDateTimeValue : ValueNode
+{
+    public DateTime Value { get; }
+
+    public LocalDateTimeValue(DateTime value)
+    {
+        if (value.Kind != DateTimeKind.Unspecified)
+        {
+            throw new ArgumentException("Local date-time values must not include an implicit machine timezone kind.", nameof(value));
+        }
+
+        Value = value;
+    }
+}
+
+[Obsolete("Use InstantValue, OffsetDateTimeValue, or LocalDateTimeValue to preserve timestamp semantics.")]
 public sealed record DateTimeValue(DateTimeOffset Value) : ValueNode;
 
 public sealed record BinaryReferenceValue : ValueNode
 {
     public string Reference { get; }
-    public string? Hash { get; }
+    public long ContentLength { get; }
+    public string Sha256 { get; }
+    public string Hash => Sha256;
 
-    public BinaryReferenceValue(string reference, string? hash = null)
+    public BinaryReferenceValue(string reference, long contentLength, string sha256)
     {
         Reference = DomainGuard.Required(reference, nameof(reference));
-        Hash = hash;
+        if (contentLength < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(contentLength), "Content length must not be negative.");
+        }
+
+        var normalizedHash = DomainGuard.Required(sha256, nameof(sha256)).ToLowerInvariant();
+        if (normalizedHash.Length != 64 || normalizedHash.Any(character => !Uri.IsHexDigit(character)))
+        {
+            throw new ArgumentException("SHA-256 must be 64 hexadecimal characters.", nameof(sha256));
+        }
+
+        ContentLength = contentLength;
+        Sha256 = normalizedHash;
     }
 }
 

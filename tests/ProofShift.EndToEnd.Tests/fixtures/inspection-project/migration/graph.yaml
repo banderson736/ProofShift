@@ -1,0 +1,66 @@
+version: 1
+nodes:
+  source-documents:
+    type: source
+    system: synthetic-source
+    storage: documents
+    semanticType: Generic.Document
+    selector:
+      kind: file-pattern
+      properties:
+        pattern: documents/**/*.pdf
+      identity:
+        - relativePath
+  archived-documents:
+    type: archive
+    system: synthetic-target
+    storage: target-artifacts
+    semanticType: Generic.Document
+    selector:
+      kind: file-pattern
+      properties:
+        pattern: archive/**/*.pdf
+      identity:
+        - relativePath
+  source-supplemental:
+    type: source
+    system: synthetic-source
+    storage: supplemental
+    semanticType: Generic.SupplementalMember
+    selector:
+      kind: csv
+      properties:
+        path: members.csv
+        delimiter: ";"
+      identity:
+        - MEMBER_ID
+        - PAY_PERIOD
+  target-members:
+    type: target
+    system: synthetic-target
+    storage: target-artifacts
+    semanticType: Generic.Member
+    selector:
+      kind: api-resource
+      properties:
+        route: /members
+      identity:
+        - id
+edges:
+  archive-documents:
+    from: [source-documents]
+    to: [archived-documents]
+    operation:
+      type: archive
+    recovery:
+      mode: restore
+      requiresSnapshot: true
+  map-supplemental:
+    from: [source-supplemental]
+    to: [target-members]
+    operation:
+      type: map
+      fields:
+        id: { source: MEMBER_ID }
+    recovery:
+      mode: reverse

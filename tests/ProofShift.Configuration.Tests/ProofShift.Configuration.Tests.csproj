@@ -11,4 +11,7 @@
     <ProjectReference Include="../../src/ProofShift.Configuration/ProofShift.Configuration.csproj" />
     <ProjectReference Include="../../src/ProofShift.Domain/ProofShift.Domain.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Update="fixtures/**/*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

@@ -1,0 +1,7 @@
+id: modern
+name: Synthetic Target
+role: shadow-target
+storage:
+  participant-store:
+    connector: synthetic
+    location: target-members

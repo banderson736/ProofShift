@@ -1,0 +1,20 @@
+version: 1
+nodes:
+  legacy-audit:
+    type: source
+    system: legacy
+    storage: member-store
+    semanticType: Generic.AuditArtifact
+    selector:
+      kind: table
+      properties: { name: dbo.OLD_AUDIT }
+      identity: [AUDIT_ID]
+edges:
+  exclude-legacy-audit:
+    from: [legacy-audit]
+    to: []
+    operation:
+      type: exclude
+    recovery:
+      mode: irreversible
+      justification: Retained in source archive under approved retention policy

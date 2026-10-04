@@ -10,5 +10,10 @@
     <ProjectReference Include="../ProofShift.Graph/ProofShift.Graph.csproj" />
     <ProjectReference Include="../ProofShift.Engine/ProofShift.Engine.csproj" />
     <ProjectReference Include="../ProofShift.Reporting/ProofShift.Reporting.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.Abstractions/ProofShift.Connectors.Abstractions.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.Postgres/ProofShift.Connectors.Postgres.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.SqlServer/ProofShift.Connectors.SqlServer.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.Files/ProofShift.Connectors.Files.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.Csv/ProofShift.Connectors.Csv.csproj" />
   </ItemGroup>
 </Project>
