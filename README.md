@@ -108,4 +108,6 @@ Before implementing a milestone:
 
 ## Current status
 
-**PS-0.1 through PS-0.4 implementations are present.** Use `proofshift validate`, `proofshift plan`, and `proofshift inspect` to validate configuration, compile the graph, and physically inspect/read source selectors. Inspection is read-only and is not a snapshot; target mutation, projection, and migration execution remain deferred. PS-0.4 acceptance is pending a successful Docker-backed GitHub Actions run; the local environment has no Docker daemon. PS-0.5 must not begin until that gate is green. See `docs/ROADMAP.md`.
+**PS-0.1 through PS-0.4 are accepted.** The Docker-backed [GitHub Actions run](https://github.com/banderson736/ProofShift/actions/runs/37173803105/job/111352102267) passed all 67 tests with zero failures and zero skips. PS-0.5 adds the `proofshift project` command, PostgreSQL run-schema shadow output, filesystem per-run output, deterministic transformations, read-back fingerprinting, and a JSONL Projection Journal. Projection records what ProofShift produced; it does not verify correctness, create snapshots, or write production targets. PS-0.5 acceptance is pending its new Docker-backed CI run. See the [PS-0.5 fixture](scenarios/pension-modernization/ps05/proofshift.yaml) and [roadmap](docs/ROADMAP.md).
+
+CLI commands: `proofshift validate <config>`, `proofshift plan <config>`, `proofshift inspect <config>`, and `proofshift project <config> [--json]`.

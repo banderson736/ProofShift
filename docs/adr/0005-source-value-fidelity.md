@@ -42,4 +42,4 @@ Rejected because memory would grow with artifact count. A temporary SQLite index
 - The domain value hierarchy gains three explicit temporal variants and binary length.
 - Connector abstraction gains a source binary stream resolver contract.
 - PostgreSQL and SQL Server integration coverage must prove local/offset/instant mappings and binary stream round-trip once Docker is available.
-- PS-0.5 remains blocked until database integration tests execute successfully in a Docker-capable CI environment.
+- PostgreSQL and SQL Server integration tests, along with Linux filesystem coverage, passed in the [Docker-backed GitHub Actions run](https://github.com/banderson736/ProofShift/actions/runs/37173803105/job/111352102267) (67 passed, 0 failed, 0 skipped), satisfying the PS-0.4 acceptance gate for PS-0.5.

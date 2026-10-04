@@ -1,0 +1,119 @@
+version: 1
+nodes:
+  source-members:
+    type: source
+    system: legacy-pension
+    storage: member-database
+    semanticType: Pension.Member
+    selector:
+      kind: table
+      properties:
+        name: dbo.MEMBER
+      identity: [MEMBER_ID]
+  source-csv:
+    type: source
+    system: legacy-pension
+    storage: supplemental-members
+    semanticType: Pension.SupplementalMember
+    selector:
+      kind: csv
+      properties:
+        path: supplemental.csv
+        delimiter: ";"
+      identity: [MEMBER_ID, PAY_PERIOD]
+  source-documents:
+    type: source
+    system: legacy-pension
+    storage: member-documents
+    semanticType: Pension.Document
+    selector:
+      kind: file-pattern
+      properties:
+        pattern: member/**/*.pdf
+      identity: [relativePath]
+  participant:
+    type: target
+    system: shadow-pension
+    storage: pension-database
+    semanticType: Pension.Member
+    selector:
+      kind: table
+      properties:
+        name: public.participant
+        columns: id,first_name,status,amount,birth_date,local_at,optional_value
+      identity: [id]
+  member-status:
+    type: target
+    system: shadow-pension
+    storage: pension-database
+    semanticType: Pension.MemberStatus
+    selector:
+      kind: table
+      properties:
+        name: public.member_status
+        columns: id,first_name,status,amount,birth_date,local_at,optional_value
+      identity: [id]
+  supplemental-member:
+    type: target
+    system: shadow-pension
+    storage: pension-database
+    semanticType: Pension.SupplementalMember
+    selector:
+      kind: table
+      properties:
+        name: public.supplemental_member
+        columns: member_id,pay_period,note
+      identity: [member_id, pay_period]
+  participant-documents:
+    type: archive
+    system: shadow-pension
+    storage: pension-documents
+    semanticType: Pension.Document
+    selector:
+      kind: file-pattern
+      properties:
+        pathField: relativePath
+      identity: [relativePath]
+edges:
+  member-split:
+    from: [source-members]
+    to: [participant, member-status]
+    operation:
+      type: split
+      fields:
+        id: { source: MEMBER_ID }
+        first_name:
+          source: FIRST_NM
+          pipeline:
+            - { type: trim }
+            - { type: normalize-string }
+        status:
+          source: MEMBER_STATUS
+          pipeline:
+            - type: code-map
+              values: { A: ACTIVE, R: RETIRED }
+        amount: { source: AMOUNT }
+        birth_date: { source: BIRTH_DATE }
+        local_at: { source: LOCAL_AT }
+        optional_value: { source: OPTIONAL_VALUE }
+    recovery:
+      mode: reverse
+  supplemental-map:
+    from: [source-csv]
+    to: [supplemental-member]
+    operation:
+      type: map
+      fields:
+        member_id: { source: MEMBER_ID }
+        pay_period: { source: PAY_PERIOD }
+        note: { source: NOTE }
+    recovery:
+      mode: reverse
+  document-archive:
+    from: [source-documents]
+    to: [participant-documents]
+    operation:
+      type: archive
+    recovery:
+      mode: restore
+      requiresSnapshot: true

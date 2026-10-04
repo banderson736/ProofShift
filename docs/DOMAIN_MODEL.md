@@ -550,26 +550,22 @@ public sealed record SourceInspection
 The source/runtime contracts and metadata types live in `ProofShift.Connectors.Abstractions`, not in the domain assembly. Runtime configuration is redacted and separate from hashed endpoint identity.
 
 ```csharp
-public interface ITargetConnector
+public interface IShadowTargetConnector
 {
     ConnectorId Id { get; }
     string Version { get; }
 
-    Task PrepareShadowAsync(
-        ShadowTargetRequest request,
-        CancellationToken cancellationToken);
+    Task PrepareAsync(ShadowTargetContext context, ArtifactSelector selector, CancellationToken cancellationToken);
 
-    Task WriteAsync(
-        WriteRequest request,
-        CancellationToken cancellationToken);
+    Task WriteAsync(ShadowWriteRequest request, CancellationToken cancellationToken);
 
-    IAsyncEnumerable<RecordEnvelope> ReadAsync(
-        ReadRequest request,
-        CancellationToken cancellationToken);
+    Task CompleteAsync(ShadowTargetContext context, CancellationToken cancellationToken);
+
+    IAsyncEnumerable<RecordEnvelope> ReadAsync(ReadRequest request, CancellationToken cancellationToken);
 }
 ```
 
-A concrete connector may implement both source and target interfaces. PS-0.4 implements only source access. Connector inspection/read results are observations only, not snapshots or evidence.
+The runtime contract is owned by `ProofShift.Connectors.Abstractions`; it accepts only `ShadowTargetContext`, which requires `SystemRole.ShadowTarget`. PostgreSQL and filesystem implement this interface. There is no production-target connector contract or production-write mode in PS-0.5. Projection run/journal types live in `ProofShift.Projection`, not Domain, and projection records are not verification evidence.
 
 ## Domain-pack contract
 

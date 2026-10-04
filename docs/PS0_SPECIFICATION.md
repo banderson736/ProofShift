@@ -320,7 +320,15 @@ Do not prematurely lock command syntax if a better consistent CLI emerges, but p
 
 PS-0.4 provides read-only physical inspection and streaming reads for PostgreSQL, SQL Server, filesystem, and CSV sources. This is not snapshotting: current observations are not claimed to be immutable or transactionally consistent. It does not write targets, execute graph operations, create evidence, or assign artifact dispositions/lineage. Relational integration tests use Testcontainers and require a Docker-compatible runtime; filesystem and CSV tests use synthetic local fixtures.
 
-Temporal fidelity preserves date-only values, UTC instants, explicit offsets, and local timestamps without assigning a timezone. Binary references carry a retrievable source reference, length, and SHA-256; content is reopened and transferred by stream. `.github/workflows/ci.yml` runs database Testcontainers and filesystem symlink checks on Ubuntu. PS-0.5 remains blocked until that Docker-backed CI suite reports success.
+Temporal fidelity preserves date-only values, UTC instants, explicit offsets, and local timestamps without assigning a timezone. Binary references carry a retrievable source reference, length, and SHA-256; content is reopened and transferred by stream. `.github/workflows/ci.yml` runs database Testcontainers and filesystem symlink checks on Ubuntu. PS-0.4 acceptance is complete: the [Docker-backed CI run](https://github.com/banderson736/ProofShift/actions/runs/37173803105/job/111352102267) reports 67 passed, 0 failed, and 0 skipped. PS-0.5 may proceed; PS-0.6 remains out of scope until PS-0.5 is complete.
+
+## PS-0.5 Shadow Projection boundary
+
+PS-0.5 consumes live source observations through PS-0.4 connectors, executes direct-source paths using copy/map/transform/split/archive/exclude, and writes only to systems explicitly classified `shadow-target`. PostgreSQL uses a generated run schema and predefined template tables; filesystem output uses a generated run directory. Both target connectors detect duplicate identities and support connector-neutral read-back. Binary file content is streamed source-to-target and checked against source length/SHA-256.
+
+The JSONL Projection Journal records what was written, excluded, failed, or retained as metadata-only, including artifact ancestry, edge/version, transformations/versions, and recovery metadata. It is not verification evidence. `proofshift-projection-fingerprint-v1` is computed over actual read-back values. Failure and cancellation retain partial shadow state and journal; neither status reports success. PS-0.5 does not create source snapshots, execute rollback, verify correctness, or write production targets. Merge and chained target-input execution are explicitly deferred because join/scheduling semantics are not defined.
+
+The reusable 10-member configuration, database setup SQL, CSV, and document fixture are in `scenarios/pension-modernization/ps05/`. PS-0.5 acceptance requires the full Docker-capable CI suite to execute the PostgreSQL/SQL Server projection tests without skips.
 
 ## PS-0 non-goals
 

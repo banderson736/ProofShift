@@ -298,7 +298,7 @@ The snapshot manifest and hash must be preserved with the run.
 
 ## Shadow projection
 
-A dry run must create realistic projected output rather than merely calculate an abstract result.
+A projection creates realistic isolated output rather than merely calculating an abstract result. Projection is operational output, not a verification conclusion: it answers what the compiled graph produced, not whether that output is correct.
 
 Possible shadow targets:
 
@@ -308,7 +308,11 @@ Possible shadow targets:
 - local filesystem/object-store emulation;
 - generated API request manifests instead of live mutation.
 
-The same frozen plan and transformation versions used to build an approved shadow result should be reusable for production orchestration or external verification.
+PS-0.5 implements PostgreSQL schemas named `proofshift_shadow_<run-guid>` and filesystem roots `<configured-root>/<run-guid>`. Before any target preparation, graph destinations must resolve to a system explicitly configured as `shadow-target`; `source`, `target`, `archive`, missing, and unsupported roles fail closed. PostgreSQL clones configured template table constraints/indexes into the isolated schema without copying defaults/sequences. Filesystem files are streamed into a per-run directory after path containment and identity checks.
+
+The Projection Journal is append-only JSONL under `.proofshift/projections/<run-guid>/journal.jsonl`. A pending ancestry entry is flushed before target writes, followed by produced/failed status; exclusions and metadata-only relationships are also explicit. Entries record source/target artifact references, target graph node, edge ID/name/version, transformation types/versions and field mappings, and recovery metadata. It records execution ancestry only; it is not an Evidence Graph and makes no correctness claim. Merge and chained target-input execution are deferred until grouping/join semantics are specified.
+
+The `proofshift-projection-fingerprint-v1` digest is computed from graph hash and canonical values read back from materialized shadow targets in deterministic node/identity/field order. It excludes run IDs, timestamps, schema names, and machine paths. Failed/cancelled output and its journal are retained for inspection; no automatic cleanup or rollback is performed. PS-0.5 operates on live source observations and does not claim snapshot or point-in-time reproducibility.
 
 ## Verification levels
 

@@ -20,6 +20,24 @@ public static class ConnectorIssueCodes
     public const string PartitioningUnsupported = "PSCONN014";
 }
 
+public static class StableArtifactIdentity
+{
+    public static string CreateArtifactId(string system, string endpoint, string artifactType, string identity)
+    {
+        var canonical = string.Concat(new[] { system, endpoint, artifactType, identity }
+            .Select(part => $"{part.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)}:{part}"));
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(canonical)))
+            .ToLowerInvariant();
+    }
+
+    public static string ArtifactTypeFor(ArtifactSelector selector) => selector.Kind.ToLowerInvariant() switch
+    {
+        "table" => "row",
+        "file-pattern" => "file",
+        _ => selector.Kind
+    };
+}
+
 public enum ConnectorIssueSeverity
 {
     Error,

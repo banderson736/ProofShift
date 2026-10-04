@@ -97,4 +97,9 @@ PS-0.4 source values distinguish instants, explicit offsets, and local timestamp
 ### D-019 — PS-0.5 is gated on Docker-backed connector acceptance
 Status: Accepted
 
-PS-0.5 projection must not begin until PostgreSQL and SQL Server Testcontainers integration tests pass in Docker-capable CI. Local skips do not satisfy this gate. The Ubuntu workflow runs the full suite, including the Linux symlink-boundary test.
+PS-0.5 projection must not begin until PostgreSQL and SQL Server Testcontainers integration tests pass in Docker-capable CI. Local skips do not satisfy this gate. The Ubuntu workflow runs the full suite, including the Linux symlink-boundary test. Gate satisfied by [GitHub Actions run 37173803105](https://github.com/banderson736/ProofShift/actions/runs/37173803105/job/111352102267): 67 passed, 0 failed, 0 skipped.
+
+### D-020 — Projection is shadow-only and distinct from verification
+Status: Accepted
+
+PS-0.5 writes only through `IShadowTargetConnector` contexts for systems with role `shadow-target`. PostgreSQL schemas and filesystem directories are isolated per run; the append-only Projection Journal records execution ancestry, and a versioned fingerprint is computed from read-back materialized state. Projection is not evidence of correctness. Merge/chained execution is deferred where deterministic semantics are undefined. See `docs/adr/0006-shadow-projection-runtime.md`.

@@ -8,6 +8,7 @@ using ProofShift.Connectors.Postgres;
 using ProofShift.Connectors.SqlServer;
 using ProofShift.Engine;
 using ProofShift.Graph;
+using ProofShift.Projection;
 
 namespace ProofShift.Cli;
 
@@ -47,6 +48,11 @@ internal static class Program
         if (string.Equals(args[0], "inspect", StringComparison.OrdinalIgnoreCase))
         {
             return await InspectSourcesAsync(args[1], jsonOutput).ConfigureAwait(false);
+        }
+
+        if (string.Equals(args[0], "project", StringComparison.OrdinalIgnoreCase))
+        {
+            return await ProjectAsync(args[1], jsonOutput).ConfigureAwait(false);
         }
 
         WriteUsage();
@@ -212,6 +218,145 @@ internal static class Program
             return 1;
         }
     }
+
+    private static async Task<int> ProjectAsync(string path, bool jsonOutput)
+    {
+        ProjectionRun? run = null;
+        try
+        {
+            var loaded = await new ConfigurationLoader().LoadAsync(path).ConfigureAwait(false);
+            if (loaded.Configuration is null)
+            {
+                Console.Error.WriteLine("Configuration validation failed; projection was not started.");
+                return 1;
+            }
+
+            var compilation = MigrationGraphCompiler.Compile(loaded.Configuration);
+            if (!compilation.IsValid || compilation.Graph is null)
+            {
+                Console.Error.WriteLine("Migration graph validation failed; projection was not started.");
+                return 1;
+            }
+
+            var sourceConnectors = new ConnectorRegistry(
+            [
+                new PostgresSourceConnector(),
+                new SqlServerSourceConnector(),
+                new FilesystemSourceConnector(),
+                new CsvSourceConnector()
+            ]);
+            var targetConnectors = new ShadowTargetConnectorRegistry(
+            [
+                new PostgresShadowTargetConnector(),
+                new FilesystemShadowTargetConnector()
+            ]);
+            var service = new ShadowProjectionService(sourceConnectors, targetConnectors);
+            var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(path))
+                ?? throw new InvalidOperationException("Project configuration directory is unavailable.");
+            using var cancellation = new CancellationTokenSource();
+            ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+            {
+                eventArgs.Cancel = true;
+                cancellation.Cancel();
+            };
+            Console.CancelKeyPress += cancelHandler;
+            try
+            {
+                run = await service.ProjectAsync(loaded.Configuration, compilation.Graph, projectDirectory, cancellation.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                Console.CancelKeyPress -= cancelHandler;
+            }
+            if (jsonOutput)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(ToProjectionOutput(run), JsonOptions));
+            }
+            else
+            {
+                WriteProjectionHuman(loaded.Configuration.Root.Project?.Name, run);
+            }
+
+            return run.Status == ProjectionStatus.Succeeded ? 0 : run.Status == ProjectionStatus.Cancelled ? 130 : 1;
+        }
+        catch (OperationCanceledException)
+        {
+            return 130;
+        }
+        catch
+        {
+            if (jsonOutput && run is not null)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(ToProjectionOutput(run), JsonOptions));
+            }
+            else
+            {
+                Console.Error.WriteLine("Shadow projection could not be completed.");
+            }
+
+            return 1;
+        }
+    }
+
+    private static void WriteProjectionHuman(string? projectName, ProjectionRun run)
+    {
+        Console.WriteLine("ProofShift Shadow Projection");
+        Console.WriteLine();
+        Console.WriteLine($"Project: {projectName ?? run.ProjectId}");
+        Console.WriteLine($"Run: {run.Id.Value:D}");
+        Console.WriteLine($"Status: {run.Status.ToString().ToUpperInvariant()}");
+        Console.WriteLine($"Configuration Hash: {run.ConfigurationHash}");
+        Console.WriteLine($"Migration Graph Hash: {run.GraphHash}");
+        Console.WriteLine();
+        Console.WriteLine("Connectors");
+        foreach (var connector in run.ConnectorVersions.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            Console.WriteLine($"{connector.Key}: {connector.Value}");
+        }
+
+        Console.WriteLine("Shadow Destinations");
+        foreach (var destination in run.ShadowDestinations)
+        {
+            Console.WriteLine(destination);
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("Projection Journal");
+        Console.WriteLine($"Source Artifacts: {run.SourceArtifactCount}");
+        Console.WriteLine($"Target Artifacts: {run.TargetArtifactCount}");
+        Console.WriteLine($"Failures: {run.FailureCount}");
+        if (run.FailureCode is not null)
+        {
+            Console.WriteLine($"Failure Code: {run.FailureCode}");
+        }
+        Console.WriteLine($"Journal: {run.JournalPath}");
+        if (run.Fingerprint is not null)
+        {
+            Console.WriteLine($"Projection Fingerprint ({run.FingerprintVersion}): {run.Fingerprint}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine(run.Status == ProjectionStatus.Succeeded ? "RESULT: PROJECTED" : $"RESULT: {run.Status.ToString().ToUpperInvariant()}");
+    }
+
+    private static ProjectionOutput ToProjectionOutput(ProjectionRun run) => new(
+        run.Id.Value.ToString("D", CultureInfo.InvariantCulture),
+        run.Type.ToString().ToLowerInvariant(),
+        run.Status.ToString().ToLowerInvariant(),
+        run.ProjectId,
+        run.ConfigurationHash,
+        run.GraphHash,
+        run.StartedAt,
+        run.CompletedAt,
+        run.ConnectorVersions,
+        run.ShadowDestinations,
+        run.SourceArtifactCount,
+        run.TargetArtifactCount,
+        run.FailureCount,
+        run.FailureCode,
+        run.Fingerprint,
+        run.FingerprintVersion,
+        run.JournalPath);
 
     private static void WriteInspection(InspectionOutput output, bool jsonOutput)
     {
@@ -449,7 +594,7 @@ internal static class Program
         issue.Message);
 
     private static void WriteUsage() =>
-        Console.Error.WriteLine("Usage: proofshift validate <config> [--json] | proofshift plan <config> [--json] | proofshift inspect <config> [--json]");
+        Console.Error.WriteLine("Usage: proofshift validate <config> [--json] | proofshift plan <config> [--json] | proofshift inspect <config> [--json] | proofshift project <config> [--json]");
 
     private sealed record ValidationOutput(
         bool Valid,
@@ -483,6 +628,25 @@ internal static class Program
         int RecoveryDefinitions,
         IReadOnlyDictionary<string, int> OperationCounts,
         IEnumerable<ValidationIssueOutput> Issues);
+
+    private sealed record ProjectionOutput(
+        string RunId,
+        string RunType,
+        string Status,
+        string ProjectId,
+        string ConfigurationHash,
+        string MigrationGraphHash,
+        DateTimeOffset StartedAt,
+        DateTimeOffset? CompletedAt,
+        IReadOnlyDictionary<string, string> ConnectorVersions,
+        IReadOnlyCollection<string> ShadowDestinations,
+        long SourceArtifactCount,
+        long TargetArtifactCount,
+        long FailureCount,
+        string? FailureCode,
+        string? ProjectionFingerprint,
+        string ProjectionFingerprintVersion,
+        string ProjectionJournal);
 
     private sealed record SourceColumnOutput(string Name, string DataType, bool Nullable, int? Ordinal);
 

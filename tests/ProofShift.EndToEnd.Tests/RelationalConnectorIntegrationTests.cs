@@ -8,18 +8,92 @@ using ProofShift.Connectors.Abstractions;
 using ProofShift.Connectors.Postgres;
 using ProofShift.Connectors.SqlServer;
 using ProofShift.Domain;
+using ProofShift.Projection;
 using Testcontainers.MsSql;
 using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace ProofShift.EndToEnd.Tests;
 
+[Collection("DockerIntegration")]
 public sealed class RelationalConnectorIntegrationTests
 {
     private const string ContainerPassword = "Synthetic-PS04-Only-Password!2026";
     private const string ExactAmount = "12345678901234567890.12345678";
     private static readonly string[] CompositePostgresKey = ["member_id", "period"];
     private static readonly string[] CompositeSqlServerKey = ["MemberId", "Period"];
+
+    [Fact]
+    public async Task PostgreSqlShadowConnectorIsolatesWritesAndReadsMaterializedValuesBack()
+    {
+        var container = await StartPostgresContainerAsync();
+        await using var cleanup = container;
+        await using (var setup = new NpgsqlConnection(container.GetConnectionString()))
+        {
+            await setup.OpenAsync(TestContext.Current.CancellationToken);
+            await using var command = setup.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE public.participant (
+                    id integer NOT NULL PRIMARY KEY,
+                    name text NOT NULL,
+                    amount numeric(28, 8) NOT NULL,
+                    birth_date date NOT NULL,
+                    local_at timestamp without time zone NOT NULL,
+                    instant_at timestamp with time zone NOT NULL,
+                    optional_value text NULL
+                );
+                """;
+            await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+        }
+
+        var connector = new PostgresShadowTargetConnector();
+        var selector = TableSelector("public.participant", ["id"]);
+        var runId = new RunId(Guid.NewGuid());
+        var context = new ShadowTargetContext(
+            RelationalContext("postgres", "shadow-system", "shadow-db", container.GetConnectionString()),
+            runId,
+            SystemRole.ShadowTarget);
+        await connector.PrepareAsync(context, selector, TestContext.Current.CancellationToken);
+        var identity = "2:id=9:integer:1";
+        var record = new RecordEnvelope(
+            new ArtifactReference(new ArtifactId(StableArtifactIdentity.CreateArtifactId("shadow-system", "shadow-db", "row", identity)),
+                new SystemId("shadow-system"), new StorageEndpointId("shadow-db"), "table", identity),
+            "Pension.Member",
+            new Dictionary<string, ValueNode>
+            {
+                ["id"] = new IntegerValue(1),
+                ["name"] = new StringValue("Ada"),
+                ["amount"] = new DecimalValue(12345678901234567890.12345678m),
+                ["birth_date"] = new DateValue(new DateOnly(1990, 2, 3)),
+                ["local_at"] = new LocalDateTimeValue(new DateTime(2025, 1, 2, 3, 4, 5, DateTimeKind.Unspecified)),
+                ["instant_at"] = new InstantValue(new DateTimeOffset(2025, 1, 2, 3, 4, 5, TimeSpan.FromHours(2))),
+                ["optional_value"] = new NullValue()
+            },
+            new ProvenanceMetadata(new ConnectorId("postgres"), new StorageEndpointId("shadow-db"), identity, DateTimeOffset.UnixEpoch));
+        var request = new ShadowWriteRequest(context, selector, record, "participant");
+        await connector.WriteAsync(request, TestContext.Current.CancellationToken);
+        await connector.CompleteAsync(context, TestContext.Current.CancellationToken);
+
+        var readBack = Assert.Single(await ReadAllAsync(connector.ReadAsync(new ReadRequest(context, selector), TestContext.Current.CancellationToken)));
+        Assert.Equal(new DecimalValue(12345678901234567890.12345678m), readBack.Values["amount"]);
+        Assert.Equal(new DateValue(new DateOnly(1990, 2, 3)), readBack.Values["birth_date"]);
+        Assert.Equal(new LocalDateTimeValue(new DateTime(2025, 1, 2, 3, 4, 5, DateTimeKind.Unspecified)), readBack.Values["local_at"]);
+        Assert.Equal(new InstantValue(new DateTimeOffset(2025, 1, 2, 1, 4, 5, TimeSpan.Zero)), readBack.Values["instant_at"]);
+        Assert.Equal(new NullValue(), readBack.Values["optional_value"]);
+        await Assert.ThrowsAsync<ProjectionConnectorException>(() => connector.WriteAsync(request, TestContext.Current.CancellationToken));
+
+        var secondRun = new ShadowTargetContext(
+            RelationalContext("postgres", "shadow-system", "shadow-db", container.GetConnectionString()),
+            new RunId(Guid.NewGuid()),
+            SystemRole.ShadowTarget);
+        await connector.PrepareAsync(secondRun, selector, TestContext.Current.CancellationToken);
+        Assert.Empty(await ReadAllAsync(connector.ReadAsync(new ReadRequest(secondRun, selector), TestContext.Current.CancellationToken)));
+        await using var verify = new NpgsqlConnection(container.GetConnectionString());
+        await verify.OpenAsync(TestContext.Current.CancellationToken);
+        await using var verifyCommand = verify.CreateCommand();
+        verifyCommand.CommandText = "SELECT COUNT(*) FROM public.participant";
+        Assert.Equal(0L, (long)(await verifyCommand.ExecuteScalarAsync(TestContext.Current.CancellationToken))!);
+    }
 
     [Fact]
     public async Task PostgreSqlConnectorInspectsAndStreamsCompositeIdentityAndTypedValues()

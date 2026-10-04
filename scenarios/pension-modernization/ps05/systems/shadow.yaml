@@ -1,0 +1,12 @@
+id: shadow-pension
+name: Synthetic Pension Shadow Targets
+role: shadow-target
+storage:
+  pension-database:
+    connector: postgres
+    connection:
+      secret: PS05_POSTGRES_CONNECTION
+  pension-documents:
+    connector: files
+    root:
+      env: PS05_SHADOW_FILES

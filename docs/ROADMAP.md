@@ -74,7 +74,7 @@ CLI: `proofshift plan`.
 
 ### PS-0.4 First connectors
 
-Status: Implementation complete; acceptance gate pending. Read-only PostgreSQL, SQL Server, filesystem, and CSV connectors are registered at the CLI composition root and exercised through `proofshift inspect`. Temporal/binary/CSV hardening and a Docker-capable Ubuntu CI workflow are present. Filesystem/CSV/runtime tests pass locally; PostgreSQL/SQL Server Testcontainers and Linux symlink tests must execute successfully in CI before PS-0.4 is considered accepted.
+Status: Accepted. Read-only PostgreSQL, SQL Server, filesystem, and CSV connectors are registered at the CLI composition root and exercised through `proofshift inspect`. Temporal/binary/CSV hardening is covered by the full Docker-backed [GitHub Actions run](https://github.com/banderson736/ProofShift/actions/runs/37173803105/job/111352102267): 67 passed, 0 failed, 0 skipped, including PostgreSQL/SQL Server Testcontainers and Linux symlink coverage.
 
 Implemented:
 
@@ -89,7 +89,7 @@ No generalized feature breadth beyond the first member slice.
 
 ### PS-0.5 First vertical slice
 
-Status: Blocked until PS-0.4 Docker-backed CI integration tests pass. Do not start projection until that prerequisite is green.
+Status: Implementation underway; PS-0.4 gate passed. The PS-0.5 slice adds a shadow-only target contract, PostgreSQL schema-per-run and filesystem directory-per-run connectors, deterministic supported transformations, a Projection Journal, read-back fingerprinting, and `proofshift project`. The 10-member synthetic fixture deliberately includes one unknown status code; that projection must fail with retained partial output, while a corrected rerun must succeed in separate shadow state. Acceptance remains pending the Docker-backed PS-0.5 CI run.
 
 Scenario:
 
@@ -98,14 +98,12 @@ SQL Server MEMBER
        ↓
 member transformation
        ↓
-PostgreSQL participant
-       ↓
-verification
-       ↓
-evidence + disposition + lineage
+PostgreSQL participant + member_status
+   ↓
+Projection Journal + read-back fingerprint
 ```
 
-Start with 10 deterministic members and seed:
+The synthetic integration scenario uses 10 deterministic members and seeds:
 
 - one missing member;
 - one invalid status transformation;

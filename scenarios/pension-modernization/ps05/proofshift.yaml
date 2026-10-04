@@ -1,0 +1,15 @@
+proofshift: 1
+project:
+  id: synthetic-pension-ps05
+  name: Synthetic Pension PS-0.5 Shadow Projection
+systems:
+  legacy:
+    file: systems/source.yaml
+  shadow:
+    file: systems/shadow.yaml
+migration:
+  graph: migration/graph.yaml
+verification:
+  rules: rules/rules.yaml
+recovery:
+  policy: recovery/policy.yaml

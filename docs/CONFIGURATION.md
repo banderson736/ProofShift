@@ -315,3 +315,11 @@ Canonical form `proofshift-config-canonical-v1` sorts mapping entries ordinally,
 ## PS-0.4 Runtime Boundary
 
 At runtime the CLI/Engine resolves endpoint reference identities into callback-only redacting settings and passes those values to the selected source connector. Concrete connectors receive a `ConnectorContext`, not the original loaded configuration. The graph continues to contain symbolic selectors; SQL Server/PostgreSQL interpret `table`, filesystem interprets `file-pattern`, and CSV interprets `csv`. Connector inspection is read-only and does not imply a source snapshot.
+
+## PS-0.5 Shadow Destination Boundary
+
+Every graph target/archive destination used by `proofshift project` must resolve to a system with `role: shadow-target`. `source`, `target`, and `archive` roles are rejected before any target connector is prepared. The PostgreSQL endpoint must name a pre-existing template table through a `table` selector; target `columns` is an optional comma-separated list and all field identifiers are validated/quoted. PostgreSQL writes go only to the run-generated schema. Filesystem target endpoints configure an existing `root`; each run creates its own GUID directory below it, and files are placed beneath a graph-node subdirectory. File selectors set `pathField` (default: first identity field) to a projected relative-path string. Paths are kept inside that run directory.
+
+Projection also rejects a PostgreSQL source and shadow destination that resolve to the same connection string, and rejects a filesystem shadow root that overlaps (equals, contains, or is contained by) any filesystem/CSV source root. This avoids accidental writes into a live source store even when roles were misconfigured.
+
+The runnable synthetic configuration and template SQL are in `scenarios/pension-modernization/ps05/`. Set `PS05_SQL_CONNECTION`, `PS05_POSTGRES_CONNECTION`, `PS05_SOURCE_FILES`, `PS05_SOURCE_CSV`, and `PS05_SHADOW_FILES` in the process environment. The source seed includes an unmapped status `X`, so the first projection intentionally fails closed after journaling/materializing preceding records. Correct the source code to a configured value and rerun; each run remains isolated. The configuration contains only secret/environment references, never resolved values.

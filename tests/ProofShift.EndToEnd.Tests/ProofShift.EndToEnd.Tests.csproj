@@ -25,5 +25,8 @@
   </ItemGroup>
   <ItemGroup>
     <None Update="fixtures/**/*" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../scenarios/pension-modernization/ps05/**/*"
+          Link="scenarios/pension-modernization/ps05/%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

@@ -1,0 +1,23 @@
+CREATE TABLE dbo.MEMBER (
+    MEMBER_ID int NOT NULL PRIMARY KEY,
+    FIRST_NM nvarchar(100) NOT NULL,
+    MEMBER_STATUS char(1) NOT NULL,
+    AMOUNT decimal(28, 8) NOT NULL,
+    BIRTH_DATE date NOT NULL,
+    LOCAL_AT datetime2(7) NOT NULL,
+    OPTIONAL_VALUE nvarchar(50) NULL
+);
+
+WITH numbers AS (
+    SELECT TOP (10) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS id
+    FROM sys.all_objects
+)
+INSERT INTO dbo.MEMBER (MEMBER_ID, FIRST_NM, MEMBER_STATUS, AMOUNT, BIRTH_DATE, LOCAL_AT, OPTIONAL_VALUE)
+SELECT id,
+       CASE WHEN id = 1 THEN N'  ada lovelace  ' ELSE CONCAT(N'Member ', id) END,
+       CASE WHEN id = 10 THEN 'X' ELSE 'A' END,
+       12345678901234567890.12345678,
+       '1990-02-03',
+       '2025-01-02T03:04:05',
+       CASE WHEN id = 1 THEN NULL ELSE N'synthetic' END
+FROM numbers;

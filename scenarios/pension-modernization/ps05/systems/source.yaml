@@ -1,0 +1,17 @@
+id: legacy-pension
+name: Synthetic Legacy Pension
+role: source
+storage:
+  member-database:
+    connector: sqlserver
+    connection:
+      secret: PS05_SQL_CONNECTION
+  member-documents:
+    connector: files
+    root:
+      env: PS05_SOURCE_FILES
+  supplemental-members:
+    connector: csv
+    root:
+      env: PS05_SOURCE_CSV
+    delimiter: ";"

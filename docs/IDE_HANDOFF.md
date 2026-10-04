@@ -19,9 +19,7 @@ Use `docs/MARKET_RESEARCH.md` for commercial/domain context, not as an implement
 
 ## Current assignment
 
-Start **PS-0.1 Domain foundation**, then **PS-0.2 Configuration**.
-
-Do not begin connectors until PS-0.1 domain tests and PS-0.2 validation/configuration tests are green.
+PS-0.4 has been accepted after [GitHub Actions run 37173803105](https://github.com/banderson736/ProofShift/actions/runs/37173803105/job/111352102267) passed all 67 tests with zero failures and zero skips. The active milestone is **PS-0.5 Shadow Projection**. Follow the dedicated `ProofShift Copilot Prompt — PS-0.5 Shadow Projection` and [ADR 0006](adr/0006-shadow-projection-runtime.md); do not begin PS-0.6. PS-0.5 acceptance requires the full Docker-backed integration suite to pass without required skips.
 
 ### PS-0.1 deliverables
 

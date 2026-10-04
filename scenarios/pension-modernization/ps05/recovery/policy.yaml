@@ -1,0 +1,3 @@
+requireRecoveryForDestructiveOperations: true
+allowIrreversible:
+  default: false
