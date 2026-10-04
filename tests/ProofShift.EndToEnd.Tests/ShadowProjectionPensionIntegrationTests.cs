@@ -89,7 +89,7 @@ public sealed class ShadowProjectionPensionIntegrationTests
             var failedJournalPath = Path.Combine(projectRoot, failed.JournalPath.Replace('/', Path.DirectorySeparatorChar));
             var failedJournal = await File.ReadAllTextAsync(failedJournalPath, TestContext.Current.CancellationToken);
             Assert.Contains("failed", failedJournal, StringComparison.Ordinal);
-            Assert.Contains("MEMBER_ID=10", failedJournal, StringComparison.Ordinal);
+            Assert.Contains("MEMBER_ID=2:10", failedJournal, StringComparison.Ordinal);
             Assert.DoesNotContain(sourceConnection, failedJournal, StringComparison.Ordinal);
 
             await using (var sourceConnectionToFix = new SqlConnection(sourceConnection))
@@ -206,7 +206,8 @@ public sealed class ShadowProjectionPensionIntegrationTests
             }
 
             var succeeded = await RunCliAsync(cli, fixture, environment, "project", "--json");
-            Assert.Equal(0, succeeded.ExitCode);
+            Assert.True(succeeded.ExitCode == 0,
+                $"Successful rerun failed with exit code {succeeded.ExitCode}. stdout: {succeeded.StandardOutput} stderr: {succeeded.StandardError}");
             Assert.DoesNotContain(sqlBuilder.ConnectionString, succeeded.StandardOutput, StringComparison.Ordinal);
             Assert.DoesNotContain(postgresContainer.GetConnectionString(), succeeded.StandardOutput, StringComparison.Ordinal);
             using var json = JsonDocument.Parse(succeeded.StandardOutput);
