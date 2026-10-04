@@ -37,8 +37,8 @@ public sealed class PensionSchemaIntegrationTests
             command.CommandText = sql;
             await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
             await using var count = connection.CreateCommand();
-            count.CommandText = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME IN ('MEMBER', 'EMPLOYMENT_HISTORY', 'CONTRIBUTION', 'SERVICE_CREDIT', 'BENEFICIARY', 'RETIREMENT_ELECTION', 'BENEFIT_PAYMENT', 'DOCUMENT_INDEX')";
-            Assert.Equal(8, (int)(await count.ExecuteScalarAsync(TestContext.Current.CancellationToken))!);
+            count.CommandText = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME IN ('MEMBER', 'EMPLOYMENT_HISTORY', 'CONTRIBUTION', 'SERVICE_CREDIT', 'BENEFICIARY', 'RETIREMENT_ELECTION', 'BENEFIT_PAYMENT', 'DOCUMENT_INDEX', 'HISTORICAL_EXPORT_INDEX')";
+            Assert.Equal(9, (int)(await count.ExecuteScalarAsync(TestContext.Current.CancellationToken))!);
         }
 
         await using (var connection = new NpgsqlConnection(postgresContainer.GetConnectionString()))

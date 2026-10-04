@@ -402,10 +402,9 @@ public sealed class ShadowProjectionPensionIntegrationTests
                 falseReverseBinding, falseReverseVerification, new EffectiveRecoveryPolicy(), falseReverseTargets,
                 projectRoot, TestContext.Current.CancellationToken);
             Assert.Equal(DryRunQualificationStatus.NotQualified, falseReverseResult.Qualification.Status);
-            Assert.Contains(falseReverseResult.Assessment.Edges, edge => edge.EdgeName == "member-split" &&
-                edge.Issues.Any(issue => issue.Code == RecoveryIssueCodes.InvalidReverse));
-            Assert.Contains(falseReverseResult.Assessment.Edges, edge => edge.EdgeName == "supplemental-map" &&
-                edge.Issues.Any(issue => issue.Code == RecoveryIssueCodes.InvalidReverse));
+            foreach (var declaration in PensionDefectInjector.FalseReverseDeclarations)
+                Assert.Contains(falseReverseResult.Assessment.Edges, edge => edge.EdgeName == declaration.EdgeName &&
+                    edge.Issues.Any(issue => issue.Code == RecoveryIssueCodes.InvalidReverse));
 
             await File.AppendAllTextAsync(assessmentArtifact, "tampered", TestContext.Current.CancellationToken);
             Assert.False(await recoveryArtifactStore.VerifyIntegrityAsync(recovery.Id, TestContext.Current.CancellationToken));
@@ -674,6 +673,10 @@ public sealed class ShadowProjectionPensionIntegrationTests
             using var pensionReportJson = JsonDocument.Parse(pensionReport.StandardOutput);
             Assert.Equal("proofshift-pension-assurance-report-v1", pensionReportJson.RootElement.GetProperty("format").GetString());
             Assert.Equal("QUALIFIED", pensionReportJson.RootElement.GetProperty("qualification").GetString());
+            Assert.Equal(0, pensionReportJson.RootElement.GetProperty("businessDiscrepancyCount").GetInt64());
+            var defectCounts = pensionReportJson.RootElement.GetProperty("defectCounts");
+            Assert.Equal(18, defectCounts.EnumerateObject().Count());
+            Assert.All(defectCounts.EnumerateObject(), category => Assert.Equal(0, category.Value.GetInt64()));
             Assert.Equal(dryRunJson.RootElement.GetProperty("verificationEvidenceFingerprint").GetString(),
                 pensionReportJson.RootElement.GetProperty("verificationEvidenceFingerprint").GetString());
             Assert.Empty(pensionReportJson.RootElement.GetProperty("exceptions").EnumerateArray());
@@ -826,23 +829,40 @@ public sealed class ShadowProjectionPensionIntegrationTests
 
     private static MigrationGraph CreateFalseReverseGraph(MigrationGraph graph)
     {
-        var edges = graph.Edges.Select(edge =>
+        var nodes = graph.Nodes.ToDictionary(node => node.Name, StringComparer.Ordinal);
+        var edges = new List<MigrationEdge>();
+        foreach (var edge in graph.Edges)
         {
-            var fields = edge.Operation.Fields.Select(field => field.Target switch
+            if (edge.Name != "member-split")
             {
-                "status" when edge.Name == "member-split" => new TransformationFieldDefinition(field.Target, field.Source,
-                [new TransformationStep(TransformationStepType.CodeMap, "1",
-                [new KeyValuePair<string, string>("A", "ACTIVE"), new KeyValuePair<string, string>("R", "ACTIVE")])]),
-                "note" when edge.Name == "supplemental-map" => new TransformationFieldDefinition(field.Target, field.Source,
-                [new TransformationStep(TransformationStepType.CodeMap, "1",
-                [new KeyValuePair<string, string>("A", "ACTIVE"), new KeyValuePair<string, string>("unknown", "pass-through")])]),
+                edges.Add(edge);
+                continue;
+            }
+
+            var participant = nodes["participant"];
+            var memberStatus = nodes["member-status"];
+            var originalFields = edge.Operation.Fields.ToArray();
+            var nameDeclaration = PensionDefectInjector.FalseReverseDeclarations[0];
+            edges.Add(new MigrationEdge(edge.Id, nameDeclaration.EdgeName, edge.Sources, [participant.Id],
+                new MigrationOperation(MigrationOperationType.Transform, fields: originalFields), edge.Version,
+                new RecoveryDefinition(RecoveryMode.Reverse)));
+
+            var statusFields = originalFields.Select(field => field.Target switch
+            {
+                "first_name" => new TransformationFieldDefinition(field.Target, field.Source),
+                "status" => new TransformationFieldDefinition(field.Target, field.Source,
+                    [new TransformationStep(TransformationStepType.CodeMap, "1",
+                        [new KeyValuePair<string, string>("A", "ACTIVE"), new KeyValuePair<string, string>("R", "RETIRED"),
+                         new KeyValuePair<string, string>("unknown", "pass-through")])]),
                 _ => field
             }).ToArray();
-            var operation = new MigrationOperation(edge.Operation.Type, edge.Operation.Steps,
-                edge.Operation.IsDestructive, fields, edge.Operation.Parameters);
-            return new MigrationEdge(edge.Id, edge.Name, edge.Sources, edge.Targets, operation, edge.Version,
-                new RecoveryDefinition(RecoveryMode.Reverse));
-        }).ToArray();
+            var statusDeclaration = PensionDefectInjector.FalseReverseDeclarations[1];
+            var statusEdgeId = new MigrationEdgeId(new Guid(SHA256.HashData(
+                Encoding.UTF8.GetBytes($"proofshift-pension-defect-v1:{statusDeclaration.EdgeName}")).AsSpan(0, 16)));
+            edges.Add(new MigrationEdge(statusEdgeId, statusDeclaration.EdgeName, edge.Sources, [memberStatus.Id],
+                new MigrationOperation(MigrationOperationType.Transform, fields: statusFields), edge.Version,
+                new RecoveryDefinition(RecoveryMode.Reverse)));
+        }
         var externalNodeKeys = graph.Nodes.ToDictionary(node => node.Id, node => node.Name);
         var canonical = GraphCanonicalizer.Canonicalize(1, graph.Nodes, edges, externalNodeKeys);
         var graphHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();

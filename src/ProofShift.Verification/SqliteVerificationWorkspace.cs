@@ -11,9 +11,12 @@ namespace ProofShift.Verification;
 
 public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
 {
+    private const int WriteBatchSize = 128;
     private readonly string _directory;
     private readonly string _databasePath;
     private readonly SqliteConnection _connection;
+    private SqliteTransaction? _writeTransaction;
+    private int _pendingWriteOperations;
     private bool _disposed;
 
     public long SourceArtifactCount { get; private set; }
@@ -140,22 +143,23 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
     public async Task AddSourceArtifactAsync(string nodeKey, RecordEnvelope record, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        await using var transaction = _connection.BeginTransaction();
+        var transaction = GetWriteTransaction();
         await using var command = _connection.CreateCommand();
-        command.Transaction = (SqliteTransaction)transaction;
+        command.Transaction = transaction;
         command.CommandText = "INSERT INTO source_artifacts (artifact_id,node_key,system_id,endpoint_id,artifact_type,identity_hash,semantic_type,record_hash,record_json) VALUES ($id,$node,$system,$endpoint,$type,$identity,$semantic,$record,$recordJson) ON CONFLICT(node_key,artifact_id) DO NOTHING";
         AddArtifactParameters(command, record.Artifact, nodeKey);
         command.Parameters.AddWithValue("$semantic", record.SemanticType);
         command.Parameters.AddWithValue("$record", SnapshotFingerprints.RecordFingerprint(record));
         command.Parameters.AddWithValue("$recordJson", VerificationArtifactRecordCodec.Encode(record));
         var changed = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         if (changed > 0) SourceArtifactCount++;
+        await CompleteWriteOperationAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<bool> ContainsSourceArtifactAsync(string nodeKey, ArtifactReference artifact, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
+        await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
         await using var command = _connection.CreateCommand();
         command.CommandText = "SELECT 1 FROM source_artifacts WHERE node_key=$node AND artifact_id=$id AND system_id=$system AND endpoint_id=$endpoint AND artifact_type=$type AND identity_hash=$identity LIMIT 1";
         command.Parameters.AddWithValue("$node", nodeKey);
@@ -171,9 +175,9 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         MigrationEdge edge, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        await using var transaction = _connection.BeginTransaction();
+        var transaction = GetWriteTransaction();
         await using var targetCommand = _connection.CreateCommand();
-        targetCommand.Transaction = (SqliteTransaction)transaction;
+        targetCommand.Transaction = transaction;
         targetCommand.CommandText = "INSERT INTO expected_targets (node_key,target_id,target_system,target_endpoint,target_type,identity_hash,semantic_type,source_id,source_node_key,edge_id,edge_name,operation,record_json) VALUES ($node,$id,$system,$endpoint,$type,$identity,$semantic,$source,$sourceNode,$edge,$edgeName,$operation,$recordJson)";
         AddArtifactParameters(targetCommand, expected.Artifact, nodeKey, "$target");
         targetCommand.Parameters.AddWithValue("$semantic", expected.SemanticType);
@@ -188,21 +192,22 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         foreach (var pair in expected.Values.OrderBy(pair => pair.Key, StringComparer.Ordinal))
         {
             await using var valueCommand = _connection.CreateCommand();
-            valueCommand.Transaction = (SqliteTransaction)transaction;
+            valueCommand.Transaction = transaction;
             valueCommand.CommandText = "INSERT INTO expected_values (expected_seq,field,value_hash) VALUES ($seq,$field,$hash)";
             valueCommand.Parameters.AddWithValue("$seq", expectedSequence);
             valueCommand.Parameters.AddWithValue("$field", pair.Key);
             valueCommand.Parameters.AddWithValue("$hash", FingerprintValue(pair.Value));
             await valueCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         ExpectedTargetCount++;
+        await CompleteWriteOperationAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<bool> ContainsExpectedTargetAsync(string nodeKey, ArtifactReference target, string sourceNodeKey,
         ArtifactReference source, MigrationEdgeId edgeId, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
+        await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
         await using var command = _connection.CreateCommand();
         command.CommandText = "SELECT 1 FROM expected_targets WHERE node_key=$node AND target_id=$target AND target_system=$system AND target_endpoint=$endpoint AND target_type=$type AND identity_hash=$identity AND source_node_key=$sourceNode AND source_id=$source AND edge_id=$edge LIMIT 1";
         command.Parameters.AddWithValue("$node", nodeKey);
@@ -220,9 +225,9 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
     public async Task AddJournalEntryAsync(VerificationJournalEntry entry, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        await using var transaction = _connection.BeginTransaction();
+        var transaction = GetWriteTransaction();
         await using var command = _connection.CreateCommand();
-        command.Transaction = (SqliteTransaction)transaction;
+        command.Transaction = transaction;
         command.CommandText = "INSERT INTO journal_entries (result,target_node,target_id,target_system,target_endpoint,target_type,target_identity_hash,edge_id,edge_name,edge_version,failure_code) VALUES ($result,$node,$id,$system,$endpoint,$type,$identity,$edge,$edgeName,$edgeVersion,$failure)";
         command.Parameters.AddWithValue("$result", entry.Result);
         command.Parameters.AddWithValue("$node", (object?)entry.TargetNode ?? DBNull.Value);
@@ -240,22 +245,22 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         foreach (var source in entry.Sources)
         {
             await using var sourceCommand = _connection.CreateCommand();
-            sourceCommand.Transaction = (SqliteTransaction)transaction;
+            sourceCommand.Transaction = transaction;
             sourceCommand.CommandText = "INSERT OR IGNORE INTO journal_sources (journal_seq,source_id,source_node_key) VALUES ($seq,$source,$sourceNode)";
             sourceCommand.Parameters.AddWithValue("$seq", sequence);
             sourceCommand.Parameters.AddWithValue("$source", source.Artifact.Id.Value);
             sourceCommand.Parameters.AddWithValue("$sourceNode", source.NodeKey);
             await sourceCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        await CompleteWriteOperationAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task AddTargetObservationAsync(string nodeKey, RecordEnvelope record, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        await using var transaction = (SqliteTransaction)await _connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var transaction = GetWriteTransaction();
         await using var targetCommand = _connection.CreateCommand();
-        targetCommand.Transaction = (SqliteTransaction)transaction;
+        targetCommand.Transaction = transaction;
         targetCommand.CommandText = "INSERT INTO actual_targets (node_key,target_id,target_system,target_endpoint,target_type,identity_hash,semantic_type,record_hash,record_json) VALUES ($node,$id,$system,$endpoint,$type,$identity,$semantic,$record,$recordJson)";
         AddArtifactParameters(targetCommand, record.Artifact, nodeKey, "$target");
         targetCommand.Parameters.AddWithValue("$semantic", record.SemanticType);
@@ -266,21 +271,22 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         foreach (var pair in record.Values.OrderBy(pair => pair.Key, StringComparer.Ordinal))
         {
             await using var valueCommand = _connection.CreateCommand();
-            valueCommand.Transaction = (SqliteTransaction)transaction;
+            valueCommand.Transaction = transaction;
             valueCommand.CommandText = "INSERT INTO actual_values (target_seq,field,value_hash) VALUES ($seq,$field,$hash)";
             valueCommand.Parameters.AddWithValue("$seq", sequence);
             valueCommand.Parameters.AddWithValue("$field", pair.Key);
             valueCommand.Parameters.AddWithValue("$hash", FingerprintValue(pair.Value));
             await valueCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         ActualTargetCount++;
+        await CompleteWriteOperationAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async IAsyncEnumerable<VerificationSourceFact> ReadSourceFactsAsync(
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
+        await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
         await using var command = _connection.CreateCommand();
         command.CommandText = """
             SELECT s.artifact_id,s.node_key,s.system_id,s.endpoint_id,s.artifact_type,s.identity_hash,s.semantic_type,
@@ -307,8 +313,41 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         }
     }
 
+    public async IAsyncEnumerable<VerificationSourceFact> ReadGraphDerivedSourceFactsAsync(
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT s.artifact_id,s.node_key,s.system_id,s.endpoint_id,s.artifact_type,s.identity_hash,s.semantic_type,
+                   COUNT(DISTINCT e.seq),0,0,group_concat(DISTINCT e.target_id),group_concat(DISTINCT e.edge_id)
+            FROM source_artifacts s
+            LEFT JOIN expected_targets e ON e.source_id=s.artifact_id AND e.source_node_key=s.node_key
+            GROUP BY s.artifact_id,s.node_key,s.system_id,s.endpoint_id,s.artifact_type,s.identity_hash,s.semantic_type
+            ORDER BY s.node_key,s.artifact_id
+            """;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return new VerificationSourceFact(
+                reader.GetString(1), reader.GetString(6), MakeArtifact(reader.GetString(0), reader.GetString(2),
+                    reader.GetString(3), reader.GetString(4), reader.GetString(5)),
+                reader.GetInt32(7), 0, 0,
+                SplitIds(reader.IsDBNull(10) ? null : reader.GetString(10)).Select(value => new ArtifactId(value)).ToArray(),
+                SplitIds(reader.IsDBNull(11) ? null : reader.GetString(11)).Select(value => new MigrationEdgeId(Guid.Parse(value))).ToArray());
+        }
+    }
+
     public IAsyncEnumerable<VerificationTargetFact> ReadMaterializedJournalTargetsAsync(CancellationToken cancellationToken) =>
         ReadJournalTargetFactsAsync(requiredActualCount: null, cancellationToken);
+
+    public IAsyncEnumerable<VerificationTargetFact> ReadGraphDerivedTargetFactsAsync(CancellationToken cancellationToken) =>
+        ReadGraphDerivedTargetFactsAsync(requiredActualCount: null, cancellationToken);
+
+    public IAsyncEnumerable<VerificationTargetFact> ReadMissingGraphDerivedTargetFactsAsync(CancellationToken cancellationToken) =>
+        ReadGraphDerivedTargetFactsAsync(requiredActualCount: 0, cancellationToken);
 
     public async IAsyncEnumerable<VerificationArtifactRecord> ReadArtifactRecordsAsync(VerificationArtifactRole role,
         string? nodeKey, string? semanticType,
@@ -316,6 +355,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         IReadOnlyCollection<string>? orderByFields = null)
     {
         ThrowIfDisposed();
+        await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
         var (table, idColumn, sequenceColumn) = role switch
         {
             VerificationArtifactRole.Source => ("source_artifacts", "artifact_id", "rowid"),
@@ -366,11 +406,17 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
     public IAsyncEnumerable<VerificationTargetFact> ReadUnexpectedTargetFactsAsync(CancellationToken cancellationToken) =>
         ReadActualTargetFactsAsync("NOT EXISTS (SELECT 1 FROM journal_entries j WHERE j.result='produced' AND j.target_node=a.node_key AND j.target_identity_hash=a.identity_hash)", cancellationToken);
 
+    public IAsyncEnumerable<VerificationTargetFact> ReadUnexpectedGraphTargetFactsAsync(CancellationToken cancellationToken) =>
+        ReadActualTargetFactsAsync("NOT EXISTS (SELECT 1 FROM expected_targets e WHERE e.node_key=a.node_key AND e.identity_hash=a.identity_hash)", cancellationToken);
+
     public IAsyncEnumerable<VerificationTargetFact> ReadDuplicateTargetFactsAsync(CancellationToken cancellationToken) =>
         ReadDuplicateFactsAsync(cancellationToken);
 
     public IAsyncEnumerable<VerificationTargetFact> ReadTargetsWithoutLineageAsync(CancellationToken cancellationToken) =>
         ReadActualTargetFactsAsync("NOT EXISTS (SELECT 1 FROM journal_entries j JOIN journal_sources js ON js.journal_seq=j.seq WHERE j.result='produced' AND j.target_node=a.node_key AND j.target_identity_hash=a.identity_hash)", cancellationToken);
+
+    public IAsyncEnumerable<VerificationTargetFact> ReadTargetsWithoutGraphDerivedLineageAsync(CancellationToken cancellationToken) =>
+        ReadActualTargetFactsAsync("NOT EXISTS (SELECT 1 FROM expected_targets e JOIN source_artifacts s ON s.artifact_id=e.source_id AND s.node_key=e.source_node_key WHERE e.node_key=a.node_key AND e.identity_hash=a.identity_hash)", cancellationToken);
 
     public async IAsyncEnumerable<VerificationAttributeComparison> ReadAttributeComparisonsAsync(
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
@@ -414,6 +460,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
+        await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
         await using var command = _connection.CreateCommand();
         command.CommandText = """
             SELECT j.target_id,j.target_system,j.target_endpoint,j.target_type,j.target_identity_hash,
@@ -458,10 +505,32 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
                 graphHash, graphNodeIds[currentTargetNode!], sources.Values.Select(source => source.NodeId));
     }
 
+    public async IAsyncEnumerable<LineageRecord> ReadGraphDerivedLineageAsync(string graphHash,
+        IReadOnlyDictionary<string, MigrationNodeId> graphNodeIds,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
+        await foreach (var target in ReadGraphDerivedTargetFactsAsync(requiredActualCount: null, cancellationToken)
+            .WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (target.ActualCount == 0 || target.Sources.Count == 0 || target.EdgeIds.Count == 0) continue;
+            yield return new LineageRecord(target.Artifact, target.Sources.Select(source => source.Artifact), target.EdgeIds,
+                graphHash, graphNodeIds[target.NodeKey], target.Sources.Select(source => graphNodeIds[source.NodeKey]),
+                LineageBasis.GraphDerivedExpected);
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;
         _disposed = true;
+        if (_writeTransaction is { } transaction)
+        {
+            _writeTransaction = null;
+            try { await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false); }
+            finally { await transaction.DisposeAsync().ConfigureAwait(false); }
+        }
         await _connection.DisposeAsync().ConfigureAwait(false);
         TryDeleteDirectory(_directory);
     }
@@ -470,6 +539,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
+        await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
         await using var command = _connection.CreateCommand();
         command.CommandText = """
             SELECT j.target_node,j.target_id,j.target_system,j.target_endpoint,j.target_type,j.target_identity_hash,
@@ -538,10 +608,78 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         await foreach (var fact in FlushAsync().ConfigureAwait(false)) yield return fact;
     }
 
+    private async IAsyncEnumerable<VerificationTargetFact> ReadGraphDerivedTargetFactsAsync(int? requiredActualCount,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT e.node_key,e.target_id,e.target_system,e.target_endpoint,e.target_type,e.identity_hash,e.semantic_type,
+                   (SELECT COUNT(*) FROM actual_targets a WHERE a.node_key=e.node_key AND a.identity_hash=e.identity_hash),
+                   s.node_key,s.artifact_id,s.system_id,s.endpoint_id,s.artifact_type,s.identity_hash,e.edge_id
+            FROM expected_targets e
+            JOIN source_artifacts s ON s.artifact_id=e.source_id AND s.node_key=e.source_node_key
+            ORDER BY e.node_key,e.identity_hash,e.target_id,s.node_key,s.artifact_id,e.edge_id
+            """;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        (string NodeKey, string TargetId, string IdentityHash)? currentKey = null;
+        string? nodeKey = null;
+        string? targetId = null;
+        string? targetSystem = null;
+        string? targetEndpoint = null;
+        string? targetType = null;
+        string? identityHash = null;
+        string? semanticType = null;
+        var actualCount = 0;
+        var sources = new Dictionary<string, VerificationGraphArtifact>(StringComparer.Ordinal);
+        var edges = new HashSet<MigrationEdgeId>();
+
+        async IAsyncEnumerable<VerificationTargetFact> FlushAsync()
+        {
+            if (currentKey is null || (requiredActualCount is not null && actualCount != requiredActualCount.Value)) yield break;
+            yield return new VerificationTargetFact(nodeKey!, semanticType!,
+                MakeArtifact(targetId!, targetSystem!, targetEndpoint!, targetType!, identityHash!), actualCount,
+                sources.Values.ToArray(), edges.OrderBy(edge => edge.Value).ToArray());
+            await Task.CompletedTask;
+        }
+
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var rowKey = (reader.GetString(0), reader.GetString(1), reader.GetString(5));
+            if (currentKey is not null && currentKey.Value != rowKey)
+            {
+                await foreach (var fact in FlushAsync().ConfigureAwait(false)) yield return fact;
+                sources.Clear();
+                edges.Clear();
+            }
+            if (currentKey is null || currentKey.Value != rowKey)
+            {
+                currentKey = rowKey;
+                nodeKey = rowKey.Item1;
+                targetId = rowKey.Item2;
+                targetSystem = reader.GetString(2);
+                targetEndpoint = reader.GetString(3);
+                targetType = reader.GetString(4);
+                identityHash = rowKey.Item3;
+                semanticType = reader.GetString(6);
+                actualCount = reader.GetInt32(7);
+            }
+            var sourceNodeKey = reader.GetString(8);
+            var sourceId = reader.GetString(9);
+            sources.TryAdd($"{sourceNodeKey}\0{sourceId}", new VerificationGraphArtifact(sourceNodeKey,
+                MakeArtifact(sourceId, reader.GetString(10), reader.GetString(11), reader.GetString(12), reader.GetString(13))));
+            edges.Add(new MigrationEdgeId(Guid.Parse(reader.GetString(14))));
+        }
+        await foreach (var fact in FlushAsync().ConfigureAwait(false)) yield return fact;
+    }
+
     private async IAsyncEnumerable<VerificationTargetFact> ReadActualTargetFactsAsync(string condition,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
+        await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
         await using var command = _connection.CreateCommand();
         command.CommandText = $"""
             SELECT a.node_key,a.semantic_type,a.target_id,a.target_system,a.target_endpoint,a.target_type,a.identity_hash,COUNT(*)
@@ -564,6 +702,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
+        await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
         await using var command = _connection.CreateCommand();
         command.CommandText = """
             SELECT node_key,semantic_type,MIN(target_id),MIN(target_system),MIN(target_endpoint),MIN(target_type),identity_hash,COUNT(*)
@@ -615,6 +754,28 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         command.CommandText = "SELECT last_insert_rowid()";
         return (long)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("SQLite did not return a row ID."));
+    }
+
+    private SqliteTransaction GetWriteTransaction()
+    {
+        ThrowIfDisposed();
+        return _writeTransaction ??= _connection.BeginTransaction();
+    }
+
+    private async Task CompleteWriteOperationAsync(CancellationToken cancellationToken)
+    {
+        _pendingWriteOperations++;
+        if (_pendingWriteOperations >= WriteBatchSize)
+            await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task FlushWritesAsync(CancellationToken cancellationToken)
+    {
+        if (_writeTransaction is not { } transaction) return;
+        _writeTransaction = null;
+        _pendingWriteOperations = 0;
+        try { await transaction.CommitAsync(cancellationToken).ConfigureAwait(false); }
+        finally { await transaction.DisposeAsync().ConfigureAwait(false); }
     }
 
     private static void TryDeleteDirectory(string directory)

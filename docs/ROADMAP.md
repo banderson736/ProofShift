@@ -162,7 +162,7 @@ PS-0.8 is accepted. PS-0.9 Public Pension Assurance Vertical is the active assig
 
 ### PS-0.9 Public Pension Assurance Vertical
 
-Status: In progress. The vertical extends `ProofShift.Packs.Pension` with versioned semantic rules, typed source/expected/actual record streams in the generic disk-backed Verification workspace, a deterministic clean-data generator and separate v1 defect injector, evidence-backed `report`/`compare` commands, and a CSV fixture generator.
+Status: In progress; remote CI acceptance remains outstanding. The vertical extends `ProofShift.Packs.Pension` with versioned semantic rules, typed source/expected/actual record streams in the generic disk-backed Verification workspace, a deterministic clean-data generator and separate v1 defect injector, evidence-backed `report`/`compare` commands, and a complete local fast-scale heterogeneous physical scenario.
 
 Implemented and locally validated:
 
@@ -172,16 +172,16 @@ Implemented and locally validated:
 - direct external-target rule tests use the registered Pension provider and create an Evidence Graph without running Projection;
 - human/JSON report and run-comparison commands read persisted evidence, recovery artifacts, and verify run/fingerprint/configuration/graph binding;
 - Docker-backed existing PS-0.8 CLI/recovery scenarios still pass after pack expansion.
+- The integrated fast corpus materializes 7,945 relational SQL rows, 275 CSV metadata rows, and 275 filesystem payloads; it checkpoints 8,495 artifacts and projects 8,595 PostgreSQL/filesystem targets.
+- The projected defective run records exactly 149 discrepancies and fails qualification; the corrected run records zero discrepancies and qualifies. Both persist Evidence/Recovery artifacts and human/machine reports; the CLI comparison resolves all 149 defects and attributes changes to source/checkpoint and graph.
+- The integrated fast-scale run completed in 396,017 ms with 519,651,328 bytes peak working set and zero temporary workspace bytes after cleanup. The separate large benchmark remains generator-only.
+- Full local solution tests exited successfully; EndToEnd reported 41 passed, 0 failed, 2 Windows symlink-capability skips. This does not satisfy the no-required-skips remote CI gate.
 
 Acceptance still requires:
 
-- connect generated pension data to a complete multi-source SQL Server/filesystem/CSV to structurally different PostgreSQL/document shadow graph and run defective plus corrected end-to-end dry runs;
-- represent both false-Reverse cases as actual configured graph edges and assert the Recovery engine rejects them after successful Projection/Verification;
-- exact report counts for all 18 categories, including executable recovery findings, plus corrected zero counts, source accounting, target lineage, recovery readiness, and Qualified status;
-- exercise report redaction, evidence-backed exception drill-down, resolved/introduced run comparison, and difference attribution across distinct persisted defective/corrected runs;
-- run full service-level Verification against externally populated target state without depending on Projection output;
-- add an opt-in dataset/throughput/duration/memory benchmark and verify the large generator without running large benchmarks in ordinary CI;
-- update the full pension demo and buyer/operator flow, complete schema fixtures, and run all required remote Docker-backed CI with no skips.
+- run the complete restore/build/test workflow in remote Docker-backed GitHub Actions with no required skips; the candidate is uncommitted and no commit/push was authorized;
+- keep large-scale performance claims limited to generator enumeration until the integrated multi-store pipeline has a representative large-scale benchmark;
+- retain the existing limits on exception drill-down and report streaming; do not overstate external target lineage as observed vendor execution history.
 
 Do not add production migration/rollback, SaaS, UI, AI, FHIR, Oracle, DB2, Kubernetes, or unrelated platform features. Do not begin PS-0.10 until PS-0.9 is accepted.
 

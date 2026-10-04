@@ -32,6 +32,7 @@ public sealed record RecoveryArtifactSummary
     public long RestoreEdges { get; }
     public long CompensateEdges { get; }
     public long IrreversibleEdges { get; }
+    public long FalseReversibleEdges { get; }
     public long AffectedArtifacts { get; }
     public long RecoverableArtifacts { get; }
     public long IrrecoverableArtifacts { get; }
@@ -47,7 +48,7 @@ public sealed record RecoveryArtifactSummary
         string ruleSetFingerprint, DryRunQualificationStatus status, string dryRunFingerprint,
         string policyFingerprint, string assessmentFingerprint, string planFingerprint, string rehearsalFingerprint,
         string verificationEvidenceFingerprint, string recoveryEvidenceFingerprint, long executedEdges,
-        long reverseEdges, long restoreEdges, long compensateEdges, long irreversibleEdges,
+        long reverseEdges, long restoreEdges, long compensateEdges, long irreversibleEdges, long falseReversibleEdges,
         long affectedArtifacts, long recoverableArtifacts, long irrecoverableArtifacts, long unknownArtifacts,
         decimal? recoverablePercentage, long failedEdges, string rehearsalOutcome,
         IReadOnlyList<string> reasons, IEnumerable<RecoverySemanticTypeCoverage> bySemanticType)
@@ -73,6 +74,7 @@ public sealed record RecoveryArtifactSummary
         RestoreEdges = restoreEdges;
         CompensateEdges = compensateEdges;
         IrreversibleEdges = irreversibleEdges;
+        FalseReversibleEdges = falseReversibleEdges;
         AffectedArtifacts = affectedArtifacts;
         RecoverableArtifacts = recoverableArtifacts;
         IrrecoverableArtifacts = irrecoverableArtifacts;
@@ -195,6 +197,7 @@ public sealed class FileSystemRecoveryArtifactStore : IRecoveryArtifactStore
             qualification.PlanFingerprint, qualification.RehearsalFingerprint, qualification.VerificationEvidenceFingerprint,
             qualification.RecoveryEvidenceFingerprint, assessment.ExecutedEdges,
             assessment.ReverseEdges, assessment.RestoreEdges, assessment.CompensateEdges, assessment.IrreversibleEdges,
+            assessment.Edges.LongCount(edge => string.Equals(edge.ConfiguredMode, nameof(RecoveryMode.Reverse), StringComparison.Ordinal) && edge.IsLossy),
             assessment.AffectedArtifacts, assessment.RecoverableArtifacts, assessment.IrrecoverableArtifacts,
             assessment.UnknownArtifacts, assessment.RecoverablePercentage,
             assessment.FailedEdges, rehearsal.Outcome,

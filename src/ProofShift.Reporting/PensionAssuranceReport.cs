@@ -35,21 +35,33 @@ public sealed record PensionAssuranceReport
     public long RecoverableArtifacts { get; }
     public long UnknownRecoveryArtifacts { get; }
     public long IrrecoverableArtifacts { get; }
+    public long FalseReversibleTransformations { get; }
     public decimal? RecoveryCoveragePercentage { get; }
     public IReadOnlyCollection<RecoverySemanticTypeCoverage> RecoveryBySemanticType { get; }
-    public IReadOnlyDictionary<string, int> DefectCounts { get; }
+    public long BusinessDiscrepancyCount { get; }
+    public IReadOnlyDictionary<string, long> DefectCounts { get; }
+    public IReadOnlyDictionary<string, int> EvidenceFailureCounts { get; }
     public IReadOnlyList<PensionAssuranceSection> Sections { get; }
     public IReadOnlyList<PensionAssuranceIssue> Exceptions { get; }
+    public IReadOnlyList<string> RecoveryReasons { get; }
 
     internal PensionAssuranceReport(string project, DryRunId dryRunId, RecoveryArtifactSummary recovery,
         string verificationOutcome, int verificationFailureCount, int warningCount, long unaccountedSources,
-        long unexplainedTargets, IReadOnlyDictionary<string, int> defectCounts,
-        IReadOnlyList<PensionAssuranceSection> sections, IReadOnlyList<PensionAssuranceIssue> exceptions)
+        long unexplainedTargets, IReadOnlyDictionary<string, long> defectCounts,
+        IReadOnlyDictionary<string, int> evidenceFailureCounts, IReadOnlyList<PensionAssuranceSection> sections,
+        IReadOnlyList<PensionAssuranceIssue> exceptions)
     {
         Format = FormatVersion;
         Project = project;
         DryRunId = dryRunId.Value.ToString("D", CultureInfo.InvariantCulture);
-        Qualification = recovery.Status.ToString().ToUpperInvariant();
+        Qualification = recovery.Status switch
+        {
+            DryRunQualificationStatus.Qualified => "QUALIFIED",
+            DryRunQualificationStatus.NotQualified => "NOT QUALIFIED",
+            DryRunQualificationStatus.Error => "ERROR",
+            DryRunQualificationStatus.Cancelled => "CANCELLED",
+            _ => throw new ArgumentOutOfRangeException(nameof(recovery))
+        };
         VerificationOutcome = verificationOutcome;
         RehearsalOutcome = recovery.RehearsalOutcome;
         VerificationRunId = recovery.VerificationRunId.Value.ToString("D", CultureInfo.InvariantCulture);
@@ -72,11 +84,15 @@ public sealed record PensionAssuranceReport
         RecoverableArtifacts = recovery.RecoverableArtifacts;
         UnknownRecoveryArtifacts = recovery.UnknownArtifacts;
         IrrecoverableArtifacts = recovery.IrrecoverableArtifacts;
+        FalseReversibleTransformations = recovery.FalseReversibleEdges;
         RecoveryCoveragePercentage = recovery.RecoverablePercentage;
         RecoveryBySemanticType = recovery.BySemanticType;
         DefectCounts = defectCounts;
+        EvidenceFailureCounts = evidenceFailureCounts;
+        BusinessDiscrepancyCount = defectCounts.Values.Sum();
         Sections = sections;
         Exceptions = exceptions;
+        RecoveryReasons = recovery.Reasons;
     }
 }
 
@@ -101,12 +117,12 @@ public sealed record PensionAssuranceRunComparison
     public bool QualificationChanged { get; }
     public bool SourceFingerprintChanged { get; }
     public bool ProjectionFingerprintChanged { get; }
-    public IReadOnlyDictionary<string, int> DefectsResolved { get; }
-    public IReadOnlyDictionary<string, int> DefectsIntroduced { get; }
+    public IReadOnlyDictionary<string, long> DefectsResolved { get; }
+    public IReadOnlyDictionary<string, long> DefectsIntroduced { get; }
     public IReadOnlyList<string> DifferenceAttribution { get; }
 
     internal PensionAssuranceRunComparison(PensionAssuranceReport before, PensionAssuranceReport after,
-        IReadOnlyDictionary<string, int> resolved, IReadOnlyDictionary<string, int> introduced,
+        IReadOnlyDictionary<string, long> resolved, IReadOnlyDictionary<string, long> introduced,
         IReadOnlyList<string> attribution)
     {
         BeforeDryRunId = before.DryRunId;
@@ -131,6 +147,28 @@ public sealed record PensionAssuranceRunComparison
 
 public static class PensionAssuranceReportBuilder
 {
+    private static readonly (string Name, string[] Codes)[] BusinessDefectCategories =
+    [
+        ("missingMembers", ["MissingMember"]),
+        ("duplicateMembers", ["DuplicateMember"]),
+        ("wrongMemberStatuses", ["WrongMemberStatus"]),
+        ("missingEmploymentPeriods", ["MissingEmploymentPeriod"]),
+        ("incorrectEmploymentDates", ["IncorrectEmploymentDate", "EmploymentStateTransitionMismatch"]),
+        ("incorrectServiceCreditTotals", ["IncorrectServiceCreditTotal"]),
+        ("missingContributions", ["MissingContribution"]),
+        ("duplicateContributions", ["DuplicateContribution"]),
+        ("incorrectContributionAmounts", ["IncorrectContributionAmount", "ContributionSemanticMismatch"]),
+        ("benefitPaymentDiscrepancies", ["MissingBenefitPayment", "DuplicateBenefitPayment", "BenefitPaymentAmountMismatch", "BenefitPaymentSemanticMismatch"]),
+        ("brokenBeneficiaryRelationships", ["BrokenBeneficiaryRelationship"]),
+        ("wrongMemberBeneficiaries", ["WrongMemberBeneficiary"]),
+        ("incorrectRetirementElectionMappings", ["RetirementElectionMappingMismatch"]),
+        ("incorrectCodeTransformations", ["CodeTransformationMismatch"]),
+        ("missingDocuments", ["MissingDocument"]),
+        ("wrongMemberDocuments", ["WrongMemberDocument"]),
+        ("missingHistoricalExports", ["MissingHistoricalExport"]),
+        ("falseReversibleTransformations", [])
+    ];
+
     private static readonly (string Name, string[] Codes)[] SectionCodes =
     [
         ("Member Conversion", ["MissingMember", "DuplicateMember", "WrongMemberStatus"]),
@@ -163,8 +201,10 @@ public static class PensionAssuranceReportBuilder
         var records = storedEvidence.GetProperty("records").EnumerateArray().ToArray();
         var failures = records.Where(record => Is(record, "result", "Fail")).ToArray();
         var warnings = records.Count(record => Is(record, "result", "Warning"));
-        var counts = failures.GroupBy(record => Text(record, "code"), StringComparer.Ordinal)
+        var evidenceCounts = failures.GroupBy(record => Text(record, "code"), StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        var businessCounts = CountBusinessDiscrepancies(evidenceCounts.ToDictionary(pair => pair.Key,
+            pair => (long)pair.Value, StringComparer.Ordinal), recovery.FalseReversibleEdges);
         var sections = SectionCodes.Select(section => new PensionAssuranceSection(section.Name,
             records.Count(record => section.Codes.Contains(Text(record, "code"), StringComparer.Ordinal) && Is(record, "result", "Pass")),
             records.Count(record => section.Codes.Contains(Text(record, "code"), StringComparer.Ordinal) && Is(record, "result", "Fail")),
@@ -177,7 +217,27 @@ public static class PensionAssuranceReportBuilder
         var unexplained = failures.LongCount(record => Text(record, "code") == "UnexpectedTarget");
         var outcome = failures.Length == 0 ? warnings == 0 ? "PASSED" : "PASSED WITH WARNINGS" : "FAILED";
         return new PensionAssuranceReport(projectName, dryRunId, recovery, outcome, failures.Length, warnings,
-            unaccounted, unexplained, counts, sections, exceptions);
+            unaccounted, unexplained, businessCounts, evidenceCounts, sections, exceptions);
+    }
+
+    public static IReadOnlyDictionary<string, long> CountBusinessDiscrepancies(
+        IEnumerable<JsonElement> failedEvidenceRecords, long falseReversibleEdges)
+    {
+        ArgumentNullException.ThrowIfNull(failedEvidenceRecords);
+        ArgumentOutOfRangeException.ThrowIfNegative(falseReversibleEdges);
+        var evidenceCounts = failedEvidenceRecords.GroupBy(record => Text(record, "code"), StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.LongCount(), StringComparer.Ordinal);
+        return CountBusinessDiscrepancies(evidenceCounts, falseReversibleEdges);
+    }
+
+    private static SortedDictionary<string, long> CountBusinessDiscrepancies(
+        IReadOnlyDictionary<string, long> evidenceCounts, long falseReversibleEdges)
+    {
+        var businessCounts = new SortedDictionary<string, long>(StringComparer.Ordinal);
+        foreach (var category in BusinessDefectCategories)
+            businessCounts[category.Name] = category.Codes.Sum(code => evidenceCounts.GetValueOrDefault(code));
+        businessCounts["falseReversibleTransformations"] = falseReversibleEdges;
+        return businessCounts;
     }
 
     public static PensionAssuranceRunComparison Compare(PensionAssuranceReport before, PensionAssuranceReport after)
@@ -185,8 +245,8 @@ public static class PensionAssuranceReportBuilder
         ArgumentNullException.ThrowIfNull(before);
         ArgumentNullException.ThrowIfNull(after);
         var keys = before.DefectCounts.Keys.Union(after.DefectCounts.Keys, StringComparer.Ordinal).Order(StringComparer.Ordinal);
-        var resolved = new SortedDictionary<string, int>(StringComparer.Ordinal);
-        var introduced = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        var resolved = new SortedDictionary<string, long>(StringComparer.Ordinal);
+        var introduced = new SortedDictionary<string, long>(StringComparer.Ordinal);
         foreach (var key in keys)
         {
             var previous = before.DefectCounts.GetValueOrDefault(key);

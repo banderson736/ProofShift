@@ -614,6 +614,7 @@ public sealed record ArtifactDispositionLedger
 
 public sealed record LineageRecord
 {
+    public LineageBasis Basis { get; }
     public ArtifactReference Target { get; }
     public MigrationNodeId? TargetNodeId { get; }
     public DomainList<ArtifactReference> Sources { get; }
@@ -627,8 +628,10 @@ public sealed record LineageRecord
         IEnumerable<MigrationEdgeId> path,
         string planHash,
         MigrationNodeId? targetNodeId = null,
-        IEnumerable<MigrationNodeId>? sourceNodeIds = null)
+        IEnumerable<MigrationNodeId>? sourceNodeIds = null,
+        LineageBasis basis = LineageBasis.ExecutionObserved)
     {
+        Basis = basis;
         Target = DomainGuard.NotNull(target, nameof(target));
         TargetNodeId = targetNodeId is { } nodeId ? DomainGuard.Required(nodeId, nameof(targetNodeId)) : null;
         Sources = new DomainList<ArtifactReference>(sources);
@@ -649,6 +652,12 @@ public sealed record LineageRecord
         if (SourceNodeIds.Count > 0 && SourceNodeIds.Count != Sources.Count)
             throw new ArgumentException("Source graph-node scope must align with source artifact references.", nameof(sourceNodeIds));
     }
+}
+
+public enum LineageBasis
+{
+    ExecutionObserved,
+    GraphDerivedExpected
 }
 
 public enum LineageCoverageIssueCode

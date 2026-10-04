@@ -40,11 +40,7 @@ public abstract class VerificationRuleBase : IVerificationRule
     private static List<EvidenceReference> IncludeBindings(VerificationExecutionContext context,
         IEnumerable<EvidenceReference>? inputs)
     {
-        var references = new List<EvidenceReference>
-        {
-            new(checkpointId: context.Projection.CheckpointId),
-            new(projectionRunId: context.Projection.ProjectionRunId)
-        };
+        var references = context.BindingReferences.ToList();
         if (inputs is not null) references.AddRange(inputs);
         return references;
     }
@@ -70,7 +66,10 @@ public sealed class SourceDispositionRule(VerificationRuleDefinition definition)
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         long count = 0;
-        await foreach (var source in context.Workspace.ReadSourceFactsAsync(cancellationToken).ConfigureAwait(false))
+        var sourceFacts = context.ExternalObservation is null
+            ? context.Workspace.ReadSourceFactsAsync(cancellationToken)
+            : context.Workspace.ReadGraphDerivedSourceFactsAsync(cancellationToken);
+        await foreach (var source in sourceFacts.ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
             count++;
@@ -85,7 +84,9 @@ public sealed class SourceDispositionRule(VerificationRuleDefinition definition)
                 code,
                 $"{Id.Value}:{source.NodeKey}:{source.Artifact.Id.Value}",
                 passed
-                    ? $"Source artifact has one final {disposition} disposition through {source.ProducedEntries} materialized journal entry/entries."
+                    ? context.ExternalObservation is null
+                        ? $"Source artifact has one final {disposition} disposition through {source.ProducedEntries} materialized journal entry/entries."
+                        : $"Source artifact has one graph-derived expected {disposition} disposition to {source.ProducedEntries} target artifact(s); external execution was not observed."
                     : mixed
                         ? "Source artifact has conflicting or failed projection journal dispositions."
                         : "Source artifact has no successful materialized or explicit excluded disposition.",
@@ -108,19 +109,24 @@ public sealed class TargetLineageRule(VerificationRuleDefinition definition) : V
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var failures = 0;
-        await foreach (var target in context.Workspace.ReadTargetsWithoutLineageAsync(cancellationToken).ConfigureAwait(false))
+        var missingLineage = context.ExternalObservation is null
+            ? context.Workspace.ReadTargetsWithoutLineageAsync(cancellationToken)
+            : context.Workspace.ReadTargetsWithoutGraphDerivedLineageAsync(cancellationToken);
+        await foreach (var target in missingLineage.ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
             failures++;
             yield return Finding(context, EvidenceType.Accounting, EvidenceResult.Fail, "MissingLineage",
-                $"{Id.Value}:{target.NodeKey}:{target.Artifact.Id.Value}", "Materialized target artifact has no source artifact and migration-edge provenance.",
+                $"{Id.Value}:{target.NodeKey}:{target.Artifact.Id.Value}", "Observed target artifact has no graph-derived source mapping and migration-edge lineage.",
                         [ArtifactInput(context, target.NodeKey, target.Artifact)]);
         }
 
         if (failures == 0)
             yield return Finding(context, EvidenceType.Accounting, EvidenceResult.Pass, "TargetLineage",
-                $"{Id.Value}:complete", "Every observed materialized target has at least one source lineage path.",
-                [new EvidenceReference(projectionRunId: context.Projection.ProjectionRunId)]);
+                $"{Id.Value}:complete", context.ExternalObservation is null
+                    ? "Every observed materialized target has at least one execution-observed source lineage path."
+                    : "Every observed target has at least one graph-derived expected lineage path; external execution lineage was not observed.",
+                context.BindingReferences);
     }
 }
 
@@ -133,14 +139,19 @@ public sealed class TargetPresenceRule(VerificationRuleDefinition definition) : 
     {
         var missing = 0;
         var observed = 0;
-        await foreach (var expected in context.Workspace.ReadMaterializedJournalTargetsAsync(cancellationToken).ConfigureAwait(false))
+        var expectedTargets = context.ExternalObservation is null
+            ? context.Workspace.ReadMaterializedJournalTargetsAsync(cancellationToken)
+            : context.Workspace.ReadGraphDerivedTargetFactsAsync(cancellationToken);
+        await foreach (var expected in expectedTargets.ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
             observed++;
             if (expected.ActualCount > 0) continue;
             missing++;
             yield return Finding(context, EvidenceType.Comparison, EvidenceResult.Fail, "MissingTarget",
-                $"{Id.Value}:{expected.NodeKey}:{expected.Artifact.Id.Value}", "Projection journal marks this target materialized, but physical shadow read-back did not find it.",
+                $"{Id.Value}:{expected.NodeKey}:{expected.Artifact.Id.Value}", context.ExternalObservation is null
+                    ? "Projection journal marks this target materialized, but physical shadow read-back did not find it."
+                    : "The source checkpoint and migration graph imply this target, but external target observation did not find it.",
                         [ArtifactInput(context, expected.NodeKey, expected.Artifact), .. expected.Sources.Select(source => ArtifactInput(context, source.NodeKey, source.Artifact)),
                          .. expected.EdgeIds.Select(edge => new EvidenceReference(migrationEdgeId: edge))],
                 new EvidenceValue(new StringValue("present")), new EvidenceValue(new StringValue("missing")));
@@ -163,12 +174,17 @@ public sealed class UnexpectedTargetRule(VerificationRuleDefinition definition) 
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var unexpected = 0;
-        await foreach (var target in context.Workspace.ReadUnexpectedTargetFactsAsync(cancellationToken).ConfigureAwait(false))
+        var unexpectedTargets = context.ExternalObservation is null
+            ? context.Workspace.ReadUnexpectedTargetFactsAsync(cancellationToken)
+            : context.Workspace.ReadUnexpectedGraphTargetFactsAsync(cancellationToken);
+        await foreach (var target in unexpectedTargets.ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
             unexpected++;
             yield return Finding(context, EvidenceType.Accounting, EvidenceResult.Fail, "UnexpectedTarget",
-                $"{Id.Value}:{target.NodeKey}:{target.Artifact.Id.Value}", "Physical shadow state contains a target artifact absent from successful materialized journal ancestry.",
+                $"{Id.Value}:{target.NodeKey}:{target.Artifact.Id.Value}", context.ExternalObservation is null
+                    ? "Physical shadow state contains a target artifact absent from successful materialized journal ancestry."
+                    : "Observed target state contains an artifact absent from the checkpoint/graph-derived expected target set.",
                 [ArtifactInput(context, target.NodeKey, target.Artifact)],
                 new EvidenceValue(new StringValue("journal-backed")), new EvidenceValue(new StringValue("unexplained")));
         }
@@ -295,9 +311,5 @@ internal static class GenericRuleFactories
 
 internal static class FindingReferences
 {
-    public static EvidenceReference[] Bindings(VerificationExecutionContext context) =>
-    [
-        new(checkpointId: context.Projection.CheckpointId),
-        new(projectionRunId: context.Projection.ProjectionRunId)
-    ];
+    public static EvidenceReference[] Bindings(VerificationExecutionContext context) => context.BindingReferences.ToArray();
 }

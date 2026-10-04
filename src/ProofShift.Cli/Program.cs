@@ -32,6 +32,24 @@ internal static class Program
         if (args.Length >= 2 && string.Equals(args[0], "demo", StringComparison.OrdinalIgnoreCase) &&
             string.Equals(args[1], "generate", StringComparison.OrdinalIgnoreCase))
             return await PensionDemoGenerator.GenerateAsync(args.Skip(2).ToArray()).ConfigureAwait(false);
+        if (args.Length >= 2 && string.Equals(args[0], "demo", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(args[1], "benchmark", StringComparison.OrdinalIgnoreCase))
+            return await PensionDemoGenerator.BenchmarkAsync(args.Skip(2).ToArray()).ConfigureAwait(false);
+
+        if (args.Length >= 2 && string.Equals(args[0], "report", StringComparison.OrdinalIgnoreCase) &&
+            Guid.TryParse(args[1], out _) && args.Skip(2).All(argument => string.Equals(argument, "--json", StringComparison.OrdinalIgnoreCase)))
+        {
+            return await ReadPersistedPensionReportAsync(Directory.GetCurrentDirectory(), args[1],
+                args.Skip(2).Any(argument => string.Equals(argument, "--json", StringComparison.OrdinalIgnoreCase))).ConfigureAwait(false);
+        }
+
+        if (args.Length >= 3 && string.Equals(args[0], "compare", StringComparison.OrdinalIgnoreCase) &&
+            Guid.TryParse(args[1], out _) && Guid.TryParse(args[2], out _) &&
+            args.Skip(3).All(argument => string.Equals(argument, "--json", StringComparison.OrdinalIgnoreCase)))
+        {
+            return await ComparePersistedPensionRunsAsync(Directory.GetCurrentDirectory(), args[1], args[2],
+                args.Skip(3).Any(argument => string.Equals(argument, "--json", StringComparison.OrdinalIgnoreCase))).ConfigureAwait(false);
+        }
 
         if (args.Length < 2)
         {
@@ -765,6 +783,24 @@ internal static class Program
         }
     }
 
+    private static async Task<int> ReadPersistedPensionReportAsync(string projectDirectory, string dryRunId, bool jsonOutput)
+    {
+        try
+        {
+            if (!Guid.TryParse(dryRunId, out var parsed)) return 2;
+            var report = await LoadPersistedPensionReportAsync(projectDirectory, new DryRunId(parsed),
+                Path.GetFileName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(projectDirectory)))).ConfigureAwait(false);
+            if (jsonOutput) Console.WriteLine(JsonSerializer.Serialize(report, JsonOptions));
+            else WritePensionReport(report);
+            return 0;
+        }
+        catch
+        {
+            Console.Error.WriteLine("Persisted pension assurance artifacts could not be read or failed integrity verification.");
+            return 1;
+        }
+    }
+
     private static async Task<int> ComparePensionRunsAsync(string path, string beforeDryRunId,
         string afterDryRunId, bool jsonOutput)
     {
@@ -799,6 +835,42 @@ internal static class Program
         }
     }
 
+    private static async Task<int> ComparePersistedPensionRunsAsync(string projectDirectory, string beforeDryRunId,
+        string afterDryRunId, bool jsonOutput)
+    {
+        try
+        {
+            if (!Guid.TryParse(beforeDryRunId, out var beforeId) || !Guid.TryParse(afterDryRunId, out var afterId)) return 2;
+            var projectName = Path.GetFileName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(projectDirectory)));
+            var before = await LoadPersistedPensionReportAsync(projectDirectory, new DryRunId(beforeId), projectName).ConfigureAwait(false);
+            var after = await LoadPersistedPensionReportAsync(projectDirectory, new DryRunId(afterId), projectName).ConfigureAwait(false);
+            var comparison = PensionAssuranceReportBuilder.Compare(before, after);
+            if (jsonOutput) Console.WriteLine(JsonSerializer.Serialize(comparison, JsonOptions));
+            else
+            {
+                Console.WriteLine("ProofShift Pension Dry-Run Comparison");
+                Console.WriteLine($"Before: {comparison.BeforeQualification} ({comparison.BeforeDryRunId})");
+                Console.WriteLine($"After: {comparison.AfterQualification} ({comparison.AfterDryRunId})");
+                Console.WriteLine($"Source Fingerprint Changed: {comparison.SourceFingerprintChanged}");
+                Console.WriteLine($"Graph Hash Changed: {comparison.GraphHashChanged}");
+                Console.WriteLine($"Projection Fingerprint Changed: {comparison.ProjectionFingerprintChanged}");
+                Console.WriteLine($"Rule Set Fingerprint Changed: {comparison.RuleSetFingerprintChanged}");
+                Console.WriteLine($"Recovery Policy Fingerprint Changed: {comparison.RecoveryPolicyFingerprintChanged}");
+                Console.WriteLine($"Evidence / Recovery / Dry-Run Fingerprints Changed: {comparison.EvidenceFingerprintChanged} / {comparison.RecoveryEvidenceFingerprintChanged} / {comparison.DryRunFingerprintChanged}");
+                foreach (var (code, count) in comparison.DefectsResolved) Console.WriteLine($"Resolved {code}: {count}");
+                foreach (var (code, count) in comparison.DefectsIntroduced) Console.WriteLine($"Introduced {code}: {count}");
+                Console.WriteLine($"Qualification Changed: {comparison.QualificationChanged}");
+                foreach (var attribution in comparison.DifferenceAttribution) Console.WriteLine($"Difference Attribution: {attribution}");
+            }
+            return 0;
+        }
+        catch
+        {
+            Console.Error.WriteLine("Persisted pension runs could not be compared or failed integrity verification.");
+            return 1;
+        }
+    }
+
     private static async Task<PensionAssuranceReport> LoadPensionReportAsync(string configurationPath, string dryRunId)
     {
         if (!Guid.TryParse(dryRunId, out var parsedDryRunId))
@@ -814,13 +886,27 @@ internal static class Program
         var recovery = await recoveryStore.ReadSummaryAsync(new DryRunId(parsedDryRunId), CancellationToken.None).ConfigureAwait(false);
         if (loaded.Configuration.ConfigurationHash != recovery.ConfigurationHash || compilation.Graph.GraphHash != recovery.GraphHash)
             throw new InvalidDataException("Current configuration or graph does not match the selected dry run.");
+        return await BuildPersistedPensionReportAsync(projectDirectory, new DryRunId(parsedDryRunId),
+            loaded.Configuration.Root.Project?.Name ?? Path.GetFileName(projectDirectory), recovery).ConfigureAwait(false);
+    }
+
+    private static async Task<PensionAssuranceReport> LoadPersistedPensionReportAsync(string projectDirectory,
+        DryRunId dryRunId, string projectName)
+    {
+        var recoveryStore = new FileSystemRecoveryArtifactStore(Path.Combine(projectDirectory, ".proofshift", "recovery"));
+        var recovery = await recoveryStore.ReadSummaryAsync(dryRunId, CancellationToken.None).ConfigureAwait(false);
+        return await BuildPersistedPensionReportAsync(projectDirectory, dryRunId, projectName, recovery).ConfigureAwait(false);
+    }
+
+    private static async Task<PensionAssuranceReport> BuildPersistedPensionReportAsync(string projectDirectory,
+        DryRunId dryRunId, string projectName, RecoveryArtifactSummary recovery)
+    {
         var evidenceStore = new FileSystemEvidenceStore(Path.Combine(projectDirectory, ".proofshift", "verifications"));
         if (!await evidenceStore.VerifyIntegrityAsync(recovery.VerificationRunId, CancellationToken.None).ConfigureAwait(false))
             throw new InvalidDataException("Verification evidence integrity verification failed.");
         await using var stream = await evidenceStore.OpenReadAsync(recovery.VerificationRunId, CancellationToken.None).ConfigureAwait(false);
         using var document = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
-        return PensionAssuranceReportBuilder.Build(loaded.Configuration.Root.Project?.Name ?? Path.GetFileName(projectDirectory), new DryRunId(parsedDryRunId),
-            document.RootElement, recovery);
+        return PensionAssuranceReportBuilder.Build(projectName, dryRunId, document.RootElement, recovery);
     }
 
     private static void WritePensionReport(PensionAssuranceReport report)
@@ -830,6 +916,7 @@ internal static class Program
         Console.WriteLine("EXECUTIVE SUMMARY");
         Console.WriteLine($"Qualification: {report.Qualification}");
         Console.WriteLine($"Verification: {report.VerificationOutcome}; {report.VerificationFailureCount} failed evidence records; {report.WarningCount} warnings");
+        Console.WriteLine($"Business Discrepancies: {report.BusinessDiscrepancyCount}");
         Console.WriteLine();
         Console.WriteLine("MIGRATION SCOPE");
         Console.WriteLine($"Configuration: {report.ConfigurationHash}");
@@ -837,6 +924,10 @@ internal static class Program
         Console.WriteLine($"Source Checkpoint: {report.SourceFingerprint}");
         Console.WriteLine($"Projection: {report.ProjectionFingerprint}");
         Console.WriteLine($"Rule Set: {report.RuleSetFingerprint}");
+        Console.WriteLine();
+        Console.WriteLine("BUSINESS DISCREPANCIES");
+        foreach (var (category, count) in report.DefectCounts)
+            Console.WriteLine($"{category}: {count.ToString(CultureInfo.InvariantCulture)}");
         Console.WriteLine();
         foreach (var section in report.Sections)
             Console.WriteLine($"{section.Name}: {section.FailedFindings} exceptions, {section.PassedFindings} passed findings, {section.WarningFindings} warnings");
@@ -850,6 +941,7 @@ internal static class Program
         Console.WriteLine($"Failed Recovery Edges: {report.FailedRecoveryEdges}");
         foreach (var coverage in report.RecoveryBySemanticType)
             Console.WriteLine($"{coverage.SemanticType}: {coverage.RecoverableArtifacts}/{coverage.AffectedArtifacts} recoverable");
+        foreach (var reason in report.RecoveryReasons) Console.WriteLine($"Recovery Finding: {reason}");
         Console.WriteLine();
         Console.WriteLine("EXCEPTIONS");
         foreach (var exception in report.Exceptions)
@@ -1262,7 +1354,7 @@ internal static class Program
         issue.Message);
 
     private static void WriteUsage() =>
-        Console.Error.WriteLine("Usage: proofshift validate <config> [--json] | proofshift plan <config> [--json] | proofshift inspect <config> [--json] | proofshift snapshot <config> [--json] | proofshift project <config> [--checkpoint <id-or-path>] [--json] | proofshift verify <config> --checkpoint <id> --projection <run-id> [--json] | proofshift evidence <config> --run <verification-run-id> [--json] | proofshift recovery <config> --run <dry-run-id> [--json] | proofshift report <config> --run <dry-run-id> [--json] | proofshift compare <config> --before <dry-run-id> --after <dry-run-id> [--json] | proofshift demo generate <output-directory> [--scale fast|large] [--seed <integer>] | proofshift dry-run <config> [--json]");
+        Console.Error.WriteLine("Usage: proofshift validate <config> [--json] | proofshift plan <config> [--json] | proofshift inspect <config> [--json] | proofshift snapshot <config> [--json] | proofshift project <config> [--checkpoint <id-or-path>] [--json] | proofshift verify <config> --checkpoint <id> --projection <run-id> [--json] | proofshift evidence <config> --run <verification-run-id> [--json] | proofshift recovery <config> --run <dry-run-id> [--json] | proofshift report <config> --run <dry-run-id> [--json] | proofshift report <dry-run-id> [--json, reads current-directory stores] | proofshift compare <config> --before <dry-run-id> --after <dry-run-id> [--json] | proofshift compare <before-dry-run-id> <after-dry-run-id> [--json, reads current-directory stores] | proofshift demo generate <output-directory> [--scale fast|large] [--seed <integer>] | proofshift demo benchmark [--scale fast|large] [--seed <integer>] | proofshift dry-run <config> [--json]");
 
     private sealed record SnapshotOutput(
         string CheckpointId,

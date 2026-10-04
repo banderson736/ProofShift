@@ -416,7 +416,7 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
                 }
 
                 var rawValue = reader.GetValue(ordinal);
-                values.Add(new KeyValuePair<string, ValueNode>(name, ToValueNode(rawValue)));
+                values.Add(new KeyValuePair<string, ValueNode>(name, ToValueNode(rawValue, reader.GetDataTypeName(ordinal))));
                 if (identitySet.Contains(name))
                 {
                     identityValues[name] = rawValue;
@@ -621,7 +621,12 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
         return context.Configuration.GetRequired(key).UseValue(value => value);
     }
 
-    private static ValueNode ToValueNode(object value) => value switch
+    private static ValueNode ToValueNode(object value, string providerType)
+    {
+        if (value is DateTime calendarDateTime && string.Equals(providerType, "date", StringComparison.OrdinalIgnoreCase))
+            return new DateValue(DateOnly.FromDateTime(calendarDateTime));
+
+        return value switch
     {
         string text => new StringValue(text),
         char character => new StringValue(character.ToString()),
@@ -641,6 +646,7 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
         TimeSpan time => new StringValue(time.ToString("c", CultureInfo.InvariantCulture)),
         _ => throw new ConnectorReadException(ConnectorIssueCodes.UnsupportedPhysicalType, "Source column uses an unsupported physical type.")
     };
+    }
 
     private static async Task<(long Length, string Hash)> HashBinaryFieldAsync(DbDataReader reader, int ordinal, CancellationToken cancellationToken)
     {

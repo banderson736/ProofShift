@@ -211,6 +211,7 @@ public sealed class RelationalConnectorIntegrationTests
                     Period int NOT NULL,
                     Amount decimal(28, 8) NOT NULL,
                     Active bit NOT NULL,
+                    EffectiveDate date NOT NULL,
                     EffectiveAt datetimeoffset(7) NOT NULL,
                     LocalAt datetime2(7) NOT NULL,
                     OptionalValue nvarchar(50) NULL,
@@ -223,11 +224,12 @@ public sealed class RelationalConnectorIntegrationTests
                     FROM sys.all_objects
                 )
                 INSERT INTO dbo.MemberRows
-                    (MemberId, Period, Amount, Active, EffectiveAt, LocalAt, OptionalValue, MemberGuid, Payload)
+                    (MemberId, Period, Amount, Active, EffectiveDate, EffectiveAt, LocalAt, OptionalValue, MemberGuid, Payload)
                 SELECT generated,
                        202501,
                        {ExactAmount},
                        CASE WHEN generated % 2 = 0 THEN 1 ELSE 0 END,
+                       '2025-01-02',
                        '2025-01-02T03:04:05+02:00',
                        '2025-01-02T03:04:05',
                        CASE WHEN generated = 1 THEN NULL ELSE N'synthetic' END,
@@ -249,10 +251,11 @@ public sealed class RelationalConnectorIntegrationTests
         Assert.Equal(SourceInspectionStatus.Valid, inspection.Status);
         Assert.Equal(CompositeSqlServerKey, inspection.PrimaryKeyFields);
         Assert.Equal(CompositeSqlServerKey, inspection.IdentityFields);
-        Assert.Equal(9, inspection.Columns.Count);
+        Assert.Equal(10, inspection.Columns.Count);
         Assert.Equal(100, rows.Count);
         Assert.Equal(ExactAmount, Assert.IsType<DecimalValue>(rows[0].Values["Amount"]).Value.ToString(CultureInfo.InvariantCulture));
         Assert.Equal(new BooleanValue(false), rows[0].Values["Active"]);
+        Assert.Equal(new DateValue(new DateOnly(2025, 1, 2)), rows[0].Values["EffectiveDate"]);
         Assert.Equal(new NullValue(), rows[0].Values["OptionalValue"]);
         Assert.Equal("123e4567-e89b-12d3-a456-426614174000", Assert.IsType<StringValue>(rows[0].Values["MemberGuid"]).Value);
         var sqlBinary = Assert.IsType<BinaryReferenceValue>(rows[0].Values["Payload"]);

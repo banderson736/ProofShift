@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using ProofShift.Domain;
@@ -84,6 +85,82 @@ internal static class PensionDemoGenerator
         }
     }
 
+    public static Task<int> BenchmarkAsync(IReadOnlyList<string> args)
+    {
+        var scaleName = "large";
+        var seed = PensionSyntheticDatasetGenerator.DefaultSeed;
+        for (var index = 0; index < args.Count; index++)
+        {
+            if (args[index] == "--scale" && index + 1 < args.Count)
+                scaleName = args[++index];
+            else if (args[index] == "--seed" && index + 1 < args.Count &&
+                long.TryParse(args[index + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedSeed))
+            {
+                seed = parsedSeed;
+                index++;
+            }
+            else
+            {
+                Console.Error.WriteLine("Demo benchmark accepts only --scale fast|large and --seed <integer>.");
+                return Task.FromResult(2);
+            }
+        }
+
+        var scale = scaleName.ToLowerInvariant() switch
+        {
+            "fast" => PensionDatasetScale.Fast,
+            "large" => PensionDatasetScale.Large,
+            _ => null
+        };
+        if (scale is null)
+        {
+            Console.Error.WriteLine("Pension demo benchmark scale must be 'fast' or 'large'.");
+            return Task.FromResult(2);
+        }
+
+        var stopwatch = Stopwatch.StartNew();
+        long records = 0;
+        long estimatedBytes = 0;
+        foreach (var record in PensionSyntheticDatasetGenerator.Generate(seed, scale))
+        {
+            records++;
+            estimatedBytes = checked(estimatedBytes + EstimateRecordBytes(record));
+        }
+        stopwatch.Stop();
+        using var process = Process.GetCurrentProcess();
+        var seconds = stopwatch.Elapsed.TotalSeconds;
+        var result = new PensionGeneratorBenchmark("proofshift-pension-generator-v1", scaleName.ToLowerInvariant(), seed,
+            records, estimatedBytes, stopwatch.Elapsed.TotalMilliseconds,
+            seconds <= 0 ? 0 : records / seconds,
+            seconds <= 0 ? 0 : estimatedBytes / seconds,
+            process.PeakWorkingSet64);
+        Console.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+        return Task.FromResult(0);
+    }
+
+    private static long EstimateRecordBytes(PensionSyntheticRecord record)
+    {
+        long bytes = Encoding.UTF8.GetByteCount(record.SemanticType) + Encoding.UTF8.GetByteCount(record.Identity);
+        foreach (var pair in record.Values)
+            bytes = checked(bytes + Encoding.UTF8.GetByteCount(pair.Key) + Encoding.UTF8.GetByteCount(ValueText(pair.Value)));
+        return bytes;
+    }
+
+    private static string ValueText(ValueNode value) => value switch
+    {
+        NullValue => string.Empty,
+        StringValue item => item.Value,
+        IntegerValue item => item.Value.ToString(CultureInfo.InvariantCulture),
+        DecimalValue item => item.Value.ToString("G29", CultureInfo.InvariantCulture),
+        BooleanValue item => item.Value ? "true" : "false",
+        DateValue item => item.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+        InstantValue item => item.Value.ToString("O", CultureInfo.InvariantCulture),
+        OffsetDateTimeValue item => item.Value.ToString("O", CultureInfo.InvariantCulture),
+        LocalDateTimeValue item => item.Value.ToString("O", CultureInfo.InvariantCulture),
+        BinaryReferenceValue item => item.Sha256,
+        _ => throw new InvalidDataException("Pension generator benchmark contains an unsupported normalized value.")
+    };
+
     private static async Task<IReadOnlyDictionary<string, long>> ExportAsync(string directory,
         IEnumerable<PensionSyntheticRecord> records)
     {
@@ -143,7 +220,7 @@ internal static class PensionDemoGenerator
             }
             var activeFields = _initializedFields;
             await _writer.WriteLineAsync(string.Join(',', activeFields.Select(field => Escape(
-                record.Values.TryGetValue(field, out var value) ? ValueText(value) : string.Empty)))).ConfigureAwait(false);
+                record.Values.TryGetValue(field, out var value) ? PensionDemoGenerator.ValueText(value) : string.Empty)))).ConfigureAwait(false);
         }
 
         private string[] _initializedFields = [];
@@ -159,20 +236,6 @@ internal static class PensionDemoGenerator
             ? value
             : '"' + value.Replace("\"", "\"\"", StringComparison.Ordinal) + '"';
 
-        private static string ValueText(ValueNode value) => value switch
-        {
-            NullValue => string.Empty,
-            StringValue item => item.Value,
-            IntegerValue item => item.Value.ToString(CultureInfo.InvariantCulture),
-            DecimalValue item => item.Value.ToString("G29", CultureInfo.InvariantCulture),
-            BooleanValue item => item.Value ? "true" : "false",
-            DateValue item => item.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            InstantValue item => item.Value.ToString("O", CultureInfo.InvariantCulture),
-            OffsetDateTimeValue item => item.Value.ToString("O", CultureInfo.InvariantCulture),
-            LocalDateTimeValue item => item.Value.ToString("O", CultureInfo.InvariantCulture),
-            BinaryReferenceValue item => item.Sha256,
-            _ => throw new InvalidDataException("Pension demo CSV contains an unsupported normalized value.")
-        };
     }
 
     private sealed record PensionDemoManifest(string GeneratorVersion, string TargetModelVersion,
@@ -180,4 +243,7 @@ internal static class PensionDemoGenerator
         IReadOnlyDictionary<string, long> SourceRecords, IReadOnlyDictionary<string, long> CorrectedTargetRecords,
         IReadOnlyDictionary<string, long> DefectiveTargetRecords, PensionDefectCounts Defects,
         IReadOnlyList<PensionFalseReverseDeclaration> FalseReverseDeclarations);
+    private sealed record PensionGeneratorBenchmark(string GeneratorVersion, string Scale, long Seed,
+        long RecordsGenerated, long EstimatedUtf8Bytes, double DurationMilliseconds,
+        double RecordsPerSecond, double EstimatedBytesPerSecond, long PeakWorkingSetBytes);
 }

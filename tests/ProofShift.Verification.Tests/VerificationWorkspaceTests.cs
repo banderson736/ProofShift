@@ -48,6 +48,21 @@ public sealed class VerificationWorkspaceTests
                 Assert.Equal(2, duplicateFact.ActualCount);
                 Assert.Empty(await CollectAsync(workspace.ReadMissingTargetFactsAsync(TestContext.Current.CancellationToken)));
                 Assert.Empty(await CollectAsync(workspace.ReadUnexpectedTargetFactsAsync(TestContext.Current.CancellationToken)));
+                var graphDerivedSource = Assert.Single(await CollectAsync(workspace.ReadGraphDerivedSourceFactsAsync(TestContext.Current.CancellationToken)),
+                    fact => fact.NodeKey == "source-members");
+                Assert.Equal(1, graphDerivedSource.ProducedEntries);
+                var graphDerivedTarget = Assert.Single(await CollectAsync(workspace.ReadGraphDerivedTargetFactsAsync(TestContext.Current.CancellationToken)));
+                Assert.Equal(2, graphDerivedTarget.ActualCount);
+                Assert.Empty(await CollectAsync(workspace.ReadMissingGraphDerivedTargetFactsAsync(TestContext.Current.CancellationToken)));
+                var graphNodes = new Dictionary<string, MigrationNodeId>
+                {
+                    ["source-members"] = new MigrationNodeId(Guid.NewGuid()),
+                    ["participant"] = new MigrationNodeId(Guid.NewGuid())
+                };
+                var expectedLineage = Assert.Single(await CollectAsync(workspace.ReadGraphDerivedLineageAsync(
+                    new string('a', 64), graphNodes, TestContext.Current.CancellationToken)));
+                Assert.Equal(LineageBasis.GraphDerivedExpected, expectedLineage.Basis);
+                Assert.Empty(await CollectAsync(workspace.ReadTargetsWithoutGraphDerivedLineageAsync(TestContext.Current.CancellationToken)));
             }
 
             Assert.False(Directory.Exists(scratchDirectory));

@@ -105,6 +105,69 @@ public sealed record ProjectionVerificationBinding
         string.IsNullOrWhiteSpace(value) ? throw new ArgumentException("Value must not be empty.", parameterName) : value.Trim();
 }
 
+public sealed record ExternalTargetEndpoint
+{
+    public string NodeKey { get; }
+    public SystemId SystemId { get; }
+    public StorageEndpointId EndpointId { get; }
+    public ConnectorId ConnectorId { get; }
+    public string ConnectorVersion { get; }
+
+    public ExternalTargetEndpoint(string nodeKey, SystemId systemId, StorageEndpointId endpointId,
+        ConnectorId connectorId, string connectorVersion)
+    {
+        NodeKey = Required(nodeKey, nameof(nodeKey));
+        SystemId = systemId;
+        EndpointId = endpointId;
+        ConnectorId = connectorId;
+        ConnectorVersion = Required(connectorVersion, nameof(connectorVersion));
+    }
+
+    private static string Required(string value, string parameterName) =>
+        string.IsNullOrWhiteSpace(value) ? throw new ArgumentException("Value must not be empty.", parameterName) : value.Trim();
+}
+
+public sealed record ExternalMigrationObservation
+{
+    public RunId ObservationRunId { get; }
+    public string ObservationId { get; }
+    public string ConfigurationHash { get; }
+    public string GraphHash { get; }
+    public CheckpointId CheckpointId { get; }
+    public string CheckpointManifestHash { get; }
+    public string SourceFingerprint { get; }
+    public DomainList<ExternalTargetEndpoint> Targets { get; }
+    public DateTimeOffset ObservedAt { get; }
+
+    public ExternalMigrationObservation(RunId observationRunId, string observationId, string configurationHash,
+        string graphHash, CheckpointId checkpointId, string checkpointManifestHash, string sourceFingerprint,
+        IEnumerable<ExternalTargetEndpoint> targets, DateTimeOffset observedAt)
+    {
+        ObservationRunId = observationRunId;
+        ObservationId = Required(observationId, nameof(observationId));
+        ConfigurationHash = Hash(configurationHash, nameof(configurationHash));
+        GraphHash = Hash(graphHash, nameof(graphHash));
+        CheckpointId = checkpointId;
+        CheckpointManifestHash = Hash(checkpointManifestHash, nameof(checkpointManifestHash));
+        SourceFingerprint = Hash(sourceFingerprint, nameof(sourceFingerprint));
+        Targets = new DomainList<ExternalTargetEndpoint>(targets.OrderBy(item => item.NodeKey, StringComparer.Ordinal));
+        if (Targets.Select(item => item.NodeKey).Distinct(StringComparer.Ordinal).Count() != Targets.Count)
+            throw new ArgumentException("External observation target nodes must be unique.", nameof(targets));
+        ObservedAt = observedAt;
+    }
+
+    private static string Hash(string value, string parameterName)
+    {
+        var hash = Required(value, parameterName).ToLowerInvariant();
+        if (hash.Length != 64 || hash.Any(character => !Uri.IsHexDigit(character)))
+            throw new ArgumentException("Value must be a SHA-256 digest.", parameterName);
+        return hash;
+    }
+
+    private static string Required(string value, string parameterName) =>
+        string.IsNullOrWhiteSpace(value) ? throw new ArgumentException("Value must not be empty.", parameterName) : value.Trim();
+}
+
 public sealed record VerificationRuleDefinition
 {
     public RuleId Id { get; }
@@ -259,17 +322,24 @@ public interface IVerificationWorkspace : IAsyncDisposable
     Task AddTargetObservationAsync(string nodeKey, RecordEnvelope record, CancellationToken cancellationToken);
 
     IAsyncEnumerable<VerificationSourceFact> ReadSourceFactsAsync(CancellationToken cancellationToken);
+    IAsyncEnumerable<VerificationSourceFact> ReadGraphDerivedSourceFactsAsync(CancellationToken cancellationToken);
     IAsyncEnumerable<VerificationArtifactRecord> ReadArtifactRecordsAsync(VerificationArtifactRole role,
         string? nodeKey, string? semanticType, CancellationToken cancellationToken,
         IReadOnlyCollection<string>? orderByFields = null);
     IAsyncEnumerable<VerificationTargetFact> ReadMaterializedJournalTargetsAsync(CancellationToken cancellationToken);
+    IAsyncEnumerable<VerificationTargetFact> ReadGraphDerivedTargetFactsAsync(CancellationToken cancellationToken);
+    IAsyncEnumerable<VerificationTargetFact> ReadMissingGraphDerivedTargetFactsAsync(CancellationToken cancellationToken);
     IAsyncEnumerable<VerificationTargetFact> ReadActualTargetsAsync(CancellationToken cancellationToken);
     IAsyncEnumerable<VerificationTargetFact> ReadMissingTargetFactsAsync(CancellationToken cancellationToken);
     IAsyncEnumerable<VerificationTargetFact> ReadUnexpectedTargetFactsAsync(CancellationToken cancellationToken);
+    IAsyncEnumerable<VerificationTargetFact> ReadUnexpectedGraphTargetFactsAsync(CancellationToken cancellationToken);
     IAsyncEnumerable<VerificationTargetFact> ReadDuplicateTargetFactsAsync(CancellationToken cancellationToken);
     IAsyncEnumerable<VerificationTargetFact> ReadTargetsWithoutLineageAsync(CancellationToken cancellationToken);
+    IAsyncEnumerable<VerificationTargetFact> ReadTargetsWithoutGraphDerivedLineageAsync(CancellationToken cancellationToken);
     IAsyncEnumerable<VerificationAttributeComparison> ReadAttributeComparisonsAsync(CancellationToken cancellationToken);
     IAsyncEnumerable<LineageRecord> ReadLineageAsync(string graphHash,
+        IReadOnlyDictionary<string, MigrationNodeId> graphNodeIds, CancellationToken cancellationToken);
+    IAsyncEnumerable<LineageRecord> ReadGraphDerivedLineageAsync(string graphHash,
         IReadOnlyDictionary<string, MigrationNodeId> graphNodeIds, CancellationToken cancellationToken);
 }
 
@@ -277,7 +347,9 @@ public sealed record VerificationExecutionContext
 {
     public LoadedProjectConfiguration Configuration { get; }
     public MigrationGraph Graph { get; }
-    public ProjectionVerificationBinding Projection { get; }
+    public ProjectionVerificationBinding? Projection { get; }
+    public ExternalMigrationObservation? ExternalObservation { get; }
+    public DomainList<EvidenceReference> BindingReferences { get; }
     public RunId VerificationRunId { get; }
     public IVerificationWorkspace Workspace { get; }
 
@@ -287,6 +359,22 @@ public sealed record VerificationExecutionContext
         Configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         Graph = graph ?? throw new ArgumentNullException(nameof(graph));
         Projection = projection ?? throw new ArgumentNullException(nameof(projection));
+        BindingReferences = new DomainList<EvidenceReference>([
+            new(checkpointId: projection.CheckpointId), new(projectionRunId: projection.ProjectionRunId)
+        ]);
+        VerificationRunId = verificationRunId;
+        Workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
+    }
+
+    public VerificationExecutionContext(LoadedProjectConfiguration configuration, MigrationGraph graph,
+        ExternalMigrationObservation externalObservation, RunId verificationRunId, IVerificationWorkspace workspace)
+    {
+        Configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+        Graph = graph ?? throw new ArgumentNullException(nameof(graph));
+        ExternalObservation = externalObservation ?? throw new ArgumentNullException(nameof(externalObservation));
+        BindingReferences = new DomainList<EvidenceReference>([
+            new(checkpointId: externalObservation.CheckpointId)
+        ]);
         VerificationRunId = verificationRunId;
         Workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
     }
@@ -420,3 +508,13 @@ public sealed record VerificationRuntimeFingerprint
 public sealed record VerificationResult(VerificationRunRecord Run, Evidence.EvidenceGraph EvidenceGraph,
     IReadOnlyList<ArtifactDispositionRecord> Dispositions, IReadOnlyList<LineageRecord> Lineage,
     IReadOnlyList<VerificationFinding> Findings, IReadOnlyList<VerificationJournalEntry> JournalEntries);
+
+public sealed record ExternalVerificationRunRecord(RunId Id, string ObservationId, RunId ObservationRunId,
+    string ConfigurationHash, string GraphHash, CheckpointId CheckpointId, string CheckpointManifestHash,
+    string SourceFingerprint, string TargetFingerprint, long SourceArtifactCount, long TargetArtifactCount,
+    string RuleSetFingerprint, string RuntimeFingerprint, string EvidenceFingerprint, VerificationOutcome Outcome,
+    int RulesExecuted, int FailedRules, int WarningRules, DateTimeOffset StartedAt, DateTimeOffset CompletedAt);
+
+public sealed record ExternalVerificationResult(ExternalVerificationRunRecord Run, Evidence.EvidenceGraph EvidenceGraph,
+    IReadOnlyList<ArtifactDispositionRecord> Dispositions, IReadOnlyList<LineageRecord> ExpectedLineage,
+    IReadOnlyList<VerificationFinding> Findings);

@@ -158,7 +158,7 @@ public sealed class PensionSemanticRuleTests
     private static string NodeName(PensionRecordKind kind, bool source) =>
         $"{(source ? "source" : "target")}-{kind.ToString().ToLowerInvariant()}";
 
-    private static VerificationRuleDefinition[] RuleDefinitions() =>
+    internal static VerificationRuleDefinition[] RuleDefinitions() =>
     [
         Rule("member-presence", "pension-member-presence", ("targetNode", "target-member"), ("businessKey", "member_id")),
         Rule("member-uniqueness", "pension-member-uniqueness", ("targetNode", "target-member"), ("businessKey", "member_id")),
@@ -238,15 +238,22 @@ public sealed class PensionSemanticRuleTests
         }
 
         public IAsyncEnumerable<VerificationSourceFact> ReadSourceFactsAsync(CancellationToken cancellationToken) => Empty<VerificationSourceFact>(cancellationToken);
+        public IAsyncEnumerable<VerificationSourceFact> ReadGraphDerivedSourceFactsAsync(CancellationToken cancellationToken) => Empty<VerificationSourceFact>(cancellationToken);
         public IAsyncEnumerable<VerificationTargetFact> ReadMaterializedJournalTargetsAsync(CancellationToken cancellationToken) => Empty<VerificationTargetFact>(cancellationToken);
+        public IAsyncEnumerable<VerificationTargetFact> ReadGraphDerivedTargetFactsAsync(CancellationToken cancellationToken) => Empty<VerificationTargetFact>(cancellationToken);
+        public IAsyncEnumerable<VerificationTargetFact> ReadMissingGraphDerivedTargetFactsAsync(CancellationToken cancellationToken) => Empty<VerificationTargetFact>(cancellationToken);
         public IAsyncEnumerable<VerificationTargetFact> ReadActualTargetsAsync(CancellationToken cancellationToken) => Empty<VerificationTargetFact>(cancellationToken);
         public IAsyncEnumerable<VerificationTargetFact> ReadMissingTargetFactsAsync(CancellationToken cancellationToken) => Empty<VerificationTargetFact>(cancellationToken);
         public IAsyncEnumerable<VerificationTargetFact> ReadUnexpectedTargetFactsAsync(CancellationToken cancellationToken) => Empty<VerificationTargetFact>(cancellationToken);
+        public IAsyncEnumerable<VerificationTargetFact> ReadUnexpectedGraphTargetFactsAsync(CancellationToken cancellationToken) => Empty<VerificationTargetFact>(cancellationToken);
         public IAsyncEnumerable<VerificationTargetFact> ReadDuplicateTargetFactsAsync(CancellationToken cancellationToken) => Empty<VerificationTargetFact>(cancellationToken);
         public IAsyncEnumerable<VerificationTargetFact> ReadTargetsWithoutLineageAsync(CancellationToken cancellationToken) => Empty<VerificationTargetFact>(cancellationToken);
+        public IAsyncEnumerable<VerificationTargetFact> ReadTargetsWithoutGraphDerivedLineageAsync(CancellationToken cancellationToken) => Empty<VerificationTargetFact>(cancellationToken);
         public IAsyncEnumerable<VerificationAttributeComparison> ReadAttributeComparisonsAsync(CancellationToken cancellationToken) => Empty<VerificationAttributeComparison>(cancellationToken);
         public IAsyncEnumerable<LineageRecord> ReadLineageAsync(string graphHash, IReadOnlyDictionary<string, MigrationNodeId> graphNodeIds,
             CancellationToken cancellationToken) => Empty<LineageRecord>(cancellationToken);
+        public IAsyncEnumerable<LineageRecord> ReadGraphDerivedLineageAsync(string graphHash,
+            IReadOnlyDictionary<string, MigrationNodeId> graphNodeIds, CancellationToken cancellationToken) => Empty<LineageRecord>(cancellationToken);
 
         public Task AddSourceArtifactAsync(string nodeKey, RecordEnvelope record, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<bool> ContainsSourceArtifactAsync(string nodeKey, ArtifactReference artifact, CancellationToken cancellationToken) => throw new NotSupportedException();

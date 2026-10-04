@@ -10,7 +10,7 @@ All generated data is synthetic. It names no real pension system or agency.
 
 The clean generator emits legacy-style records for members, employment intervals, contributions, service credits, beneficiaries, retirement elections, benefit payments, documents, and historical exports. `PensionTargetDataModel` emits a different target vocabulary: participant/display-name/status, employment state events, contribution/payment transaction names, relationship rows, target option codes, and object-key document references. Employment history is represented as intervals in the source and JOINED/TERMINATED/REINSTATED events in the target.
 
-The current generator exports one CSV per concept. It does not yet create or populate the planned SQL Server legacy database, PostgreSQL target schema, or document payload directories. The existing `ps05` SQL Server/PostgreSQL Docker scenario remains the runnable physical projection/recovery demonstration and is not the full PS-0.9 pension vertical.
+The generator exports one CSV per concept. The integrated fast-corpus scenario loads relational records into physical SQL Server, document/export metadata into physical CSV, and 275 deterministic binary payloads into a filesystem source. It checkpoints 8,495 source artifacts and projects 8,595 targets to PostgreSQL and filesystem shadow storage. The scenario also injects the exact defective target state into those physical stores, persists Verification Evidence and Recovery artifacts, and compares the resulting report against a distinct corrected run. The existing `ps05` fixture remains a separate projection/recovery example.
 
 ## Generate the v1 data
 
@@ -28,13 +28,25 @@ The output has three data sets:
 
 `demo-manifest.json` records generator, target-model, and defect-set versions, seed, scale, source fingerprint, record counts, and exact defect manifest. Generation refuses to overwrite a non-empty output directory. Use `--scale large` to stream the specified five-million-contribution target fixture; this is opt-in and has not been benchmarked.
 
-The repeatable operator entry point is:
+The repeatable operator entry point runs generation and semantic checks, followed by the full Docker-backed physical scenario, persisted reports, and comparison:
 
 ```powershell
 ./scripts/pension-demo.ps1
 ```
 
-Add `-WithDocker` to include the existing physical projection/recovery CLI scenarios after Docker and the PS-0.5 connection environment are configured.
+Use a new, empty output directory for each run; integrated artifacts are retained under `integrated-assurance/.proofshift`:
+
+```powershell
+./scripts/pension-demo.ps1 -OutputDirectory .proofshift/pension-demo-run
+```
+
+The opt-in generator benchmark is:
+
+```powershell
+dotnet run --project src/ProofShift.Cli -- demo benchmark --scale large --seed 20261003
+```
+
+Measured here: 8,220,000 generated records, 16,592 ms, estimated 984,245,832 UTF-8 bytes, 495,415 records/sec, 59,320,016 estimated bytes/sec, and 55,627,776 bytes process peak working set. This enumerates clean source records only. The integrated fast-scale physical run completed in 396,017 ms (6m36s), with a 519,651,328-byte peak process working set, 8,495 checkpoint artifacts, 8,595 projected targets, 336 persisted evidence records, and zero temporary workspace bytes after cleanup. Stage timings and run fingerprints are retained in `integrated-assurance/demo-summary.json`. This is an integrated fast-corpus benchmark, not a large-scale throughput result; only generator enumeration has been measured at the 8.22-million-record scale.
 
 ## Exercise the semantic rules
 
@@ -68,9 +80,21 @@ The clean semantic test accepts interval/event employment equivalence, decimal c
 | Missing historical exports | 3 | 3 | 0 |
 | False-Reverse declarations | 2 | 2 analyzer rejections | 0 |
 
-The clean false-positive count is asserted as zero by evaluating all configured rules against the corrected target before defects are injected. The false-Reverse cases are separately passed through the generic Recovery transformation-loss analyzer; they are not yet run as Recovery edges in the complete scenario.
+The clean false-positive count is asserted as zero by evaluating all configured rules against the corrected target before defects are injected. The two v1 false-Reverse declarations execute as target-producing edges in the generated fast-corpus graph: Projection and Verification pass, then generic Recovery rejects the lossy name-normalization and many-to-one status edges.
 
-The rule-level external-target fixture is not yet a complete `VerificationService` run: full-service verification currently binds to a completed checkpoint, projection manifest, journal, and connector read-back. Composing a PS-0.9 external target adapter/fixture is still an acceptance item.
+The machine report emits all 18 stable business categories separately from `evidenceFailureCounts`. Supporting contribution/payment aggregate findings remain available as evidence records but do not increase transaction-level business discrepancy totals. `falseReversibleTransformations` is sourced from the persisted generic Recovery assessment's lossy `Reverse` edge count.
+
+The Docker-backed external-target service test loads independent corrected and defect-injected PostgreSQL observations, invokes `VerificationService.VerifyExternalTargetAsync`, and persists/verifies both Evidence Graphs. It asserts no Projection directory is created and neither external target is mutated. This independent-observation path does not run Recovery qualification or claim observed vendor execution lineage.
+
+The integrated scenario checkpoints 8,495 physical source artifacts across SQL Server, CSV, and filesystem endpoints and projects 8,595 PostgreSQL/filesystem targets. The corrected run qualifies with 100% recovery coverage. Both executable false-Reverse edges pass Projection/Verification and are rejected by Recovery. The projected defective run produces exactly 149 discrepancies; the corrected run produces zero. Both runs persist integrity-checked Evidence and Recovery artifacts, human and JSON reports, and a CLI comparison that resolves all 149 defects with source/checkpoint and graph attribution.
+
+Run the physical fast-corpus test with Docker available:
+
+```powershell
+dotnet test --project tests/ProofShift.EndToEnd.Tests/ProofShift.EndToEnd.Tests.csproj --filter-class ProofShift.EndToEnd.Tests.PensionExternalCorpusVerificationTests --no-restore
+```
+
+The integrated fast-scale run completed in 396,017 ms with a 519,651,328-byte peak process working set, 336 persisted evidence records, and zero temporary workspace bytes after cleanup. `demo-summary.json` records stage timings and run fingerprints. The 8.22-million-record benchmark remains generator-only; no large-scale integrated run has been measured.
 
 ## Existing physical shadow demonstration
 
@@ -98,9 +122,9 @@ That physical fixture is the accepted 10-member projection/recovery slice. Its r
 5. Inspect one timeline exception and its evidence references in the test/debugger.
 6. Inspect a financial exception; evidence uses group fingerprints, counts, totals, difference, and tolerance.
 7. Inspect beneficiary/document exceptions and their evidence-backed ownership/hash fields.
-8. Run the physical PS-0.5 Docker dry run when its environment is configured.
-9. Open the `report` command output and point to source accounting, lineage, recovery status, and fingerprints.
-10. Compare the same physical dry run with itself to show a zero-delta control, then compare separately persisted runs during remediation work.
+8. Run `./scripts/pension-demo.ps1 -OutputDirectory <new-empty-directory>` to execute physical SQL Server/CSV/filesystem capture, PostgreSQL/filesystem projection, Recovery, and persisted report generation.
+9. Inspect the defective and corrected report JSON, then run-ID `compare` output to review the 149 resolved categories and fingerprint attribution.
+10. Confirm that the two false-Reverse edges pass Projection/Verification but fail Recovery qualification, and distinguish technical qualification from business approval or production authorization.
 11. Close by distinguishing shadow technical qualification from business approval or production authorization.
 
 ## What the evidence demonstrates
@@ -113,4 +137,4 @@ That physical fixture is the accepted 10-member projection/recovery slice. Its r
 
 ## Remaining demo acceptance
 
-PS-0.9 is still in progress. The generated data has not yet been integrated into a full SQL Server-to-PostgreSQL-and-document dry run. The v1 false-Reverse count is manifest data but the two false inverses are not yet present as executable graph edges. The report/comparison commands, high-volume scale benchmark, physical external-target VerificationService scenario, archive/excluded document disposition, and complete source/target schemas still need end-to-end acceptance coverage.
+PS-0.9 is still in progress. The complete fast heterogeneous graph, persisted defective/corrected reports and comparison, and operator script are implemented and locally exercised. Remaining acceptance is remote Docker-backed CI with no required skips; a large-scale integrated pipeline benchmark has not been run. The 8.22-million-record result covers generator enumeration only.

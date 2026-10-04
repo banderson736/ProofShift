@@ -300,6 +300,285 @@ public sealed class VerificationService
         return new VerificationResult(run, evidenceGraph, dispositions, lineage, findings, terminalJournalEntries);
     }
 
+    public async Task<ExternalVerificationResult> VerifyExternalTargetAsync(
+        LoadedProjectConfiguration configuration,
+        MigrationGraph graph,
+        ExternalMigrationObservation observation,
+        VerificationRuleSet ruleSet,
+        string temporaryDirectory,
+        string proofShiftVersion,
+        IEnumerable<VerificationTargetRuntime> targets,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(graph);
+        ArgumentNullException.ThrowIfNull(observation);
+        ArgumentNullException.ThrowIfNull(ruleSet);
+        ArgumentNullException.ThrowIfNull(targets);
+        var startedAt = DateTimeOffset.UtcNow;
+        var targetRuntimes = targets.OrderBy(target => target.NodeKey, StringComparer.Ordinal).ToArray();
+        ValidateExternalObservation(configuration, graph, observation);
+        ValidateExternalTargetRuntimes(configuration, graph, observation, targetRuntimes);
+
+        await using var checkpoint = await _snapshotStore.OpenCompleteAsync(
+            observation.CheckpointId.Value.ToString("N", CultureInfo.InvariantCulture), cancellationToken).ConfigureAwait(false);
+        ValidateExternalCheckpoint(checkpoint.Manifest, configuration, graph, observation);
+
+        var runId = new RunId(Guid.NewGuid());
+        await using var workspace = await SqliteVerificationWorkspace.CreateAsync(temporaryDirectory, cancellationToken).ConfigureAwait(false);
+        var sourceNodes = graph.Nodes.Where(node => node.Type == MigrationNodeType.Source)
+            .OrderBy(node => node.Name, StringComparer.Ordinal).ToArray();
+        foreach (var sourceNode in sourceNodes)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await foreach (var source in checkpoint.ReadAsync(sourceNode.Name, sourceNode.Selector, cancellationToken)
+                .WithCancellation(cancellationToken).ConfigureAwait(false))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                ValidateRecordForNode(source, sourceNode);
+                await workspace.AddSourceArtifactAsync(sourceNode.Name, source, cancellationToken).ConfigureAwait(false);
+                foreach (var edge in graph.Edges.Where(edge => edge.Sources.Contains(sourceNode.Id))
+                    .OrderBy(edge => edge.Id.Value))
+                {
+                    if (edge.Operation.Type is MigrationOperationType.Exclude or MigrationOperationType.Relationship) continue;
+                    if (edge.Sources.Count != 1)
+                        throw ContextMismatch("External verification cannot replay a multi-source edge under current graph semantics.");
+                    foreach (var targetNode in edge.Targets.Select(id => graph.Nodes.Single(node => node.Id == id))
+                        .OrderBy(node => node.Name, StringComparer.Ordinal))
+                    {
+                        var expected = GraphTransformationRuntime.Transform(source, edge, targetNode);
+                        await workspace.AddExpectedTargetAsync(targetNode.Name, expected, sourceNode.Name, source, edge,
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                }
+            }
+        }
+        ValidateExternalSourceCoverage(checkpoint.Manifest, workspace.SourceArtifactCount);
+
+        using var targetFingerprint = MaterializedTargetFingerprint.CreateBuilder(graph.GraphHash);
+        foreach (var targetRuntime in targetRuntimes)
+        {
+            var node = graph.Nodes.Single(item => item.Name == targetRuntime.NodeKey);
+            await foreach (var actual in targetRuntime.Connector.ReadAsync(new ReadRequest(targetRuntime.Context, node.Selector), cancellationToken)
+                .WithCancellation(cancellationToken).ConfigureAwait(false))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                ValidateRecordForNode(actual, node);
+                if (GraphTargetIdentity.Create(actual, node.Selector) != actual.Artifact.Identity ||
+                    StableArtifactIdentity.CreateArtifactId(actual.Artifact.SystemId.Value, actual.Artifact.EndpointId.Value,
+                        actual.Artifact.ArtifactType, actual.Artifact.Identity) != actual.Artifact.Id.Value)
+                    throw ContextMismatch("Externally populated target connector returned an identity inconsistent with its configured selector.");
+                targetFingerprint.Add(node.Name, actual);
+                await workspace.AddTargetObservationAsync(node.Name, actual, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        var observedTarget = targetFingerprint.Finish();
+        var context = new VerificationExecutionContext(configuration, graph, observation, runId, workspace);
+        var findings = new List<VerificationFinding>
+        {
+            new(EvidenceType.Observation, EvidenceResult.Pass, EvidenceSeverity.Info,
+                "ExternalTargetObserved",
+                "ProofShift independently observed externally populated target state; this observation does not claim ProofShift executed the migration.",
+                "external-target-observation",
+                context.BindingReferences,
+                new EvidenceValue(new StringValue("externally-populated-target")),
+                new EvidenceValue(new StringValue($"sha256:{observedTarget.Fingerprint}:{observedTarget.RecordCount.ToString(CultureInfo.InvariantCulture)}")),
+                ruleId: new RuleId("proofshift.verification.external-target-observation"), ruleVersion: "1")
+        };
+        foreach (var rule in ruleSet.Rules)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                await foreach (var finding in rule.EvaluateAsync(context, cancellationToken)
+                    .WithCancellation(cancellationToken).ConfigureAwait(false))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    findings.Add(finding);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception exception)
+            {
+                throw new VerificationRuleException(VerificationIssueCodes.RuleExecutionFailure,
+                    $"Verification rule '{rule.Id.Value}' failed during external target evaluation: {exception.GetType().Name}.");
+            }
+        }
+
+        var nodeIds = graph.Nodes.ToDictionary(node => node.Name, node => node.Id, StringComparer.Ordinal);
+        var lineage = new List<LineageRecord>();
+        await foreach (var item in workspace.ReadGraphDerivedLineageAsync(graph.GraphHash, nodeIds, cancellationToken)
+            .WithCancellation(cancellationToken).ConfigureAwait(false)) lineage.Add(item);
+        var lineageBySource = BuildLineageBySource(lineage, graph.Nodes.ToDictionary(node => node.Id, node => node.Name));
+        var edgeMap = graph.Edges.ToDictionary(edge => edge.Id);
+        var sourceFacts = workspace.ReadGraphDerivedSourceFactsAsync(cancellationToken);
+        var dispositions = new List<ArtifactDispositionRecord>();
+        var sourceReferences = new List<GraphArtifactReference>();
+        await foreach (var source in sourceFacts.WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            var sourceNodeId = nodeIds[source.NodeKey];
+            sourceReferences.Add(new GraphArtifactReference(sourceNodeId, source.Artifact));
+            var mapped = lineageBySource.GetValueOrDefault((source.NodeKey, source.Artifact.Id.Value), [])
+                .DistinctBy(item => (item.TargetNodeId, item.Target.Id)).ToArray();
+            var disposition = source.ProducedEntries == 0 || mapped.Length == 0
+                ? ArtifactDisposition.Unaccounted
+                : ResolveDisposition(source.EdgeIds, edgeMap);
+            var reason = disposition == ArtifactDisposition.Unaccounted
+                ? "Checkpoint and migration graph do not establish an expected target mapping."
+                : null;
+            dispositions.Add(new ArtifactDispositionRecord(source.Artifact, disposition,
+                mapped.Select(item => item.Target).ToArray(), reason, sourceNodeId,
+                mapped.Select(item => item.TargetNodeId!.Value).ToArray()));
+        }
+        foreach (var issue in new ArtifactDispositionLedger(dispositions).ValidateScopedCoverage(sourceReferences))
+        {
+            var scopedSource = sourceReferences.SingleOrDefault(item => item.Artifact.Id == issue.ArtifactId && item.NodeId == issue.NodeId);
+            findings.Add(new VerificationFinding(EvidenceType.Accounting, EvidenceResult.Fail, EvidenceSeverity.Error,
+                issue.Code.ToString(), issue.Message, $"external-disposition:{issue.NodeId}:{issue.ArtifactId.Value}",
+                scopedSource is null ? context.BindingReferences : [.. context.BindingReferences,
+                    new EvidenceReference(artifactId: scopedSource.Artifact.Id, graphNodeId: scopedSource.NodeId)]));
+        }
+
+        var observedTargets = new List<GraphArtifactReference>();
+        await foreach (var target in workspace.ReadActualTargetsAsync(cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
+            for (var count = 0; count < target.ActualCount; count++)
+                observedTargets.Add(new GraphArtifactReference(nodeIds[target.NodeKey], target.Artifact));
+        foreach (var issue in new LineageLedger(lineage).ValidateScopedCoverage(observedTargets))
+        {
+            var inputs = issue.NodeId is { } nodeId
+                ? context.BindingReferences.Append(new EvidenceReference(artifactId: issue.ArtifactId, graphNodeId: nodeId)).ToArray()
+                : context.BindingReferences.ToArray();
+            findings.Add(new VerificationFinding(EvidenceType.Accounting, EvidenceResult.Fail, EvidenceSeverity.Error,
+                issue.Code.ToString(), issue.Message, $"external-lineage:{issue.NodeId}:{issue.ArtifactId.Value}", inputs));
+        }
+
+        var failedRuleIds = findings.Where(finding => finding.Result == EvidenceResult.Fail &&
+                finding.Severity is EvidenceSeverity.Critical or EvidenceSeverity.Error)
+            .Select(finding => finding.RuleId).ToHashSet();
+        var warningRuleIds = findings.Where(finding => finding.Result == EvidenceResult.Warning ||
+                finding.Result == EvidenceResult.Fail && finding.Severity == EvidenceSeverity.Warning)
+            .Select(finding => finding.RuleId).ToHashSet();
+        var outcome = failedRuleIds.Count > 0 ? VerificationOutcome.Failed : warningRuleIds.Count > 0
+            ? VerificationOutcome.PassedWithWarnings : VerificationOutcome.Passed;
+        var records = findings.Select(finding => ToEvidenceRecord(runId, finding)).ToList();
+        var summaryRule = new RuleId(SystemRuleId);
+        records.Add(new EvidenceRecord(StableEvidenceId(runId, summaryRule, "external-verification-summary"), runId,
+            EvidenceType.Decision, summaryRule, "1", outcome == VerificationOutcome.Failed ? EvidenceResult.Fail :
+                outcome == VerificationOutcome.PassedWithWarnings ? EvidenceResult.Warning : EvidenceResult.Pass,
+            records.Select(record => new EvidenceReference(evidenceId: record.Id)),
+            $"External target verification completed with outcome {outcome}; ProofShift execution was not observed.",
+            DateTimeOffset.UtcNow, new EvidenceValue(new StringValue("all-configured-rules-evaluated")),
+            new EvidenceValue(new StringValue(outcome.ToString())), EvidenceSeverity.Error, "ExternalVerificationSummary"));
+        var evidenceGraph = new EvidenceGraph(runId, records);
+        var runtimeFingerprint = ExternalRuntimeFingerprint(configuration, graph, observation, ruleSet, proofShiftVersion);
+        var run = new ExternalVerificationRunRecord(runId, observation.ObservationId, observation.ObservationRunId,
+            configuration.ConfigurationHash, graph.GraphHash, observation.CheckpointId, observation.CheckpointManifestHash,
+            observation.SourceFingerprint, observedTarget.Fingerprint, workspace.SourceArtifactCount,
+            observedTarget.RecordCount, ruleSet.Fingerprint, runtimeFingerprint, evidenceGraph.Fingerprint, outcome,
+            ruleSet.Rules.Count + 1, failedRuleIds.Count, warningRuleIds.Count, startedAt, DateTimeOffset.UtcNow);
+        return new ExternalVerificationResult(run, evidenceGraph, dispositions, lineage, findings);
+    }
+
+    private static void ValidateExternalObservation(LoadedProjectConfiguration configuration, MigrationGraph graph,
+        ExternalMigrationObservation observation)
+    {
+        if (configuration.ConfigurationHash != observation.ConfigurationHash || graph.GraphHash != observation.GraphHash ||
+            graph.Validate().Count > 0)
+            throw ContextMismatch("External migration observation configuration or graph binding is invalid.");
+        var expectedNodes = graph.Nodes.Where(node => node.Type is MigrationNodeType.Target or MigrationNodeType.Archive)
+            .Select(node => node.Name).Order(StringComparer.Ordinal).ToArray();
+        if (!expectedNodes.SequenceEqual(observation.Targets.Select(target => target.NodeKey).Order(StringComparer.Ordinal), StringComparer.Ordinal))
+            throw ContextMismatch("External observation must identify every configured target graph node exactly once.");
+    }
+
+    private static void ValidateExternalTargetRuntimes(LoadedProjectConfiguration configuration, MigrationGraph graph,
+        ExternalMigrationObservation observation, IReadOnlyCollection<VerificationTargetRuntime> targets)
+    {
+        if (!graph.Nodes.Where(node => node.Type is MigrationNodeType.Target or MigrationNodeType.Archive)
+            .Select(node => node.Name).Order(StringComparer.Ordinal)
+            .SequenceEqual(targets.Select(target => target.NodeKey).Order(StringComparer.Ordinal), StringComparer.Ordinal))
+            throw ContextMismatch("External verification must observe every configured target graph node exactly once.");
+        var endpoints = observation.Targets.ToDictionary(target => target.NodeKey, StringComparer.Ordinal);
+        foreach (var target in targets)
+        {
+            var node = graph.Nodes.Single(candidate => candidate.Name == target.NodeKey);
+            var system = configuration.Systems.SingleOrDefault(candidate => candidate.Id == node.SystemId)
+                ?? throw ContextMismatch("External target graph node references an unknown system.");
+            var endpoint = system.StorageEndpoints.SingleOrDefault(candidate => candidate.Id == node.EndpointId)
+                ?? throw ContextMismatch("External target graph node references an unknown endpoint.");
+            var observedEndpoint = endpoints[node.Name];
+            if (system.Role != SystemRole.ShadowTarget || observedEndpoint.SystemId != node.SystemId ||
+                observedEndpoint.EndpointId != node.EndpointId || observedEndpoint.ConnectorId != endpoint.Connector ||
+                target.Connector.Id != endpoint.Connector || observedEndpoint.ConnectorVersion != target.Connector.Version ||
+                target.Context.RunId != observation.ObservationRunId || target.Context.Role != system.Role ||
+                target.Context.ConnectorContext.NodeKey != node.Name || target.Context.ConnectorContext.SystemKey != system.Id.Value ||
+                target.Context.ConnectorContext.EndpointKey != endpoint.Id.Value ||
+                target.Context.ConnectorContext.Connector != endpoint.Connector ||
+                target.Context.ConnectorContext.SemanticType != node.SemanticType)
+                throw ContextMismatch("External target runtime does not match the declared observation endpoint and graph node.");
+        }
+    }
+
+    private static void ValidateExternalCheckpoint(SourceCheckpoint checkpoint, LoadedProjectConfiguration configuration,
+        MigrationGraph graph, ExternalMigrationObservation observation)
+    {
+        if (checkpoint.Status != CheckpointStatus.Complete || !checkpoint.Replayable ||
+            checkpoint.Id != observation.CheckpointId || checkpoint.ManifestHash != observation.CheckpointManifestHash ||
+            checkpoint.SourceFingerprint != observation.SourceFingerprint ||
+            checkpoint.ConfigurationHash != configuration.ConfigurationHash || checkpoint.ConfigurationHash != observation.ConfigurationHash ||
+            checkpoint.GraphHash != graph.GraphHash || checkpoint.GraphHash != observation.GraphHash)
+            throw ContextMismatch("External verification checkpoint is incomplete or does not match its source/configuration/graph binding.");
+        var sourceNodes = graph.Nodes.Where(node => node.Type == MigrationNodeType.Source).ToDictionary(node => node.Name, StringComparer.Ordinal);
+        if (!checkpoint.Endpoints.Select(endpoint => endpoint.SourceNodeKey).Order(StringComparer.Ordinal)
+            .SequenceEqual(sourceNodes.Keys.Order(StringComparer.Ordinal), StringComparer.Ordinal))
+            throw ContextMismatch("External verification checkpoint source-node coverage does not match the configured graph.");
+        foreach (var endpoint in checkpoint.Endpoints)
+        {
+            var node = sourceNodes[endpoint.SourceNodeKey];
+            if (endpoint.SystemId != node.SystemId || endpoint.EndpointId != node.EndpointId ||
+                endpoint.SelectorHash != SnapshotFingerprints.SelectorHash(node.Selector) ||
+                !endpoint.IdentityFields.SequenceEqual(node.Selector.IdentityFields, StringComparer.Ordinal))
+                throw ContextMismatch("External verification checkpoint endpoint selector does not match the configured source node.");
+        }
+    }
+
+    private static void ValidateExternalSourceCoverage(SourceCheckpoint checkpoint, long actualSourceCount)
+    {
+        if (checkpoint.ArtifactCount != actualSourceCount)
+            throw ContextMismatch("External verification replay source coverage does not match the checkpoint manifest.");
+    }
+
+    private static string ExternalRuntimeFingerprint(LoadedProjectConfiguration configuration, MigrationGraph graph,
+        ExternalMigrationObservation observation, VerificationRuleSet ruleSet, string proofShiftVersion)
+    {
+        var parts = new List<string>
+        {
+            "proofshift-verification-external-runtime-v1", proofShiftVersion, configuration.ConfigurationHash,
+            graph.GraphHash, observation.CheckpointId.Value.ToString("D", CultureInfo.InvariantCulture),
+            observation.CheckpointManifestHash, observation.SourceFingerprint, observation.ObservationId,
+            observation.ObservationRunId.Value.ToString("D", CultureInfo.InvariantCulture), ruleSet.Fingerprint
+        };
+        foreach (var target in observation.Targets.OrderBy(item => item.NodeKey, StringComparer.Ordinal))
+        {
+            parts.Add(target.NodeKey);
+            parts.Add(target.SystemId.Value);
+            parts.Add(target.EndpointId.Value);
+            parts.Add(target.ConnectorId.Value);
+            parts.Add(target.ConnectorVersion);
+        }
+        foreach (var provider in ruleSet.ProviderVersions.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            parts.Add(provider.Key);
+            parts.Add(provider.Value);
+        }
+        foreach (var definition in ruleSet.Definitions.OrderBy(item => item.Id.Value, StringComparer.Ordinal))
+        {
+            parts.Add(definition.Id.Value);
+            parts.Add(definition.Version);
+        }
+        return Hash(Encoding.UTF8.GetBytes(string.Join('\n', parts)));
+    }
+
     private static void ValidateConfigurationBinding(LoadedProjectConfiguration configuration, MigrationGraph graph,
         ProjectionVerificationBinding binding)
     {

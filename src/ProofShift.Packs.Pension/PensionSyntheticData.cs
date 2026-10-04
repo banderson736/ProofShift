@@ -115,8 +115,9 @@ public static class PensionSyntheticDatasetGenerator
                 _ => (new DateOnly(2019, 4, 1), (DateOnly?)null, "ACTIVE")
             };
             yield return Record(PensionRecordKind.Employment, index, "Pension.Employment", $"E{index:D9}",
-                ("member_id", Text($"M{member:D8}")), ("employer_id", Text($"EMP{member % 11:D2}")),
-                ("period_index", new IntegerValue(period)), ("effective_from", new DateValue(start)),
+                ("employment_id", Text($"E{index:D9}")), ("member_id", Text($"M{member:D8}")),
+                ("employer_id", Text($"EMP{member % 11:D2}")),
+                ("period_index", Text(period.ToString(CultureInfo.InvariantCulture))), ("effective_from", new DateValue(start)),
                 ("effective_to", end is null ? new NullValue() : new DateValue(end.Value)), ("status", Text(status)));
         }
 
@@ -277,10 +278,11 @@ public static class PensionTargetDataModel
 
     private static KeyValuePair<string, ValueNode>[] Employment(PensionSyntheticRecord source)
     {
-        var index = (int)((IntegerValue)source.Values["period_index"]).Value;
+        var index = int.Parse(((StringValue)source.Values["period_index"]).Value, CultureInfo.InvariantCulture);
         var status = ((StringValue)source.Values["status"]).Value;
         var eventCode = index switch { 0 => "JOINED", 1 => "TERMINATED", _ => "REINSTATED" };
         return [
+            new("source_employment_ref", source.Values["employment_id"]),
             new("participant_id", source.Values["member_id"]),
             new("event_date", source.Values["effective_from"]),
             new("event_code", new StringValue(eventCode)),
@@ -347,7 +349,7 @@ public static class PensionDefectInjector
     public static IReadOnlyList<PensionFalseReverseDeclaration> FalseReverseDeclarations { get; } =
     [
         new("member-name-normalization", "trim and normalize member names"),
-        new("member-status-many-to-one", "map distinct legacy statuses to one target status")
+        new("member-status-code-map-pass-through", "unknown-code pass-through may collide with a configured target code")
     ];
 
     public static IEnumerable<PensionSyntheticRecord> InjectTargetDefects(IEnumerable<PensionSyntheticRecord> correctedTarget)
