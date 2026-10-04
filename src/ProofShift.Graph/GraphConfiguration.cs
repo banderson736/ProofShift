@@ -583,6 +583,31 @@ public static class MigrationGraphConfigurationParser
                     continue;
                 }
 
+                if (entry.Key == "values")
+                {
+                    if (entry.Value is not ConfigurationMappingNode valueMap)
+                    {
+                        AddIssue(issues, GraphIssueCodes.InvalidTransformation,
+                            "Transformation values must be a mapping of source codes to target values.", file, $"{path}[{index}].values");
+                        continue;
+                    }
+
+                    foreach (var valueEntry in valueMap.Values)
+                    {
+                        if (ReadText(valueEntry.Value) is { } mappedValue)
+                        {
+                            parameters[valueEntry.Key] = mappedValue;
+                        }
+                        else
+                        {
+                            AddIssue(issues, GraphIssueCodes.InvalidTransformation,
+                                "Code-map values must be scalar strings.", file, $"{path}[{index}].values.{valueEntry.Key}");
+                        }
+                    }
+
+                    continue;
+                }
+
                 FlattenScalars(entry.Value, entry.Key, parameters, file, $"{path}[{index}].{entry.Key}", issues);
             }
 

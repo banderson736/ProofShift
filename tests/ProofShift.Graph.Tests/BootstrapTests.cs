@@ -26,6 +26,9 @@ public sealed class MigrationGraphCompilerTests
         Assert.Equal("3", edge.Version);
         Assert.Equal(RecoveryMode.Restore, edge.Recovery!.Mode);
         Assert.Equal("2", edge.Operation.Fields.Single().Pipeline[1].Version);
+        Assert.Equal("ACTIVE", edge.Operation.Fields.Single().Pipeline[1].Parameters["A"]);
+        Assert.Equal("RETIRED", edge.Operation.Fields.Single().Pipeline[1].Parameters["R"]);
+        Assert.False(edge.Operation.Fields.Single().Pipeline[1].Parameters.ContainsKey("values.A"));
         Assert.Equal(1, result.Summary!.SourceAccounted);
         Assert.Equal(1, result.Summary.TargetConnected);
     }
