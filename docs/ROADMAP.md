@@ -128,7 +128,7 @@ Acceptance requires:
 
 ### PS-0.7 Evidence graph
 
-Status: In progress. The active slice adds checkpoint/projection-bound semantic verification, generic and Pension rule providers, graph-scoped dispositions and lineage, hash-only SQLite working sets, physical shadow read-back comparison, deterministic Evidence Graphs, filesystem integrity storage, and CLI `verify`/`evidence` commands. Local full solution tests currently pass 94/96 with 0 failures and 2 Windows symlink-permission skips; Docker-backed verification/CLI scenarios pass locally. Remote PS-0.7 CI acceptance is still outstanding.
+Status: Accepted. Docker-backed [GitHub Actions run 37185122084, job 111385343893](https://github.com/banderson736/ProofShift/actions/runs/37185122084/job/111385343893) passed all 96 tests with 0 failures and 0 skips. The accepted slice includes checkpoint/projection-bound semantic verification, generic and Pension rule providers, graph-scoped dispositions and lineage, hash-only SQLite working sets, physical shadow read-back comparison, deterministic Evidence Graphs, filesystem integrity storage, and CLI `verify`/`evidence` commands.
 
 Acceptance requires:
 
@@ -141,9 +141,9 @@ Acceptance requires:
 - cancellation and rule exceptions must not produce a completed verification result;
 - full solution tests and Docker-backed CI pass with no required skips.
 
-Do not begin PS-0.8 until PS-0.7 is accepted.
-
 ### PS-0.8 Recovery
+
+Status: Next planned milestone; not assigned. Begin only when explicitly authorized.
 
 Add:
 

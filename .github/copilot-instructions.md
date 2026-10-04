@@ -38,7 +38,7 @@ Never violate these without an explicit ADR and user approval:
 
 ## Current work boundary
 
-PS-0.4 was accepted after Docker-backed GitHub Actions run 37173803105 passed 67 tests with zero failures and zero skips. PS-0.5 Shadow Projection was accepted after run 37177385707 passed 82 tests with zero failures and zero skips. PS-0.6 Source Checkpoints & Reproducible Snapshots was accepted after Docker-backed GitHub Actions run 37180351598, job 111371493382, passed 88 tests with zero failures and zero skips. The current assigned milestone is PS-0.7 Semantic Verification & Evidence Graph. Keep work within PS-0.7; do not begin PS-0.8 or later.
+PS-0.4 was accepted after Docker-backed GitHub Actions run 37173803105 passed 67 tests with zero failures and zero skips. PS-0.5 Shadow Projection was accepted after run 37177385707 passed 82 tests with zero failures and zero skips. PS-0.6 Source Checkpoints & Reproducible Snapshots was accepted after Docker-backed GitHub Actions run 37180351598, job 111371493382, passed 88 tests with zero failures and zero skips. PS-0.7 Semantic Verification & Evidence Graph was accepted after Docker-backed GitHub Actions run 37185122084, job 111385343893, passed 96 tests with zero failures and zero skips. Do not begin PS-0.8 or later until explicitly assigned.
 
 PS-0.6 checkpoint invariants: record per-endpoint consistency truthfully; do not claim cross-system atomicity; incomplete checkpoints cannot be replayed; checkpoint projection must match configuration, graph, exact source-node coverage, and selectors; and checkpoint mode must never fall back to live source reads.
 

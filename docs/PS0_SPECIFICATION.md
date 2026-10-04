@@ -356,7 +356,7 @@ Acceptance requires:
 - tampered evidence storage is rejected;
 - full solution validation and Docker-backed CI pass without required skips.
 
-PS-0.7 is the active milestone and is not accepted until all acceptance criteria pass. PS-0.8 and later are deferred.
+PS-0.7 is accepted after Docker-backed [GitHub Actions run 37185122084, job 111385343893](https://github.com/banderson736/ProofShift/actions/runs/37185122084/job/111385343893) passed 96 tests with 0 failures and 0 skips. PS-0.8 and later remain deferred pending assignment.
 
 ## PS-0 non-goals
 
