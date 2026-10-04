@@ -392,7 +392,7 @@ PS-0.8 acceptance requires:
 - failed rehearsal, stale target, missing capability, false Reverse, and corrupted checkpoint each have exact assertions;
 - restore/build/full tests and Docker-backed CI pass with no required skips.
 
-PS-0.8 is the active milestone and is not accepted until remote CI passes. Production migration, production rollback, generalized merge recovery, and PS-0.9 or later remain deferred.
+PS-0.8 was accepted after Docker-backed [GitHub Actions run 37190061657, job 111400188926](https://github.com/banderson736/ProofShift/actions/runs/37190061657/job/111400188926) passed the full solution test suite with 103 passed, 0 failed, and 0 skipped. Production migration, production rollback, generalized merge recovery, and PS-0.9 or later remain deferred; do not begin PS-0.9 without an explicit new assignment.
 
 ## PS-0 non-goals
 

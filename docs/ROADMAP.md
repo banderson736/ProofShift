@@ -143,7 +143,7 @@ Acceptance requires:
 
 ### PS-0.8 Recovery
 
-Status: In progress. PS-0.8 consumes the completed PS-0.7 checkpoint/projection/verification/evidence chain and adds a separate recovery assessment, recovery plan, target recovery checkpoints, shadow-only rehearsal, integrity-checked recovery artifacts, and first-class dry-run qualification.
+Status: Accepted. Docker-backed [GitHub Actions run 37190061657, job 111400188926](https://github.com/banderson736/ProofShift/actions/runs/37190061657/job/111400188926) passed the full solution test suite: 103 passed, 0 failed, and 0 skipped. PS-0.8 consumes the completed PS-0.7 checkpoint/projection/verification/evidence chain and adds a separate recovery assessment, recovery plan, target recovery checkpoints, shadow-only rehearsal, integrity-checked recovery artifacts, and first-class dry-run qualification.
 
 The implementation supports deterministic Reverse loss analysis, Restore checkpoint validation, registered compensators, irreversible policy denial by default, PostgreSQL schema-copy and filesystem-run-root recovery checkpoints, semantic-type coverage metrics, and CLI `recovery`/`dry-run` commands. Source checkpoints remain source inputs and are never treated as target rollback backups. Recovery evidence is separate from finalized PS-0.7 evidence. Production migration and rollback remain out of scope.
 
@@ -158,7 +158,7 @@ Acceptance requires:
 - the clean pension fixture returns `QUALIFIED DRY RUN`; fault scenarios return `NOT QUALIFIED` with stable reasons;
 - full solution validation and remote Docker-backed CI pass with no required skips.
 
-Do not begin PS-0.9 until PS-0.8 is accepted.
+PS-0.8 is accepted. Do not begin PS-0.9 without an explicit new assignment.
 
 ### PS-0.9 Historical data
 
