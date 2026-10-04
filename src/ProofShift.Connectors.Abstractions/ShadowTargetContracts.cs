@@ -104,4 +104,19 @@ public sealed class ShadowTargetConnectorRegistry
                 "Configured shadow target connector is not registered.");
 }
 
-public sealed class ProjectionConnectorException(string message) : Exception(message);
+public sealed class ProjectionConnectorException : Exception
+{
+    public string Code { get; }
+
+    public ProjectionConnectorException(string message)
+        : this("PSPROJ_CONNECTOR_FAILURE", message)
+    {
+    }
+
+    public ProjectionConnectorException(string code, string message) : base(message)
+    {
+        Code = string.IsNullOrWhiteSpace(code)
+            ? throw new ArgumentException("Failure code must not be empty.", nameof(code))
+            : code.Trim();
+    }
+}

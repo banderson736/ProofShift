@@ -198,6 +198,8 @@ public sealed class ShadowProjectionService
                                 ? transformation.Code
                                 : exception is ProjectionExecutionException execution
                                     ? execution.Code
+                                    : exception is ProjectionConnectorException connector
+                                        ? connector.Code
                                     : "PSPROJ_ARTIFACT_FAILED";
                             failureCode = code;
                             await journal.AppendAsync(new ProjectionJournalEntry(

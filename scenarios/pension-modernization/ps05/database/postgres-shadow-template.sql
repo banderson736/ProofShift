@@ -19,7 +19,7 @@ CREATE TABLE public.member_status (
 );
 
 CREATE TABLE public.supplemental_member (
-    member_id integer NOT NULL,
+    member_id text NOT NULL,
     pay_period text NOT NULL,
     note text NOT NULL,
     PRIMARY KEY (member_id, pay_period)

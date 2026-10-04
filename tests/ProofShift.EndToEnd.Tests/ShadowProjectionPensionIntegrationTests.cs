@@ -224,6 +224,9 @@ public sealed class ShadowProjectionPensionIntegrationTests
                 Assert.Equal(10L, await CountAsync(projected, schema, "participant"));
                 Assert.Equal(10L, await CountAsync(projected, schema, "member_status"));
                 Assert.Equal(10L, await CountAsync(projected, schema, "supplemental_member"));
+                await using var supplementalValue = projected.CreateCommand();
+                supplementalValue.CommandText = $"SELECT member_id FROM \"{schema}\".supplemental_member WHERE pay_period = '2025-01' ORDER BY member_id LIMIT 1";
+                Assert.Equal("1", (string)(await supplementalValue.ExecuteScalarAsync(TestContext.Current.CancellationToken))!);
                 await using var productionTable = projected.CreateCommand();
                 productionTable.CommandText = "SELECT COUNT(*) FROM public.participant";
                 Assert.Equal(0L, (long)(await productionTable.ExecuteScalarAsync(TestContext.Current.CancellationToken))!);
@@ -416,7 +419,7 @@ public sealed class ShadowProjectionPensionIntegrationTests
                 optional_value text NULL
             );
             CREATE TABLE public.supplemental_member (
-                member_id integer NOT NULL,
+                member_id text NOT NULL,
                 pay_period text NOT NULL,
                 note text NOT NULL,
                 PRIMARY KEY (member_id, pay_period)

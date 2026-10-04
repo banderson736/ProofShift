@@ -134,7 +134,12 @@ public sealed class PostgresShadowTargetConnector : IShadowTargetConnector
         catch (PostgresException exception) when (exception.SqlState == PostgresErrorCodes.UniqueViolation)
         {
             await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
-            throw new ProjectionConnectorException("Duplicate target artifact identity or target uniqueness constraint violation.");
+            throw new ProjectionConnectorException("PSPROJ_TARGET_DUPLICATE", "Duplicate target artifact identity or target uniqueness constraint violation.");
+        }
+        catch (PostgresException exception)
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw new ProjectionConnectorException($"PSPROJ_POSTGRES_{exception.SqlState}", "PostgreSQL rejected a parameterized shadow artifact write.");
         }
         catch
         {
