@@ -89,7 +89,7 @@ No generalized feature breadth beyond the first member slice.
 
 ### PS-0.5 First vertical slice
 
-Status: Accepted. The PS-0.5 Docker-backed [GitHub Actions run 37177385707](https://github.com/banderson736/ProofShift/actions/runs/37177385707/job/111362742298) passed all 82 tests with zero failures and zero skips. The slice adds a shadow-only target contract, PostgreSQL schema-per-run and filesystem directory-per-run connectors, deterministic supported transformations, a Projection Journal, read-back fingerprinting, and `proofshift project`. The 10-member synthetic fixture proves the unknown status fails with retained partial output and a corrected rerun succeeds in isolated shadow state. PS-0.6 is not started.
+Status: Accepted. The PS-0.5 Docker-backed [GitHub Actions run 37177385707](https://github.com/banderson736/ProofShift/actions/runs/37177385707/job/111362742298) passed all 82 tests with zero failures and zero skips. The slice adds a shadow-only target contract, PostgreSQL schema-per-run and filesystem directory-per-run connectors, deterministic supported transformations, a Projection Journal, read-back fingerprinting, and `proofshift project`. The 10-member synthetic fixture proves the unknown status fails with retained partial output and a corrected rerun succeeds in isolated shadow state.
 
 Scenario:
 
@@ -111,13 +111,30 @@ The synthetic integration scenario uses 10 deterministic members and seeds:
 
 Exact assertions required.
 
-### PS-0.6 Evidence graph
+### PS-0.6 Source checkpoints and reproducible snapshots
+
+Status: Implemented and locally Docker-validated; remote CI acceptance pending. Storage, typed codecs, endpoint fingerprints, filesystem/CSV observed-read checks, relational transaction captures, checkpoint-backed source streams, and CLI `snapshot`/`project --checkpoint` are implemented. Full local solution tests pass 86/86 with 0 failures and 2 Windows symlink-permission skips. The Docker pension scenario proves source mutation/offline replay with the same projection fingerprint. The migration graph compiler is the authority for the exact source-node set.
+
+Acceptance requires:
+
+- deterministic, versioned streaming segments and content-addressed streamed binary blobs;
+- endpoint-level consistency guarantees, capture times/window, and `CrossSystemAtomic: false` for mixed SQL/files/CSV;
+- complete-only replay; failed/cancelled checkpoints remain non-replayable;
+- manifest, segment, record, source-set, and binary integrity verification before target preparation;
+- exact configuration/graph/source-node/selector match and no live-source fallback in checkpoint mode;
+- offline replay with source containers stopped and CSV/files/database inputs modified after capture;
+- full pension modernization scenario with stable read-back projection fingerprint;
+- remote Docker-backed CI acceptance with no required skips.
+
+Do not begin PS-0.7 until PS-0.6 is accepted.
+
+### PS-0.7 Evidence graph
 
 Ensure source observation → transformation → target observation → comparison → decision can be traced.
 
 Add evidence query/serialization.
 
-### PS-0.7 Recovery
+### PS-0.8 Recovery
 
 Add:
 
@@ -126,13 +143,13 @@ Add:
 - recovery policy validation;
 - readiness report.
 
-### PS-0.8 Historical data
+### PS-0.9 Historical data
 
 Add `EMPLOYMENT_HISTORY` with semantic timeline comparison.
 
 Demonstrate structurally different but semantically equivalent history.
 
-### PS-0.9 Financial data
+### PS-0.10 Financial data
 
 Add:
 
@@ -141,15 +158,15 @@ Add:
 - aggregate financial reconciliation;
 - tolerance semantics.
 
-### PS-0.10 Relationships
+### PS-0.11 Relationships
 
 Add BENEFICIARY and correct/incorrect member relationships.
 
-### PS-0.11 Files/documents
+### PS-0.12 Files/documents
 
 Add filesystem/object abstraction and document accounting/provenance.
 
-### PS-0.12 Full synthetic scenario
+### PS-0.13 Full synthetic scenario
 
 Scale generator; inject full deterministic defect manifest; produce final dry-run/readiness report and machine-readable evidence.
 

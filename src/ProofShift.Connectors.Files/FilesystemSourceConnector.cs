@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -7,10 +8,32 @@ using ProofShift.Domain;
 
 namespace ProofShift.Connectors.Files;
 
-public sealed class FilesystemSourceConnector : ISourceConnector, ISourceBinaryContentResolver
+public sealed class FilesystemSourceConnector : ICheckpointSourceConnector, ISourceBinaryContentResolver
 {
     public ConnectorId Id { get; } = new("files");
     public string Version => "0.1.0";
+    public SourceConsistencyGuarantee CheckpointConsistency => SourceConsistencyGuarantee.Observed;
+
+    public async IAsyncEnumerable<RecordEnvelope> ReadForCheckpointAsync(
+        ConnectorContext context,
+        ArtifactSelector selector,
+        ReadOptions options,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var before = GetMatchedFileInventory(context, selector, cancellationToken);
+        await foreach (var record in ReadAsync(context, selector, options, cancellationToken)
+            .WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            yield return record;
+        }
+
+        var after = GetMatchedFileInventory(context, selector, cancellationToken);
+        if (before != after)
+        {
+            throw new ConnectorReadException(ConnectorIssueCodes.ArtifactChangedDuringCapture,
+                "Matched filesystem inputs changed while the checkpoint was being captured.");
+        }
+    }
 
     public Task<SourceInspection> InspectAsync(
         ConnectorContext context,
@@ -270,34 +293,101 @@ public sealed class FilesystemSourceConnector : ISourceConnector, ISourceBinaryC
     {
         var enumerationOptions = new EnumerationOptions
         {
-            RecurseSubdirectories = true,
+            RecurseSubdirectories = false,
             IgnoreInaccessible = false,
             AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.System,
             ReturnSpecialDirectories = false
         };
-        IEnumerator<string> enumerator;
-        try
-        {
-            enumerator = Directory.EnumerateFiles(root, "*", enumerationOptions).GetEnumerator();
-        }
-        catch
-        {
-            throw new ConnectorReadException(ConnectorIssueCodes.SourceReadFailed, "Filesystem enumeration failed.");
-        }
-
-        using (enumerator)
-        {
-        while (TryMoveNext(enumerator))
+        var pendingDirectories = new Stack<string>();
+        pendingDirectories.Push(root);
+        while (pendingDirectories.Count > 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var path = enumerator.Current;
-            var relative = ConnectorPathUtilities.NormalizeRelativePath(Path.GetRelativePath(root, path));
-            if (matcher.IsMatch(relative))
+            var directory = pendingDirectories.Pop();
+            string[] entries;
+            try
             {
-                yield return relative;
+                entries = Directory.EnumerateFileSystemEntries(directory, "*", enumerationOptions)
+                    .OrderBy(path => Path.GetFileName(path), StringComparer.Ordinal)
+                    .ToArray();
+            }
+            catch
+            {
+                throw new ConnectorReadException(ConnectorIssueCodes.SourceReadFailed, "Filesystem enumeration failed.");
+            }
+
+            var subdirectories = new List<string>();
+            foreach (var path in entries)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                FileAttributes attributes;
+                try
+                {
+                    attributes = File.GetAttributes(path);
+                }
+                catch
+                {
+                    throw new ConnectorReadException(ConnectorIssueCodes.SourceReadFailed, "Filesystem entry could not be inspected.");
+                }
+
+                if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.System)) != 0)
+                {
+                    continue;
+                }
+
+                if ((attributes & FileAttributes.Directory) != 0)
+                {
+                    subdirectories.Add(path);
+                    continue;
+                }
+
+                var relative = ConnectorPathUtilities.NormalizeRelativePath(Path.GetRelativePath(root, path));
+                if (matcher.IsMatch(relative)) yield return relative;
+            }
+
+            for (var index = subdirectories.Count - 1; index >= 0; index--)
+            {
+                pendingDirectories.Push(subdirectories[index]);
             }
         }
+    }
+
+    private static (long Count, BigInteger Sum) GetMatchedFileInventory(
+        ConnectorContext context,
+        ArtifactSelector selector,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetPattern(selector, out var pattern))
+        {
+            throw new ConnectorReadException(ConnectorIssueCodes.InvalidPhysicalIdentifier, "File pattern is invalid.");
         }
+
+        var root = ConnectorPathUtilities.ResolveRoot(context);
+        var matcher = CreatePatternMatcher(pattern);
+        long count = 0;
+        var sum = BigInteger.Zero;
+        foreach (var relativePath in EnumerateMatchingFiles(root, matcher, cancellationToken))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!ConnectorPathUtilities.TryResolveContainedPath(root, relativePath, out var fullPath))
+            {
+                throw new ConnectorReadException(ConnectorIssueCodes.PathOutsideRoot, "A matched file resolves outside the source root.");
+            }
+
+            var info = new FileInfo(fullPath);
+            if (!info.Exists)
+            {
+                throw new ConnectorReadException(ConnectorIssueCodes.ArtifactChangedDuringCapture, "A matched source file disappeared during capture.");
+            }
+
+            var identity = string.Concat(relativePath, "\n", info.Length.ToString(CultureInfo.InvariantCulture), "\n",
+                info.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture));
+            var digest = SHA256.HashData(Encoding.UTF8.GetBytes(identity));
+            sum = (sum + new BigInteger(digest, isUnsigned: true, isBigEndian: true)) % (BigInteger.One << 256);
+            count = checked(count + 1);
+        }
+
+        return (count, sum);
     }
 
     private static bool TryMoveNext(IEnumerator<string> enumerator)

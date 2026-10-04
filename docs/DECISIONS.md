@@ -105,3 +105,10 @@ Status: Accepted
 PS-0.5 writes only through `IShadowTargetConnector` contexts for systems with role `shadow-target`. PostgreSQL schemas and filesystem directories are isolated per run; the append-only Projection Journal records execution ancestry, and a versioned fingerprint is computed from read-back materialized state. Projection is not evidence of correctness. Merge/chained execution is deferred where deterministic semantics are undefined. See `docs/adr/0006-shadow-projection-runtime.md`.
 
 Acceptance status: accepted after [GitHub Actions run 37177385707](https://github.com/banderson736/ProofShift/actions/runs/37177385707/job/111362742298), which passed all 82 tests with zero failures and zero skips.
+
+### D-021 — Checkpoints are local materialized inputs with endpoint-only consistency claims
+Status: Accepted
+
+PS-0.6 implements immutable materialized source checkpoints in a separate `ProofShift.Snapshots` assembly. The generic Projection source provider validates exact configuration/graph/source coverage and fails closed without live-read fallback. Relational connectors use provider-supported checkpoint transactions; filesystem/CSV remain observed reads with drift detection. Mixed-source checkpoints report `CrossSystemAtomic: false`. Incomplete checkpoints cannot be replayed, and integrity is checked before shadow destinations are prepared. See `docs/adr/0007-materialized-source-checkpoints.md`.
+
+PS-0.6 implementation is locally complete and Docker-validated but not yet accepted pending remote CI. PS-0.7 and later remain unstarted.

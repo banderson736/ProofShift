@@ -15,6 +15,7 @@ using ProofShift.Connectors.SqlServer;
 using ProofShift.Domain;
 using ProofShift.Engine;
 using ProofShift.Projection;
+using ProofShift.Snapshots;
 using Testcontainers.MsSql;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -139,6 +140,36 @@ public sealed class ShadowProjectionPensionIntegrationTests
                 Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(shadowDocument, TestContext.Current.CancellationToken))).ToLowerInvariant());
             Assert.True(File.Exists(Path.Combine(sourceRoot, "member", "1", "statement.pdf")));
             Assert.Equal(10, await CountSourceMembersAsync(sourceConnection));
+
+            var checkpointStore = new FileSystemSnapshotStore(Path.Combine(projectRoot, ".proofshift", "checkpoints"));
+            var capture = await new SnapshotCaptureService(sourceConnectors, checkpointStore,
+                new RuntimeConnectorContextFactory(environment)).CaptureAsync(configuration, graph, TestContext.Current.CancellationToken);
+            Assert.True(capture.Status == CheckpointStatus.Complete,
+                $"Checkpoint capture failed with {capture.FailureCode} after {capture.CapturedSourceNodes}/{capture.ExpectedSourceNodes} source nodes.");
+            Assert.NotNull(capture.Checkpoint);
+            Assert.Equal(3, capture.CapturedSourceNodes);
+            Assert.False(capture.Checkpoint.CrossSystemAtomic);
+            Assert.Equal(2, capture.Checkpoint.Endpoints.Count(endpoint => endpoint.SourceConsistency == SourceConsistencyGuarantee.Observed));
+
+            await File.WriteAllTextAsync(Path.Combine(csvRoot, "supplemental.csv"), "MEMBER_ID;PAY_PERIOD;NOTE\n1;2025-01;modified-after-capture\n",
+                new UTF8Encoding(false), TestContext.Current.CancellationToken);
+            await File.WriteAllBytesAsync(Path.Combine(sourceRoot, "member", "1", "statement.pdf"),
+                Encoding.UTF8.GetBytes("modified document after capture\n"), TestContext.Current.CancellationToken);
+            await sqlContainer.StopAsync(TestContext.Current.CancellationToken);
+
+            await using var loadedCheckpoint = await checkpointStore.OpenCompleteAsync(
+                capture.Id.Value.ToString("N", CultureInfo.InvariantCulture), TestContext.Current.CancellationToken);
+            var replayProvider = new CheckpointSourceArtifactStreamProvider(loadedCheckpoint);
+            var replayService = new ShadowProjectionService(sourceConnectors, targetConnectors,
+                new RuntimeConnectorContextFactory(environment), replayProvider);
+            var replayed = await replayService.ProjectAsync(configuration, graph, projectRoot, TestContext.Current.CancellationToken);
+            Assert.Equal(ProjectionStatus.Succeeded, replayed.Status);
+            Assert.Equal(21, replayed.SourceArtifactCount);
+            Assert.Equal(31, replayed.TargetArtifactCount);
+            Assert.Equal(succeeded.Fingerprint, replayed.Fingerprint);
+            Assert.Equal(capture.Id.Value.ToString("N", CultureInfo.InvariantCulture), replayed.CheckpointId);
+            Assert.Equal(capture.Checkpoint.SourceFingerprint, replayed.CheckpointSourceFingerprint);
+            Assert.Equal(capture.Checkpoint.ManifestHash, replayed.CheckpointManifestHash);
         }
         finally
         {
@@ -166,6 +197,10 @@ public sealed class ShadowProjectionPensionIntegrationTests
         var fixture = Path.Combine(fixtureRoot, "proofshift.yaml");
         var cli = Path.Combine(AppContext.BaseDirectory, "ProofShift.Cli.dll");
         var sourceRoot = Path.Combine(fixtureRoot, "sources");
+        var csvPath = Path.Combine(sourceRoot, "supplemental.csv");
+        var documentPath = Path.Combine(sourceRoot, "member", "1", "statement.pdf");
+        byte[]? originalCsv = null;
+        byte[]? originalDocument = null;
         try
         {
             Assert.True(File.Exists(cli), "The CLI assembly should be copied to the EndToEnd test output.");
@@ -217,6 +252,7 @@ public sealed class ShadowProjectionPensionIntegrationTests
             Assert.Equal(21, root.GetProperty("sourceArtifactCount").GetInt64());
             Assert.Equal(31, root.GetProperty("targetArtifactCount").GetInt64());
             Assert.Equal("proofshift-projection-fingerprint-v1", root.GetProperty("projectionFingerprintVersion").GetString());
+            var liveProjectionFingerprint = root.GetProperty("projectionFingerprint").GetString();
             var runId = Guid.Parse(root.GetProperty("runId").GetString()!);
             var schema = $"proofshift_shadow_{runId:N}";
             await using (var projected = new NpgsqlConnection(postgresContainer.GetConnectionString()))
@@ -237,9 +273,34 @@ public sealed class ShadowProjectionPensionIntegrationTests
                 TestContext.Current.CancellationToken);
             var projectedDocument = Path.Combine(shadowRoot, runId.ToString("N"), "participant-documents", "member", "1", "statement.pdf");
             Assert.Equal(expectedDocument, await File.ReadAllBytesAsync(projectedDocument, TestContext.Current.CancellationToken));
+
+            originalCsv = await File.ReadAllBytesAsync(csvPath, TestContext.Current.CancellationToken);
+            originalDocument = await File.ReadAllBytesAsync(documentPath, TestContext.Current.CancellationToken);
+            var snapshot = await RunCliAsync(cli, fixture, environment, "snapshot", "--json");
+            Assert.Equal(0, snapshot.ExitCode);
+            using var snapshotJson = JsonDocument.Parse(snapshot.StandardOutput);
+            var checkpoint = snapshotJson.RootElement;
+            Assert.Equal("complete", checkpoint.GetProperty("status").GetString());
+            Assert.False(checkpoint.GetProperty("crossSystemAtomic").GetBoolean());
+            var checkpointId = checkpoint.GetProperty("checkpointId").GetString();
+
+            await File.WriteAllTextAsync(csvPath, "MEMBER_ID;PAY_PERIOD;NOTE\n1;2025-01;modified-after-capture\n",
+                new UTF8Encoding(false), TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(documentPath, "modified after checkpoint\n", TestContext.Current.CancellationToken);
+            await sqlContainer.StopAsync(TestContext.Current.CancellationToken);
+
+            var replay = await RunCliAsync(cli, fixture, environment, "project", "--checkpoint", checkpointId!, "--json");
+            Assert.True(replay.ExitCode == 0,
+                $"Checkpoint CLI replay failed with exit code {replay.ExitCode}. stdout: {replay.StandardOutput} stderr: {replay.StandardError}");
+            using var replayJson = JsonDocument.Parse(replay.StandardOutput);
+            Assert.Equal("succeeded", replayJson.RootElement.GetProperty("status").GetString());
+            Assert.Equal(liveProjectionFingerprint, replayJson.RootElement.GetProperty("projectionFingerprint").GetString());
+            Assert.Equal(checkpointId, replayJson.RootElement.GetProperty("checkpointId").GetString());
         }
         finally
         {
+            if (originalCsv is not null) File.WriteAllBytes(csvPath, originalCsv);
+            if (originalDocument is not null) File.WriteAllBytes(documentPath, originalDocument);
             var generatedState = Path.Combine(fixtureRoot, ".proofshift");
             if (Directory.Exists(generatedState)) Directory.Delete(generatedState, recursive: true);
             Directory.Delete(shadowRoot, recursive: true);
@@ -334,7 +395,7 @@ public sealed class ShadowProjectionPensionIntegrationTests
         };
         return new MigrationGraph(new MigrationGraphId(Guid.Parse("6e514548-8244-4dd0-9d91-4c93e975c3c5")),
             [memberSource, csvSource, documentSource, participant, status, supplemental, documents], edges,
-            "ps05-synthetic-graph-v1", "test-v1");
+            new string('d', 64), "test-v1");
     }
 
     private static MigrationNode Node(string name, MigrationNodeType type, SystemId system, string endpoint, string kind,

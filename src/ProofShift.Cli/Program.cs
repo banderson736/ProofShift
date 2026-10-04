@@ -9,6 +9,8 @@ using ProofShift.Connectors.SqlServer;
 using ProofShift.Engine;
 using ProofShift.Graph;
 using ProofShift.Projection;
+using ProofShift.Snapshots;
+using ProofShift.Domain;
 
 namespace ProofShift.Cli;
 
@@ -22,17 +24,30 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
-        if (args.Length is < 2 or > 3)
+        if (args.Length < 2)
         {
             WriteUsage();
             return 2;
         }
 
-        var jsonOutput = args.Length == 3 && string.Equals(args[2], "--json", StringComparison.OrdinalIgnoreCase);
-        if (args.Length == 3 && !jsonOutput)
+        var jsonOutput = false;
+        string? checkpoint = null;
+        for (var index = 2; index < args.Length; index++)
         {
-            WriteUsage();
-            return 2;
+            if (string.Equals(args[index], "--json", StringComparison.OrdinalIgnoreCase))
+            {
+                jsonOutput = true;
+            }
+            else if (string.Equals(args[index], "--checkpoint", StringComparison.OrdinalIgnoreCase) &&
+                index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                checkpoint = args[++index];
+            }
+            else
+            {
+                WriteUsage();
+                return 2;
+            }
         }
 
         if (string.Equals(args[0], "validate", StringComparison.OrdinalIgnoreCase))
@@ -52,7 +67,12 @@ internal static class Program
 
         if (string.Equals(args[0], "project", StringComparison.OrdinalIgnoreCase))
         {
-            return await ProjectAsync(args[1], jsonOutput).ConfigureAwait(false);
+            return await ProjectAsync(args[1], jsonOutput, checkpoint).ConfigureAwait(false);
+        }
+
+        if (string.Equals(args[0], "snapshot", StringComparison.OrdinalIgnoreCase) && checkpoint is null)
+        {
+            return await SnapshotAsync(args[1], jsonOutput).ConfigureAwait(false);
         }
 
         WriteUsage();
@@ -219,7 +239,97 @@ internal static class Program
         }
     }
 
-    private static async Task<int> ProjectAsync(string path, bool jsonOutput)
+    private static async Task<int> SnapshotAsync(string path, bool jsonOutput)
+    {
+        try
+        {
+            var loaded = await new ConfigurationLoader().LoadAsync(path).ConfigureAwait(false);
+            if (loaded.Configuration is null)
+            {
+                Console.Error.WriteLine("Configuration validation failed; checkpoint capture was not started.");
+                return 1;
+            }
+
+            var compilation = MigrationGraphCompiler.Compile(loaded.Configuration);
+            if (!compilation.IsValid || compilation.Graph is null)
+            {
+                Console.Error.WriteLine("Migration graph validation failed; checkpoint capture was not started.");
+                return 1;
+            }
+
+            var registry = new ConnectorRegistry(
+            [
+                new PostgresSourceConnector(),
+                new SqlServerSourceConnector(),
+                new FilesystemSourceConnector(),
+                new CsvSourceConnector()
+            ]);
+            var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(path))
+                ?? throw new InvalidOperationException("Project configuration directory is unavailable.");
+            var storePath = Path.Combine(projectDirectory, ".proofshift", "checkpoints");
+            using var cancellation = new CancellationTokenSource();
+            ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+            {
+                eventArgs.Cancel = true;
+                cancellation.Cancel();
+            };
+            Console.CancelKeyPress += cancelHandler;
+            SnapshotCaptureResult result;
+            try
+            {
+                result = await new SnapshotCaptureService(registry, new FileSystemSnapshotStore(storePath))
+                    .CaptureAsync(loaded.Configuration, compilation.Graph, cancellation.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                Console.CancelKeyPress -= cancelHandler;
+            }
+            var output = new SnapshotOutput(
+                result.Id.Value.ToString("N", CultureInfo.InvariantCulture),
+                result.Status.ToString().ToLowerInvariant(),
+                result.Checkpoint?.ManifestHash,
+                result.Checkpoint?.SourceFingerprint,
+                result.Checkpoint?.CrossSystemAtomic,
+                result.Checkpoint?.CaptureWindow.TotalMilliseconds,
+                result.ExpectedSourceNodes,
+                result.CapturedSourceNodes,
+                result.CapturedArtifacts,
+                result.CapturedBytes,
+                result.FailureCode,
+                result.Status == CheckpointStatus.Complete
+                    ? Path.Combine(storePath, result.Id.Value.ToString("N", CultureInfo.InvariantCulture))
+                    : null);
+            if (jsonOutput)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(output, JsonOptions));
+            }
+            else
+            {
+                Console.WriteLine("ProofShift Source Checkpoint");
+                Console.WriteLine($"Checkpoint: {output.CheckpointId}");
+                Console.WriteLine($"Status: {output.Status.ToUpperInvariant()}");
+                Console.WriteLine($"Source Nodes: {output.CapturedSourceNodes}/{output.ExpectedSourceNodes}");
+                Console.WriteLine($"Artifacts: {output.CapturedArtifacts}");
+                Console.WriteLine($"Materialized Bytes: {output.CapturedBytes}");
+                if (output.CheckpointPath is not null) Console.WriteLine($"Path: {output.CheckpointPath}");
+                if (output.FailureCode is not null) Console.WriteLine($"Failure: {output.FailureCode}");
+                if (output.CrossSystemAtomic is false) Console.WriteLine("Consistency: endpoint guarantees only; cross-system atomicity is not claimed.");
+            }
+
+            return result.Status == CheckpointStatus.Complete ? 0 : result.Status == CheckpointStatus.Cancelled ? 130 : 1;
+        }
+        catch (OperationCanceledException)
+        {
+            return 130;
+        }
+        catch
+        {
+            Console.Error.WriteLine("Source checkpoint could not be completed.");
+            return 1;
+        }
+    }
+
+    private static async Task<int> ProjectAsync(string path, bool jsonOutput, string? checkpointPath)
     {
         ProjectionRun? run = null;
         try
@@ -250,9 +360,14 @@ internal static class Program
                 new PostgresShadowTargetConnector(),
                 new FilesystemShadowTargetConnector()
             ]);
-            var service = new ShadowProjectionService(sourceConnectors, targetConnectors);
             var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(path))
                 ?? throw new InvalidOperationException("Project configuration directory is unavailable.");
+            var store = new FileSystemSnapshotStore(Path.Combine(projectDirectory, ".proofshift", "checkpoints"));
+            await using var loadedCheckpoint = checkpointPath is null
+                ? null
+                : await store.OpenCompleteAsync(checkpointPath, CancellationToken.None).ConfigureAwait(false);
+            var sourceProvider = loadedCheckpoint is null ? null : new CheckpointSourceArtifactStreamProvider(loadedCheckpoint);
+            var service = new ShadowProjectionService(sourceConnectors, targetConnectors, sourceProvider: sourceProvider);
             using var cancellation = new CancellationTokenSource();
             ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
             {
@@ -307,6 +422,12 @@ internal static class Program
         Console.WriteLine($"Status: {run.Status.ToString().ToUpperInvariant()}");
         Console.WriteLine($"Configuration Hash: {run.ConfigurationHash}");
         Console.WriteLine($"Migration Graph Hash: {run.GraphHash}");
+        if (run.CheckpointId is not null)
+        {
+            Console.WriteLine($"Source Checkpoint: {run.CheckpointId}");
+            Console.WriteLine($"Checkpoint Source Fingerprint: {run.CheckpointSourceFingerprint}");
+            Console.WriteLine($"Checkpoint Manifest Hash: {run.CheckpointManifestHash}");
+        }
         Console.WriteLine();
         Console.WriteLine("Connectors");
         foreach (var connector in run.ConnectorVersions.OrderBy(pair => pair.Key, StringComparer.Ordinal))
@@ -356,7 +477,10 @@ internal static class Program
         run.FailureCode,
         run.Fingerprint,
         run.FingerprintVersion,
-        run.JournalPath);
+        run.JournalPath,
+        run.CheckpointId,
+        run.CheckpointSourceFingerprint,
+        run.CheckpointManifestHash);
 
     private static void WriteInspection(InspectionOutput output, bool jsonOutput)
     {
@@ -594,7 +718,21 @@ internal static class Program
         issue.Message);
 
     private static void WriteUsage() =>
-        Console.Error.WriteLine("Usage: proofshift validate <config> [--json] | proofshift plan <config> [--json] | proofshift inspect <config> [--json] | proofshift project <config> [--json]");
+        Console.Error.WriteLine("Usage: proofshift validate <config> [--json] | proofshift plan <config> [--json] | proofshift inspect <config> [--json] | proofshift snapshot <config> [--json] | proofshift project <config> [--checkpoint <id-or-path>] [--json]");
+
+    private sealed record SnapshotOutput(
+        string CheckpointId,
+        string Status,
+        string? ManifestHash,
+        string? SourceFingerprint,
+        bool? CrossSystemAtomic,
+        double? CaptureWindowMilliseconds,
+        int ExpectedSourceNodes,
+        int CapturedSourceNodes,
+        long CapturedArtifacts,
+        long CapturedBytes,
+        string? FailureCode,
+        string? CheckpointPath);
 
     private sealed record ValidationOutput(
         bool Valid,
@@ -646,7 +784,10 @@ internal static class Program
         string? FailureCode,
         string? ProjectionFingerprint,
         string ProjectionFingerprintVersion,
-        string ProjectionJournal);
+        string ProjectionJournal,
+        string? CheckpointId,
+        string? CheckpointSourceFingerprint,
+        string? CheckpointManifestHash);
 
     private sealed record SourceColumnOutput(string Name, string DataType, bool Nullable, int? Ordinal);
 

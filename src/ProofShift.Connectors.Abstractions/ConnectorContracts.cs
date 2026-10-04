@@ -18,6 +18,7 @@ public static class ConnectorIssueCodes
     public const string NonDeterministicIdentity = "PSCONN012";
     public const string MissingConfiguration = "PSCONN013";
     public const string PartitioningUnsupported = "PSCONN014";
+    public const string ArtifactChangedDuringCapture = "PSCONN015";
 }
 
 public static class StableArtifactIdentity
@@ -181,6 +182,47 @@ public interface ISourceConnector
         ConnectorContext context,
         ArtifactSelector selector,
         ReadOptions options,
+        CancellationToken cancellationToken);
+}
+
+public interface ICheckpointSourceConnector : ISourceConnector
+{
+    SourceConsistencyGuarantee CheckpointConsistency { get; }
+
+    IAsyncEnumerable<RecordEnvelope> ReadForCheckpointAsync(
+        ConnectorContext context,
+        ArtifactSelector selector,
+        ReadOptions options,
+        CancellationToken cancellationToken);
+}
+
+public interface ISourceArtifactStreamProvider
+{
+    string? CheckpointId { get; }
+    string? CheckpointSourceFingerprint { get; }
+    string? CheckpointManifestHash { get; }
+    string? CheckpointConfigurationHash { get; }
+    string? CheckpointGraphHash { get; }
+    IReadOnlyCollection<string>? CheckpointSourceNodeKeys { get; }
+
+    Task<string> ValidateAsync(
+        string sourceNodeKey,
+        ConnectorContext context,
+        ArtifactSelector selector,
+        CancellationToken cancellationToken);
+
+    IAsyncEnumerable<RecordEnvelope> ReadAsync(
+        string sourceNodeKey,
+        ConnectorContext context,
+        ArtifactSelector selector,
+        CancellationToken cancellationToken);
+
+    ValueTask<Stream> OpenBinaryReadAsync(
+        string sourceNodeKey,
+        ConnectorContext context,
+        ArtifactSelector selector,
+        ArtifactReference artifact,
+        BinaryReferenceValue binaryReference,
         CancellationToken cancellationToken);
 }
 

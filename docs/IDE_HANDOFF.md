@@ -19,7 +19,9 @@ Use `docs/MARKET_RESEARCH.md` for commercial/domain context, not as an implement
 
 ## Current assignment
 
-PS-0.4 was accepted after [GitHub Actions run 37173803105](https://github.com/banderson736/ProofShift/actions/runs/37173803105/job/111352102267) passed all 67 tests with zero failures and zero skips. PS-0.5 Shadow Projection was accepted after [run 37177385707](https://github.com/banderson736/ProofShift/actions/runs/37177385707/job/111362742298) passed all 82 tests with zero failures and zero skips. Stop at PS-0.5; do not begin PS-0.6 unless explicitly assigned.
+PS-0.4 was accepted after [GitHub Actions run 37173803105](https://github.com/banderson736/ProofShift/actions/runs/37173803105/job/111352102267) passed all 67 tests with zero failures and zero skips. PS-0.5 Shadow Projection was accepted after [run 37177385707](https://github.com/banderson736/ProofShift/actions/runs/37177385707/job/111362742298) passed all 82 tests with zero failures and zero skips. The current assignment is PS-0.6 Source Checkpoints & Reproducible Snapshots. Implementation and local Docker-backed verification are complete: the full suite passed 86 tests with 0 failures and 2 Windows symlink-permission skips, including CLI checkpoint replay after source mutation and SQL Server shutdown. Remote CI acceptance remains pending. Do not begin PS-0.7 or later.
+
+PS-0.6 uses a separate `ProofShift.Snapshots` assembly and a generic connector-neutral source stream provider. PostgreSQL/SQL Server capture guarantees are endpoint-level only; filesystem and CSV are observed reads with before/after drift checks. Mixed-source checkpoints must explicitly report `CrossSystemAtomic: false`. Checkpoint replay must match configuration hash, graph hash, exact source-node coverage, endpoint identity, and selectors; it must never fall back to live reads.
 
 ### PS-0.1 deliverables
 

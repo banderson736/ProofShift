@@ -11,6 +11,7 @@
     <ProjectReference Include="../../src/ProofShift.Cli/ProofShift.Cli.csproj" />
     <ProjectReference Include="../../src/ProofShift.Engine/ProofShift.Engine.csproj" />
     <ProjectReference Include="../../src/ProofShift.Projection/ProofShift.Projection.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Snapshots/ProofShift.Snapshots.csproj" />
     <ProjectReference Include="../../src/ProofShift.Verification/ProofShift.Verification.csproj" />
     <ProjectReference Include="../../src/ProofShift.Connectors.SqlServer/ProofShift.Connectors.SqlServer.csproj" />
     <ProjectReference Include="../../src/ProofShift.Connectors.Postgres/ProofShift.Connectors.Postgres.csproj" />

@@ -320,7 +320,7 @@ Do not prematurely lock command syntax if a better consistent CLI emerges, but p
 
 PS-0.4 provides read-only physical inspection and streaming reads for PostgreSQL, SQL Server, filesystem, and CSV sources. This is not snapshotting: current observations are not claimed to be immutable or transactionally consistent. It does not write targets, execute graph operations, create evidence, or assign artifact dispositions/lineage. Relational integration tests use Testcontainers and require a Docker-compatible runtime; filesystem and CSV tests use synthetic local fixtures.
 
-Temporal fidelity preserves date-only values, UTC instants, explicit offsets, and local timestamps without assigning a timezone. Binary references carry a retrievable source reference, length, and SHA-256; content is reopened and transferred by stream. `.github/workflows/ci.yml` runs database Testcontainers and filesystem symlink checks on Ubuntu. PS-0.4 acceptance is complete: the [Docker-backed CI run](https://github.com/banderson736/ProofShift/actions/runs/37173803105/job/111352102267) reports 67 passed, 0 failed, and 0 skipped. PS-0.5 may proceed; PS-0.6 remains out of scope until PS-0.5 is complete.
+Temporal fidelity preserves date-only values, UTC instants, explicit offsets, and local timestamps without assigning a timezone. Binary references carry a retrievable source reference, length, and SHA-256; content is reopened and transferred by stream. `.github/workflows/ci.yml` runs database Testcontainers and filesystem symlink checks on Ubuntu. PS-0.4 acceptance is complete: the [Docker-backed CI run](https://github.com/banderson736/ProofShift/actions/runs/37173803105/job/111352102267) reports 67 passed, 0 failed, and 0 skipped.
 
 ## PS-0.5 Shadow Projection boundary
 
@@ -328,7 +328,17 @@ PS-0.5 consumes live source observations through PS-0.4 connectors, executes dir
 
 The JSONL Projection Journal records what was written, excluded, failed, or retained as metadata-only, including artifact ancestry, edge/version, transformations/versions, and recovery metadata. It is not verification evidence. `proofshift-projection-fingerprint-v1` is computed over actual read-back values. Failure and cancellation retain partial shadow state and journal; neither status reports success. PS-0.5 does not create source snapshots, execute rollback, verify correctness, or write production targets. Merge and chained target-input execution are explicitly deferred because join/scheduling semantics are not defined.
 
-The reusable 10-member configuration, database setup SQL, CSV, and document fixture are in `scenarios/pension-modernization/ps05/`. PS-0.5 acceptance is complete: Docker-backed [GitHub Actions run 37177385707](https://github.com/banderson736/ProofShift/actions/runs/37177385707/job/111362742298) reports 82 passed, 0 failed, and 0 skipped, including the PostgreSQL/SQL Server projection and CLI scenarios. PS-0.6 remains unstarted and is outside this accepted slice.
+The reusable 10-member configuration, database setup SQL, CSV, and document fixture are in `scenarios/pension-modernization/ps05/`. PS-0.5 acceptance is complete: Docker-backed [GitHub Actions run 37177385707](https://github.com/banderson736/ProofShift/actions/runs/37177385707/job/111362742298) reports 82 passed, 0 failed, and 0 skipped, including the PostgreSQL/SQL Server projection and CLI scenarios.
+
+## PS-0.6 Source Checkpoints and Reproducible Snapshots
+
+PS-0.6 captures only source nodes required by the compiled graph into a local materialized checkpoint. Structured records use a versioned typed streaming representation; binary values use bounded content-addressed streams with length/SHA-256 validation. The manifest preserves configuration/graph/selector identity, endpoint guarantees and capture times, source/segment fingerprints, aggregate capture window, and explicit cross-system atomicity.
+
+PostgreSQL and SQL Server checkpoint reads use provider-supported consistent transactions (repeatable read and serializable respectively). Filesystem/CSV capture is observed, not atomic, and detects ordinary input changes during capture. Mixed endpoint checkpoints report `CrossSystemAtomic: false`. Failed/cancelled checkpoints retain diagnostics but cannot be replayed.
+
+`proofshift snapshot <config>` creates the checkpoint. `proofshift project <config> --checkpoint <id-or-path>` validates the checkpoint and uses it as the only source provider; graph/configuration/source coverage mismatch, tampering, or missing data fails before target preparation. Replay retains original artifact identity and provenance and adds checkpoint provenance. Shadow projection remains distinct from verification and never writes to production targets.
+
+Focused storage tests cover all normalized value kinds, relationships/temporal metadata, binary round-trip, tamper rejection, incomplete-state rejection, and selector mismatch. The Docker pension scenario captures all three source nodes, changes CSV/document inputs, stops SQL Server, and reproduces the live projection fingerprint from the checkpoint. Full local solution validation passed 86 tests with 0 failures and 2 Windows symlink-permission skips. PS-0.6 remote CI acceptance remains pending; PS-0.7 and later remain out of scope.
 
 ## PS-0 non-goals
 

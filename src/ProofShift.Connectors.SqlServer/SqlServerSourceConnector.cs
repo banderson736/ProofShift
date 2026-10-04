@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Data;
 using Microsoft.Data.SqlClient;
 using ProofShift.Connectors.Abstractions;
 
@@ -9,6 +10,8 @@ public sealed class SqlServerSourceConnector : RelationalSourceConnectorBase
     public SqlServerSourceConnector() : base("sqlserver", "0.1.0")
     {
     }
+
+    protected override IsolationLevel? CheckpointIsolationLevel => IsolationLevel.Serializable;
 
     protected override string ColumnsSql => """
         SELECT columns.name, types.name, columns.is_nullable, columns.column_id

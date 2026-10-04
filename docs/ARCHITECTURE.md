@@ -296,6 +296,16 @@ Connector-dependent snapshot metadata may include:
 
 The snapshot manifest and hash must be preserved with the run.
 
+### PS-0.6 materialized checkpoints
+
+PS-0.6 implements a replayable logical checkpoint for the exact source nodes in the compiled graph. `ProofShift.Snapshots` owns capture orchestration, local persistence, typed codecs, fingerprints, and checkpoint-backed source streams; Domain and Graph contain only connector/storage-neutral checkpoint metadata. `ICheckpointSourceConnector` is an optional capability and does not replace the ordinary streaming read contract.
+
+Structured records are streamed to versioned NDJSON segments. Binary values are copied to SHA-256-addressed blobs with bounded buffers and length/hash verification. The manifest records configuration/graph hashes, source-node selector hashes, endpoint consistency, capture start/completion, artifact/byte counts, endpoint/source fingerprints, segment hashes, aggregate capture interval, and `CrossSystemAtomic`. A checkpoint becomes `Complete` only after every required segment and the canonical manifest are finalized. Failed/cancelled data may remain for diagnosis but is never replayable.
+
+PostgreSQL checkpoint reads use repeatable-read transactions; SQL Server reads use serializable transactions. These are per-endpoint provider guarantees, not guarantees about inspection performed before the transaction. Filesystem and CSV are `Observed`: the filesystem compares a matched-file inventory around the read, and CSV compares file state/hash around logical-row parsing. For mixed endpoints, cross-system atomicity is false and the aggregate time window is reported.
+
+Checkpoint-backed Projection validates the current configuration hash, compiled graph hash, exact source-node set, endpoint identity, and selector hash before preparing destinations. It verifies manifest, segments, source fingerprints, and binary blobs before replay. The provider has no live-connector fallback, and original artifact identity/provenance is retained with additive checkpoint provenance. `proofshift project --checkpoint` therefore cannot mix checkpoint and live source reads.
+
 ## Shadow projection
 
 A projection creates realistic isolated output rather than merely calculating an abstract result. Projection is operational output, not a verification conclusion: it answers what the compiled graph produced, not whether that output is correct.
@@ -312,7 +322,7 @@ PS-0.5 implements PostgreSQL schemas named `proofshift_shadow_<run-guid>` and fi
 
 The Projection Journal is append-only JSONL under `.proofshift/projections/<run-guid>/journal.jsonl`. A pending ancestry entry is flushed before target writes, followed by produced/failed status; exclusions and metadata-only relationships are also explicit. Entries record source/target artifact references, target graph node, edge ID/name/version, transformation types/versions and field mappings, and recovery metadata. It records execution ancestry only; it is not an Evidence Graph and makes no correctness claim. Merge and chained target-input execution are deferred until grouping/join semantics are specified.
 
-The `proofshift-projection-fingerprint-v1` digest is computed from graph hash and canonical values read back from materialized shadow targets in deterministic node/identity/field order. It excludes run IDs, timestamps, schema names, and machine paths. Failed/cancelled output and its journal are retained for inspection; no automatic cleanup or rollback is performed. PS-0.5 operates on live source observations and does not claim snapshot or point-in-time reproducibility.
+The `proofshift-projection-fingerprint-v1` digest is computed from graph hash and canonical values read back from materialized shadow targets in deterministic node/identity/field order. It excludes run IDs, timestamps, schema names, and machine paths. Failed/cancelled output and its journal are retained for inspection; no automatic cleanup or rollback is performed. Without `--checkpoint`, PS-0.5 behavior continues to read live source observations. With `--checkpoint`, Projection records the checkpoint ID, source fingerprint, and manifest hash on the run; neither path claims correctness or production safety.
 
 ## Verification levels
 

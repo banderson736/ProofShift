@@ -87,6 +87,31 @@ public sealed class ConnectorRuntimeTests
     }
 
     [Fact]
+    public async Task FilesystemCheckpointReadRejectsMatchedFileChangedDuringCapture()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var path = Path.Combine(root, "member.txt");
+            await File.WriteAllTextAsync(path, "before", TestContext.Current.CancellationToken);
+            var connector = new FilesystemSourceConnector();
+            var context = Context("files", [new KeyValuePair<string, string>("root", root)]);
+            var selector = new ArtifactSelector("file-pattern", [new KeyValuePair<string, string>("pattern", "*.txt")], ["relativePath"]);
+            await using var enumerator = connector.ReadForCheckpointAsync(context, selector, new ReadOptions(),
+                TestContext.Current.CancellationToken).GetAsyncEnumerator(TestContext.Current.CancellationToken);
+
+            Assert.True(await enumerator.MoveNextAsync());
+            await File.WriteAllTextAsync(path, "changed-after-observation", TestContext.Current.CancellationToken);
+            var exception = await Assert.ThrowsAsync<ConnectorReadException>(async () => await enumerator.MoveNextAsync());
+            Assert.Equal(ConnectorIssueCodes.ArtifactChangedDuringCapture, exception.Code);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task CsvConnectorStreamsQuotedUtf8FieldsAndCompositeIdentity()
     {
         var root = CreateTemporaryDirectory();

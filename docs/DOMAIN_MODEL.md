@@ -92,6 +92,14 @@ public sealed record EndpointSnapshot
 }
 ```
 
+### Source checkpoint lifecycle
+
+The runtime checkpoint model is an immutable, finalized source basis. `Creating`, `Failed`, and `Cancelled` checkpoints may retain diagnostic partial data but cannot claim replayability or finalized fingerprints. Only a complete materialized checkpoint can be opened for replay.
+
+Each `CheckpointEndpoint` identifies one graph source node, its system/endpoint/connector and version, selector hash and identity fields, endpoint capture interval, `Observed` or `Consistent` source guarantee, artifact/byte counts, source-set fingerprint, and materialized segment hash/reference. `SourceCheckpoint` adds project/configuration/graph identity, aggregate source fingerprint, manifest hash, capture window/skew, and `CrossSystemAtomic`. In the PS-0.6 SQL Server/filesystem/CSV scenario, `CrossSystemAtomic` is false.
+
+Checkpoint types remain storage-neutral in Domain. The filesystem representation and replay implementation live in `ProofShift.Snapshots`; no path, connector implementation, database transaction, or serialization dependency is introduced into Domain.
+
 ## Artifact
 
 The smallest independently accountable source/target thing. More general than a database row.

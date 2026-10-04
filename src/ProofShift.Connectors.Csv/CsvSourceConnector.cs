@@ -8,10 +8,38 @@ using ProofShift.Domain;
 
 namespace ProofShift.Connectors.Csv;
 
-public sealed class CsvSourceConnector : ISourceConnector
+public sealed class CsvSourceConnector : ICheckpointSourceConnector
 {
     public ConnectorId Id { get; } = new("csv");
     public string Version => "0.1.0";
+    public SourceConsistencyGuarantee CheckpointConsistency => SourceConsistencyGuarantee.Observed;
+
+    public async IAsyncEnumerable<RecordEnvelope> ReadForCheckpointAsync(
+        ConnectorContext context,
+        ArtifactSelector selector,
+        ReadOptions options,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        if (!TryResolveCsvPath(context, selector, out var root, out var relativePath) ||
+            !ConnectorPathUtilities.TryResolveContainedPath(root, relativePath, out var fullPath))
+        {
+            throw new ConnectorReadException(ConnectorIssueCodes.PathOutsideRoot, "CSV path resolves outside the configured endpoint root.");
+        }
+
+        var before = await GetFileStateAsync(fullPath, cancellationToken).ConfigureAwait(false);
+        await foreach (var record in ReadAsync(context, selector, options, cancellationToken)
+            .WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            yield return record;
+        }
+
+        var after = await GetFileStateAsync(fullPath, cancellationToken).ConfigureAwait(false);
+        if (before != after)
+        {
+            throw new ConnectorReadException(ConnectorIssueCodes.ArtifactChangedDuringCapture,
+                "CSV source file changed while its logical rows were being captured.");
+        }
+    }
 
     public async Task<SourceInspection> InspectAsync(
         ConnectorContext context,
@@ -357,6 +385,24 @@ public sealed class CsvSourceConnector : ISourceConnector
         }
 
         return ",";
+    }
+
+    private static async Task<(long Length, long LastWriteTicks, string Sha256)> GetFileStateAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var info = new FileInfo(path);
+        if (!info.Exists)
+        {
+            throw new ConnectorReadException(ConnectorIssueCodes.ArtifactChangedDuringCapture, "CSV source file disappeared during capture.");
+        }
+
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var hash = await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false);
+        info.Refresh();
+        return (info.Length, info.LastWriteTimeUtc.Ticks, Convert.ToHexString(hash).ToLowerInvariant());
     }
 
     private static string ValidateDelimiter(string delimiter)

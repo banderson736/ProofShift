@@ -9,7 +9,7 @@ using ProofShift.Domain;
 
 namespace ProofShift.Connectors.Abstractions;
 
-public abstract class RelationalSourceConnectorBase : ISourceConnector, ISourceBinaryContentResolver
+public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector, ISourceBinaryContentResolver
 {
     private static readonly Regex IdentifierPattern = new("^[A-Za-z_][A-Za-z0-9_$]*$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
@@ -27,6 +27,11 @@ public abstract class RelationalSourceConnectorBase : ISourceConnector, ISourceB
     protected abstract string PrimaryKeySql { get; }
     protected abstract string ApproximateRowCountSql { get; }
     protected abstract string QuoteIdentifier(string identifier);
+    protected virtual IsolationLevel? CheckpointIsolationLevel => null;
+
+    public SourceConsistencyGuarantee CheckpointConsistency => CheckpointIsolationLevel is null
+        ? SourceConsistencyGuarantee.Observed
+        : SourceConsistencyGuarantee.Consistent;
 
     public async Task<SourceInspection> InspectAsync(
         ConnectorContext context,
@@ -214,10 +219,25 @@ public abstract class RelationalSourceConnectorBase : ISourceConnector, ISourceB
         }
     }
 
-    public async IAsyncEnumerable<RecordEnvelope> ReadAsync(
+    public IAsyncEnumerable<RecordEnvelope> ReadAsync(
         ConnectorContext context,
         ArtifactSelector selector,
         ReadOptions options,
+        CancellationToken cancellationToken) =>
+        ReadRecordsAsync(context, selector, options, isolationLevel: null, cancellationToken);
+
+    public IAsyncEnumerable<RecordEnvelope> ReadForCheckpointAsync(
+        ConnectorContext context,
+        ArtifactSelector selector,
+        ReadOptions options,
+        CancellationToken cancellationToken) =>
+        ReadRecordsAsync(context, selector, options, CheckpointIsolationLevel, cancellationToken);
+
+    private async IAsyncEnumerable<RecordEnvelope> ReadRecordsAsync(
+        ConnectorContext context,
+        ArtifactSelector selector,
+        ReadOptions options,
+        IsolationLevel? isolationLevel,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -262,23 +282,36 @@ public abstract class RelationalSourceConnectorBase : ISourceConnector, ISourceB
 
         await using var connection = CreateConnectionForRead(connectionString);
         await OpenConnectionAsync(connection, cancellationToken).ConfigureAwait(false);
+        await using var transaction = isolationLevel is { } isolation
+            ? await connection.BeginTransactionAsync(isolation, cancellationToken).ConfigureAwait(false)
+            : null;
         var sql = BuildSelectSql(schema, table, selectedColumns, identity);
-        await using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        await using var reader = await ExecuteReaderAsync(command, cancellationToken).ConfigureAwait(false);
         string? previousArtifactId = null;
-        while (await ReadNextAsync(reader, cancellationToken).ConfigureAwait(false))
+        await using (var command = connection.CreateCommand())
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var record = await CreateRecordEnvelopeAsync(context, reader, schema, table, identity, cancellationToken).ConfigureAwait(false);
-            if (string.Equals(previousArtifactId, record.Artifact.Id.Value, StringComparison.Ordinal))
+            command.CommandText = sql;
+            command.Transaction = transaction;
+            await using (var reader = await ExecuteReaderAsync(command, cancellationToken).ConfigureAwait(false))
             {
-                throw new ConnectorReadException(ConnectorIssueCodes.DuplicateArtifactIdentity,
-                    "Source read encountered duplicate artifact identities.");
-            }
+                while (await ReadNextAsync(reader, cancellationToken).ConfigureAwait(false))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var record = await CreateRecordEnvelopeAsync(context, reader, schema, table, identity, cancellationToken).ConfigureAwait(false);
+                    if (string.Equals(previousArtifactId, record.Artifact.Id.Value, StringComparison.Ordinal))
+                    {
+                        throw new ConnectorReadException(ConnectorIssueCodes.DuplicateArtifactIdentity,
+                            "Source read encountered duplicate artifact identities.");
+                    }
 
-            previousArtifactId = record.Artifact.Id.Value;
-            yield return record;
+                    previousArtifactId = record.Artifact.Id.Value;
+                    yield return record;
+                }
+            }
+        }
+
+        if (transaction is not null)
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 

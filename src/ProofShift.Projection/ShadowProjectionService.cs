@@ -14,15 +14,18 @@ public sealed class ShadowProjectionService
     private readonly ConnectorRegistry _sourceConnectors;
     private readonly ShadowTargetConnectorRegistry _targetConnectors;
     private readonly RuntimeConnectorContextFactory _contextFactory;
+    private readonly ISourceArtifactStreamProvider? _sourceProvider;
 
     public ShadowProjectionService(
         ConnectorRegistry sourceConnectors,
         ShadowTargetConnectorRegistry targetConnectors,
-        RuntimeConnectorContextFactory? contextFactory = null)
+        RuntimeConnectorContextFactory? contextFactory = null,
+        ISourceArtifactStreamProvider? sourceProvider = null)
     {
         _sourceConnectors = sourceConnectors ?? throw new ArgumentNullException(nameof(sourceConnectors));
         _targetConnectors = targetConnectors ?? throw new ArgumentNullException(nameof(targetConnectors));
         _contextFactory = contextFactory ?? new RuntimeConnectorContextFactory();
+        _sourceProvider = sourceProvider;
     }
 
     public async Task<ProjectionRun> ProjectAsync(
@@ -64,20 +67,43 @@ public sealed class ShadowProjectionService
                 throw new ProjectionExecutionException("PSPROJ_GRAPH", "Projection requires at least one source and one shadow destination node.");
             }
 
-            var sourceContexts = new Dictionary<MigrationNodeId, (ISourceConnector Connector, ConnectorContext Context)>();
+            if (_sourceProvider is not null)
+            {
+                var requiredSourceKeys = sourceNodes.Select(node => node.Name).Order(StringComparer.Ordinal).ToArray();
+                var checkpointSourceKeys = _sourceProvider.CheckpointSourceNodeKeys?.Order(StringComparer.Ordinal).ToArray() ?? [];
+                if (_sourceProvider.CheckpointConfigurationHash != configuration.ConfigurationHash ||
+                    _sourceProvider.CheckpointGraphHash != graph.GraphHash ||
+                    !requiredSourceKeys.SequenceEqual(checkpointSourceKeys, StringComparer.Ordinal))
+                {
+                    throw new ProjectionExecutionException("PSPROJ_CHECKPOINT_MISMATCH",
+                        "Checkpoint configuration, compiled graph, or exact source-node coverage does not match this projection request.");
+                }
+            }
+
+            var sourceContexts = new Dictionary<MigrationNodeId, (ISourceConnector? Connector, ConnectorContext Context)>();
             foreach (var source in sourceNodes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var context = _contextFactory.Create(configuration, source);
-                var connector = _sourceConnectors.Resolve(context.Connector);
-                var inspection = await connector.InspectAsync(context, source.Selector, cancellationToken).ConfigureAwait(false);
-                if (inspection.Status != SourceInspectionStatus.Valid)
+                var connector = _sourceProvider is null ? _sourceConnectors.Resolve(context.Connector) : null;
+                string connectorVersion;
+                if (_sourceProvider is null)
                 {
-                    throw new ProjectionExecutionException("PSPROJ_SOURCE_INSPECTION", $"Source inspection failed for graph node '{source.Name}'.");
+                    var inspection = await connector!.InspectAsync(context, source.Selector, cancellationToken).ConfigureAwait(false);
+                    if (inspection.Status != SourceInspectionStatus.Valid)
+                    {
+                        throw new ProjectionExecutionException("PSPROJ_SOURCE_INSPECTION", $"Source inspection failed for graph node '{source.Name}'.");
+                    }
+
+                    connectorVersion = connector.Version;
+                }
+                else
+                {
+                    connectorVersion = await _sourceProvider.ValidateAsync(source.Name, context, source.Selector, cancellationToken).ConfigureAwait(false);
                 }
 
                 sourceContexts.Add(source.Id, (connector, context));
-                versions[$"source:{source.Name}"] = connector.Version;
+                versions[$"source:{source.Name}"] = connectorVersion;
             }
 
             foreach (var target in targetNodes)
@@ -132,8 +158,10 @@ public sealed class ShadowProjectionService
                     throw new ProjectionExecutionException("PSPROJ_GRAPH", "Executable projection edge has no target node.");
                 }
 
-                await foreach (var sourceRecord in sourceRuntime.Connector
-                    .ReadAsync(sourceRuntime.Context, sourceNode.Selector, new ReadOptions(), cancellationToken)
+                var sourceRecords = _sourceProvider is null
+                    ? sourceRuntime.Connector!.ReadAsync(sourceRuntime.Context, sourceNode.Selector, new ReadOptions(), cancellationToken)
+                    : _sourceProvider.ReadAsync(sourceNode.Name, sourceRuntime.Context, sourceNode.Selector, cancellationToken);
+                await foreach (var sourceRecord in sourceRecords
                     .WithCancellation(cancellationToken).ConfigureAwait(false))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -155,11 +183,11 @@ public sealed class ShadowProjectionService
                         try
                         {
                             projected = TransformationRuntime.Transform(sourceRecord, edge, target);
-                            var binaryResolver = sourceRuntime.Connector as ISourceBinaryContentResolver;
                             Func<string, CancellationToken, ValueTask<Stream>>? openBinary = null;
                             if (projected.Values.Any(pair => pair.Value is BinaryReferenceValue))
                             {
-                                if (binaryResolver is null)
+                                var binaryResolver = sourceRuntime.Connector as ISourceBinaryContentResolver;
+                                if (_sourceProvider is null && binaryResolver is null)
                                 {
                                     throw new ProjectionExecutionException("PSPROJ_BINARY_RESOLVER", "Source connector cannot reopen binary content for streaming projection.");
                                 }
@@ -171,8 +199,11 @@ public sealed class ShadowProjectionService
                                         throw new ProjectionExecutionException("PSPROJ_BINARY_REFERENCE", "Projected binary field has no source content reference.");
                                     }
 
-                                    return binaryResolver.OpenBinaryReadAsync(sourceRuntime.Context, sourceNode.Selector,
-                                        sourceRecord.Artifact, binary, token);
+                                    return _sourceProvider is not null
+                                        ? _sourceProvider.OpenBinaryReadAsync(sourceNode.Name, sourceRuntime.Context, sourceNode.Selector,
+                                            sourceRecord.Artifact, binary, token)
+                                        : binaryResolver!.OpenBinaryReadAsync(sourceRuntime.Context, sourceNode.Selector,
+                                            sourceRecord.Artifact, binary, token);
                                 };
                             }
 
@@ -281,7 +312,10 @@ public sealed class ShadowProjectionService
             fingerprint,
             connectorVersions,
             shadowDestinations,
-            journalRelativePath);
+            journalRelativePath,
+            _sourceProvider?.CheckpointId,
+            _sourceProvider?.CheckpointSourceFingerprint,
+            _sourceProvider?.CheckpointManifestHash);
     }
 
     private static void ValidateRoles(LoadedProjectConfiguration configuration, MigrationGraph graph)

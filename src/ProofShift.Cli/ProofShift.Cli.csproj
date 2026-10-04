@@ -10,6 +10,7 @@
     <ProjectReference Include="../ProofShift.Graph/ProofShift.Graph.csproj" />
     <ProjectReference Include="../ProofShift.Engine/ProofShift.Engine.csproj" />
     <ProjectReference Include="../ProofShift.Projection/ProofShift.Projection.csproj" />
+    <ProjectReference Include="../ProofShift.Snapshots/ProofShift.Snapshots.csproj" />
     <ProjectReference Include="../ProofShift.Reporting/ProofShift.Reporting.csproj" />
     <ProjectReference Include="../ProofShift.Connectors.Abstractions/ProofShift.Connectors.Abstractions.csproj" />
     <ProjectReference Include="../ProofShift.Connectors.Postgres/ProofShift.Connectors.Postgres.csproj" />

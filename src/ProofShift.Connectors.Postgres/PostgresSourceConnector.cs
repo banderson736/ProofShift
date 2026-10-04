@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Data;
 using Npgsql;
 using ProofShift.Connectors.Abstractions;
 
@@ -9,6 +10,8 @@ public sealed class PostgresSourceConnector : RelationalSourceConnectorBase
     public PostgresSourceConnector() : base("postgres", "0.1.0")
     {
     }
+
+    protected override IsolationLevel? CheckpointIsolationLevel => IsolationLevel.RepeatableRead;
 
     protected override string ColumnsSql => """
         SELECT column_name, data_type, is_nullable, ordinal_position

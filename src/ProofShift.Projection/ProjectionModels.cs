@@ -90,6 +90,9 @@ public sealed record ProjectionRun
     public string? FailureCode { get; }
     public string? Fingerprint { get; }
     public string FingerprintVersion { get; }
+    public string? CheckpointId { get; }
+    public string? CheckpointSourceFingerprint { get; }
+    public string? CheckpointManifestHash { get; }
     public IReadOnlyDictionary<string, string> ConnectorVersions { get; }
     public IReadOnlyCollection<string> ShadowDestinations { get; }
     public string JournalPath { get; }
@@ -109,7 +112,10 @@ public sealed record ProjectionRun
         string? fingerprint,
         IEnumerable<KeyValuePair<string, string>> connectorVersions,
         IEnumerable<string> shadowDestinations,
-        string journalPath)
+        string journalPath,
+        string? checkpointId = null,
+        string? checkpointSourceFingerprint = null,
+        string? checkpointManifestHash = null)
     {
         Id = id;
         Type = RunType.Projection;
@@ -125,6 +131,9 @@ public sealed record ProjectionRun
         FailureCode = string.IsNullOrWhiteSpace(failureCode) ? null : failureCode.Trim();
         Fingerprint = fingerprint;
         FingerprintVersion = "proofshift-projection-fingerprint-v1";
+        CheckpointId = checkpointId;
+        CheckpointSourceFingerprint = checkpointSourceFingerprint;
+        CheckpointManifestHash = checkpointManifestHash;
         ConnectorVersions = new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(
             new SortedDictionary<string, string>(connectorVersions.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal), StringComparer.Ordinal));
         ShadowDestinations = Array.AsReadOnly(shadowDestinations.Order(StringComparer.Ordinal).ToArray());
