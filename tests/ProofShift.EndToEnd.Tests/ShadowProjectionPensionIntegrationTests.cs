@@ -667,6 +667,25 @@ public sealed class ShadowProjectionPensionIntegrationTests
             Assert.Equal(dryRunJson.RootElement.GetProperty("dryRunFingerprint").GetString(),
                 recoveryReportJson.RootElement.GetProperty("dryRunFingerprint").GetString());
 
+            var pensionReport = await RunCliAsync(cli, fixture, environment, "report", "--run", dryRunId!, "--json");
+            Assert.Equal(0, pensionReport.ExitCode);
+            Assert.DoesNotContain(sqlBuilder.ConnectionString, pensionReport.StandardOutput, StringComparison.Ordinal);
+            Assert.DoesNotContain(postgresContainer.GetConnectionString(), pensionReport.StandardOutput, StringComparison.Ordinal);
+            using var pensionReportJson = JsonDocument.Parse(pensionReport.StandardOutput);
+            Assert.Equal("proofshift-pension-assurance-report-v1", pensionReportJson.RootElement.GetProperty("format").GetString());
+            Assert.Equal("QUALIFIED", pensionReportJson.RootElement.GetProperty("qualification").GetString());
+            Assert.Equal(dryRunJson.RootElement.GetProperty("verificationEvidenceFingerprint").GetString(),
+                pensionReportJson.RootElement.GetProperty("verificationEvidenceFingerprint").GetString());
+            Assert.Empty(pensionReportJson.RootElement.GetProperty("exceptions").EnumerateArray());
+
+            var sameRunComparison = await RunCliAsync(cli, fixture, environment, "compare",
+                "--before", dryRunId!, "--after", dryRunId!, "--json");
+            Assert.Equal(0, sameRunComparison.ExitCode);
+            using var comparisonJson = JsonDocument.Parse(sameRunComparison.StandardOutput);
+            Assert.False(comparisonJson.RootElement.GetProperty("evidenceFingerprintChanged").GetBoolean());
+            Assert.Empty(comparisonJson.RootElement.GetProperty("defectsResolved").EnumerateObject());
+            Assert.Empty(comparisonJson.RootElement.GetProperty("defectsIntroduced").EnumerateObject());
+
             var snapshot = await RunCliAsync(cli, fixture, environment, "snapshot", "--json");
             Assert.Equal(0, snapshot.ExitCode);
             using var snapshotJson = JsonDocument.Parse(snapshot.StandardOutput);

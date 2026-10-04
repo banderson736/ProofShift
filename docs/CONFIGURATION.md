@@ -30,7 +30,7 @@ project:
 
 pack:
   id: proofshift.pension
-  version: "0.1"
+  version: "0.9.0"
 
 systems:
   source:
@@ -270,6 +270,8 @@ employment-continuity:
     allowOpenEndedFinalPeriod: true
   severity: high
 ```
+
+  Pension financial rule definitions accept explicit decimal `tolerance` options; contribution and payment rules default to `0.01`. The option is included in the rule-set fingerprint. Pension timeline, entity-key, relationship, code-field, and document-hash assumptions are configured per rule; the pack does not infer plan/jurisdiction rules from physical schema names.
 
 ## Recovery policy
 

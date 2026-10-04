@@ -204,6 +204,37 @@ public sealed record VerificationSourceFact(string NodeKey, string SemanticType,
 
 public sealed record VerificationGraphArtifact(string NodeKey, ArtifactReference Artifact);
 
+public enum VerificationArtifactRole
+{
+    Source,
+    ExpectedTarget,
+    ActualTarget
+}
+
+public sealed record VerificationArtifactRecord
+{
+    public string NodeKey { get; }
+    public VerificationArtifactRole Role { get; }
+    public string SemanticType { get; }
+    public ArtifactReference Artifact { get; }
+    public DomainDictionary<ValueNode> Values { get; }
+    public DomainList<RelationshipReference> Relationships { get; }
+    public TemporalMetadata? Temporal { get; }
+
+    public VerificationArtifactRecord(string nodeKey, VerificationArtifactRole role, string semanticType,
+        ArtifactReference artifact, IEnumerable<KeyValuePair<string, ValueNode>> values,
+        IEnumerable<RelationshipReference>? relationships = null, TemporalMetadata? temporal = null)
+    {
+        NodeKey = string.IsNullOrWhiteSpace(nodeKey) ? throw new ArgumentException("Node key is required.", nameof(nodeKey)) : nodeKey.Trim();
+        Role = role;
+        SemanticType = string.IsNullOrWhiteSpace(semanticType) ? throw new ArgumentException("Semantic type is required.", nameof(semanticType)) : semanticType.Trim();
+        Artifact = artifact ?? throw new ArgumentNullException(nameof(artifact));
+        Values = new DomainDictionary<ValueNode>(values);
+        Relationships = new DomainList<RelationshipReference>(relationships ?? []);
+        Temporal = temporal;
+    }
+}
+
 public sealed record VerificationTargetFact(string NodeKey, string SemanticType, ArtifactReference Artifact, int ActualCount,
     IReadOnlyCollection<VerificationGraphArtifact> Sources, IReadOnlyCollection<MigrationEdgeId> EdgeIds);
 
@@ -228,6 +259,9 @@ public interface IVerificationWorkspace : IAsyncDisposable
     Task AddTargetObservationAsync(string nodeKey, RecordEnvelope record, CancellationToken cancellationToken);
 
     IAsyncEnumerable<VerificationSourceFact> ReadSourceFactsAsync(CancellationToken cancellationToken);
+    IAsyncEnumerable<VerificationArtifactRecord> ReadArtifactRecordsAsync(VerificationArtifactRole role,
+        string? nodeKey, string? semanticType, CancellationToken cancellationToken,
+        IReadOnlyCollection<string>? orderByFields = null);
     IAsyncEnumerable<VerificationTargetFact> ReadMaterializedJournalTargetsAsync(CancellationToken cancellationToken);
     IAsyncEnumerable<VerificationTargetFact> ReadActualTargetsAsync(CancellationToken cancellationToken);
     IAsyncEnumerable<VerificationTargetFact> ReadMissingTargetFactsAsync(CancellationToken cancellationToken);

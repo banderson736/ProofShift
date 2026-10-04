@@ -50,3 +50,15 @@ The PS-0.5 synthetic fixture now declares `restore` for the member split because
 After a clean checkpoint-backed projection and verification, `proofshift dry-run <path-to-ps05/proofshift.yaml> --json` captures target baselines, applies a deterministic shadow-only mutation, restores and re-reads both target backends, then records dry-run qualification. `proofshift recovery <path-to-ps05/proofshift.yaml> --run <dry-run-id> --json` verifies persisted recovery-artifact integrity before reporting it.
 
 The end-to-end false-Reverse scenario includes two deliberately lossy mappings: a many-to-one status map and a pass-through code map. Projection and Verification succeed from the matching checkpoint/graph, while Recovery rejects both configured inverses and the dry run is not qualified.
+
+## PS-0.9 Public Pension Assurance vertical
+
+The versioned clean generator and independent v1 defect injector are described in [the demo guide](../../docs/demo/PENSION_DEMO.md) and pack contract (`docs/PENSION_PACK.md`). Generate CSV fixtures with:
+
+```powershell
+dotnet run --project src/ProofShift.Cli -- demo generate .proofshift/pension-demo --scale fast --seed 20261003
+```
+
+Output separates clean legacy `source/`, corrected semantic `target-corrected/`, and injected `target-defective/` data. `demo-manifest.json` records versions, scale, seed, counts, and source fingerprint. The direct-target rule test resolves Pension rules against externally supplied target records without invoking Projection.
+
+This is not yet the full multi-store PS-0.9 dry-run fixture: generated CSV records are not currently loaded into the legacy SQL Server/PostgreSQL target graph, generated documents are metadata/hash rows rather than binary files, and both false-Reverse cases are not executable graph edges. The accepted physical `ps05` fixture remains the separate projection/recovery demonstration.

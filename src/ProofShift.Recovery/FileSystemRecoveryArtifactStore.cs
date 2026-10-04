@@ -12,6 +12,13 @@ public sealed record RecoveryArtifactReceipt(DryRunId Id, string RelativeDirecto
 public sealed record RecoveryArtifactSummary
 {
     public DryRunId Id { get; }
+    public RunId VerificationRunId { get; }
+    public string ConfigurationHash { get; }
+    public string GraphHash { get; }
+    public string CheckpointManifestHash { get; }
+    public string SourceFingerprint { get; }
+    public string ProjectionFingerprint { get; }
+    public string RuleSetFingerprint { get; }
     public DryRunQualificationStatus Status { get; }
     public string DryRunFingerprint { get; }
     public string PolicyFingerprint { get; }
@@ -35,7 +42,9 @@ public sealed record RecoveryArtifactSummary
     public IReadOnlyList<string> Reasons { get; }
     public IReadOnlyCollection<RecoverySemanticTypeCoverage> BySemanticType { get; }
 
-    internal RecoveryArtifactSummary(DryRunId id, DryRunQualificationStatus status, string dryRunFingerprint,
+    internal RecoveryArtifactSummary(DryRunId id, RunId verificationRunId, string configurationHash,
+        string graphHash, string checkpointManifestHash, string sourceFingerprint, string projectionFingerprint,
+        string ruleSetFingerprint, DryRunQualificationStatus status, string dryRunFingerprint,
         string policyFingerprint, string assessmentFingerprint, string planFingerprint, string rehearsalFingerprint,
         string verificationEvidenceFingerprint, string recoveryEvidenceFingerprint, long executedEdges,
         long reverseEdges, long restoreEdges, long compensateEdges, long irreversibleEdges,
@@ -44,6 +53,13 @@ public sealed record RecoveryArtifactSummary
         IReadOnlyList<string> reasons, IEnumerable<RecoverySemanticTypeCoverage> bySemanticType)
     {
         Id = id;
+        VerificationRunId = verificationRunId;
+        ConfigurationHash = configurationHash;
+        GraphHash = graphHash;
+        CheckpointManifestHash = checkpointManifestHash;
+        SourceFingerprint = sourceFingerprint;
+        ProjectionFingerprint = projectionFingerprint;
+        RuleSetFingerprint = ruleSetFingerprint;
         Status = status;
         DryRunFingerprint = dryRunFingerprint;
         PolicyFingerprint = policyFingerprint;
@@ -171,7 +187,10 @@ public sealed class FileSystemRecoveryArtifactStore : IRecoveryArtifactStore
         var qualification = await ReadAsync<QualificationDocument>(directory, "qualification.json", cancellationToken).ConfigureAwait(false);
         var assessment = await ReadAsync<AssessmentDocument>(directory, "assessment.json", cancellationToken).ConfigureAwait(false);
         var rehearsal = await ReadAsync<RehearsalDocument>(directory, "rehearsal.json", cancellationToken).ConfigureAwait(false);
-        return new RecoveryArtifactSummary(dryRunId, Enum.Parse<DryRunQualificationStatus>(qualification.Status, ignoreCase: true),
+        return new RecoveryArtifactSummary(dryRunId, new RunId(Guid.ParseExact(assessment.VerificationRunId, "D")),
+            assessment.ConfigurationHash, assessment.GraphHash, assessment.CheckpointManifestHash,
+            assessment.SourceFingerprint, assessment.ProjectionFingerprint, assessment.RuleSetFingerprint,
+            Enum.Parse<DryRunQualificationStatus>(qualification.Status, ignoreCase: true),
             qualification.DryRunFingerprint, qualification.PolicyFingerprint, qualification.AssessmentFingerprint,
             qualification.PlanFingerprint, qualification.RehearsalFingerprint, qualification.VerificationEvidenceFingerprint,
             qualification.RecoveryEvidenceFingerprint, assessment.ExecutedEdges,

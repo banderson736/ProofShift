@@ -11,6 +11,7 @@ using ProofShift.Evidence;
 using ProofShift.Graph;
 using ProofShift.Packs.Pension;
 using ProofShift.Projection;
+using ProofShift.Reporting;
 using ProofShift.Recovery;
 using ProofShift.Snapshots;
 using ProofShift.Domain;
@@ -28,6 +29,10 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        if (args.Length >= 2 && string.Equals(args[0], "demo", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(args[1], "generate", StringComparison.OrdinalIgnoreCase))
+            return await PensionDemoGenerator.GenerateAsync(args.Skip(2).ToArray()).ConfigureAwait(false);
+
         if (args.Length < 2)
         {
             WriteUsage();
@@ -38,6 +43,8 @@ internal static class Program
         string? checkpoint = null;
         string? projection = null;
         string? verificationRun = null;
+        string? beforeDryRun = null;
+        string? afterDryRun = null;
         for (var index = 2; index < args.Length; index++)
         {
             if (string.Equals(args[index], "--json", StringComparison.OrdinalIgnoreCase))
@@ -58,6 +65,16 @@ internal static class Program
                 index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
             {
                 verificationRun = args[++index];
+            }
+            else if (string.Equals(args[index], "--before", StringComparison.OrdinalIgnoreCase) &&
+                index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                beforeDryRun = args[++index];
+            }
+            else if (string.Equals(args[index], "--after", StringComparison.OrdinalIgnoreCase) &&
+                index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                afterDryRun = args[++index];
             }
             else
             {
@@ -110,6 +127,17 @@ internal static class Program
         if (string.Equals(args[0], "recovery", StringComparison.OrdinalIgnoreCase) && verificationRun is not null)
         {
             return await ReadRecoveryAsync(args[1], verificationRun, jsonOutput).ConfigureAwait(false);
+        }
+
+        if (string.Equals(args[0], "report", StringComparison.OrdinalIgnoreCase) && verificationRun is not null)
+        {
+            return await ReadPensionReportAsync(args[1], verificationRun, jsonOutput).ConfigureAwait(false);
+        }
+
+        if (string.Equals(args[0], "compare", StringComparison.OrdinalIgnoreCase) &&
+            beforeDryRun is not null && afterDryRun is not null)
+        {
+            return await ComparePensionRunsAsync(args[1], beforeDryRun, afterDryRun, jsonOutput).ConfigureAwait(false);
         }
 
         WriteUsage();
@@ -721,6 +749,119 @@ internal static class Program
         Console.WriteLine($"RESULT: {(output.Outcome == "qualified" ? "QUALIFIED DRY RUN" : "DRY RUN NOT QUALIFIED")}");
     }
 
+    private static async Task<int> ReadPensionReportAsync(string path, string dryRunId, bool jsonOutput)
+    {
+        try
+        {
+            var report = await LoadPensionReportAsync(path, dryRunId).ConfigureAwait(false);
+            if (jsonOutput) Console.WriteLine(JsonSerializer.Serialize(report, JsonOptions));
+            else WritePensionReport(report);
+            return 0;
+        }
+        catch
+        {
+            Console.Error.WriteLine("Pension assurance report could not be assembled or failed integrity/context verification.");
+            return 1;
+        }
+    }
+
+    private static async Task<int> ComparePensionRunsAsync(string path, string beforeDryRunId,
+        string afterDryRunId, bool jsonOutput)
+    {
+        try
+        {
+            var before = await LoadPensionReportAsync(path, beforeDryRunId).ConfigureAwait(false);
+            var after = await LoadPensionReportAsync(path, afterDryRunId).ConfigureAwait(false);
+            var comparison = PensionAssuranceReportBuilder.Compare(before, after);
+            if (jsonOutput) Console.WriteLine(JsonSerializer.Serialize(comparison, JsonOptions));
+            else
+            {
+                Console.WriteLine("ProofShift Pension Dry-Run Comparison");
+                Console.WriteLine($"Before: {comparison.BeforeQualification} ({comparison.BeforeDryRunId})");
+                Console.WriteLine($"After: {comparison.AfterQualification} ({comparison.AfterDryRunId})");
+                Console.WriteLine($"Evidence Fingerprint Changed: {comparison.EvidenceFingerprintChanged}");
+                Console.WriteLine($"Recovery Evidence Fingerprint Changed: {comparison.RecoveryEvidenceFingerprintChanged}");
+                Console.WriteLine($"Dry-Run Fingerprint Changed: {comparison.DryRunFingerprintChanged}");
+                Console.WriteLine($"Source Fingerprint Changed: {comparison.SourceFingerprintChanged}");
+                Console.WriteLine($"Projection Fingerprint Changed: {comparison.ProjectionFingerprintChanged}");
+                Console.WriteLine($"Configuration / Graph / Rules / Recovery Policy Changed: {comparison.ConfigurationHashChanged} / {comparison.GraphHashChanged} / {comparison.RuleSetFingerprintChanged} / {comparison.RecoveryPolicyFingerprintChanged}");
+                Console.WriteLine($"Qualification Changed: {comparison.QualificationChanged}");
+                foreach (var attribution in comparison.DifferenceAttribution) Console.WriteLine($"Difference Attribution: {attribution}");
+                foreach (var (code, count) in comparison.DefectsResolved) Console.WriteLine($"Resolved {code}: {count}");
+                foreach (var (code, count) in comparison.DefectsIntroduced) Console.WriteLine($"Introduced {code}: {count}");
+            }
+            return 0;
+        }
+        catch
+        {
+            Console.Error.WriteLine("Pension runs could not be compared or failed integrity/context verification.");
+            return 1;
+        }
+    }
+
+    private static async Task<PensionAssuranceReport> LoadPensionReportAsync(string configurationPath, string dryRunId)
+    {
+        if (!Guid.TryParse(dryRunId, out var parsedDryRunId))
+            throw new ArgumentException("Dry-run identifier must be a GUID.", nameof(dryRunId));
+        var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(configurationPath))
+            ?? throw new InvalidOperationException("Project configuration directory is unavailable.");
+        var loaded = await new ConfigurationLoader().LoadAsync(configurationPath).ConfigureAwait(false);
+        if (loaded.Configuration is null) throw new InvalidDataException("Report configuration is invalid.");
+        var compilation = MigrationGraphCompiler.Compile(loaded.Configuration);
+        if (!compilation.IsValid || compilation.Graph is null)
+            throw new InvalidDataException("Report migration graph is invalid.");
+        var recoveryStore = new FileSystemRecoveryArtifactStore(Path.Combine(projectDirectory, ".proofshift", "recovery"));
+        var recovery = await recoveryStore.ReadSummaryAsync(new DryRunId(parsedDryRunId), CancellationToken.None).ConfigureAwait(false);
+        if (loaded.Configuration.ConfigurationHash != recovery.ConfigurationHash || compilation.Graph.GraphHash != recovery.GraphHash)
+            throw new InvalidDataException("Current configuration or graph does not match the selected dry run.");
+        var evidenceStore = new FileSystemEvidenceStore(Path.Combine(projectDirectory, ".proofshift", "verifications"));
+        if (!await evidenceStore.VerifyIntegrityAsync(recovery.VerificationRunId, CancellationToken.None).ConfigureAwait(false))
+            throw new InvalidDataException("Verification evidence integrity verification failed.");
+        await using var stream = await evidenceStore.OpenReadAsync(recovery.VerificationRunId, CancellationToken.None).ConfigureAwait(false);
+        using var document = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
+        return PensionAssuranceReportBuilder.Build(loaded.Configuration.Root.Project?.Name ?? Path.GetFileName(projectDirectory), new DryRunId(parsedDryRunId),
+            document.RootElement, recovery);
+    }
+
+    private static void WritePensionReport(PensionAssuranceReport report)
+    {
+        Console.WriteLine("ProofShift Public Pension Migration Assurance");
+        Console.WriteLine();
+        Console.WriteLine("EXECUTIVE SUMMARY");
+        Console.WriteLine($"Qualification: {report.Qualification}");
+        Console.WriteLine($"Verification: {report.VerificationOutcome}; {report.VerificationFailureCount} failed evidence records; {report.WarningCount} warnings");
+        Console.WriteLine();
+        Console.WriteLine("MIGRATION SCOPE");
+        Console.WriteLine($"Configuration: {report.ConfigurationHash}");
+        Console.WriteLine($"Migration Graph: {report.GraphHash}");
+        Console.WriteLine($"Source Checkpoint: {report.SourceFingerprint}");
+        Console.WriteLine($"Projection: {report.ProjectionFingerprint}");
+        Console.WriteLine($"Rule Set: {report.RuleSetFingerprint}");
+        Console.WriteLine();
+        foreach (var section in report.Sections)
+            Console.WriteLine($"{section.Name}: {section.FailedFindings} exceptions, {section.PassedFindings} passed findings, {section.WarningFindings} warnings");
+        Console.WriteLine($"Unaccounted Sources: {report.UnaccountedSources}");
+        Console.WriteLine($"Unexplained Targets: {report.UnexplainedTargets}");
+        Console.WriteLine();
+        Console.WriteLine("RECOVERY READINESS");
+        Console.WriteLine($"Rehearsal: {report.RehearsalOutcome}");
+        Console.WriteLine($"Recoverable Artifacts: {report.RecoverableArtifacts}/{report.AffectedRecoveryArtifacts}");
+        Console.WriteLine($"Irrecoverable / Unknown Artifacts: {report.IrrecoverableArtifacts} / {report.UnknownRecoveryArtifacts}");
+        Console.WriteLine($"Failed Recovery Edges: {report.FailedRecoveryEdges}");
+        foreach (var coverage in report.RecoveryBySemanticType)
+            Console.WriteLine($"{coverage.SemanticType}: {coverage.RecoverableArtifacts}/{coverage.AffectedArtifacts} recoverable");
+        Console.WriteLine();
+        Console.WriteLine("EXCEPTIONS");
+        foreach (var exception in report.Exceptions)
+            Console.WriteLine($"{exception.Code} [{exception.Severity}] Evidence {exception.EvidenceId}: {exception.Explanation}");
+        if (report.Exceptions.Count == 0) Console.WriteLine("None.");
+        Console.WriteLine();
+        Console.WriteLine($"VERIFICATION EVIDENCE: {report.VerificationEvidenceFingerprint}");
+        Console.WriteLine($"RECOVERY EVIDENCE: {report.RecoveryEvidenceFingerprint}");
+        Console.WriteLine($"DRY-RUN FINGERPRINT: {report.DryRunFingerprint}");
+        Console.WriteLine($"RESULT: {(report.Qualification == "QUALIFIED" ? "QUALIFIED DRY RUN" : "NOT QUALIFIED")}");
+    }
+
     private static async Task<int> ReadRecoveryAsync(string path, string dryRunId, bool jsonOutput)
     {
         try
@@ -1121,7 +1262,7 @@ internal static class Program
         issue.Message);
 
     private static void WriteUsage() =>
-        Console.Error.WriteLine("Usage: proofshift validate <config> [--json] | proofshift plan <config> [--json] | proofshift inspect <config> [--json] | proofshift snapshot <config> [--json] | proofshift project <config> [--checkpoint <id-or-path>] [--json] | proofshift verify <config> --checkpoint <id> --projection <run-id> [--json] | proofshift evidence <config> --run <verification-run-id> [--json] | proofshift recovery <config> --run <dry-run-id> [--json] | proofshift dry-run <config> [--json]");
+        Console.Error.WriteLine("Usage: proofshift validate <config> [--json] | proofshift plan <config> [--json] | proofshift inspect <config> [--json] | proofshift snapshot <config> [--json] | proofshift project <config> [--checkpoint <id-or-path>] [--json] | proofshift verify <config> --checkpoint <id> --projection <run-id> [--json] | proofshift evidence <config> --run <verification-run-id> [--json] | proofshift recovery <config> --run <dry-run-id> [--json] | proofshift report <config> --run <dry-run-id> [--json] | proofshift compare <config> --before <dry-run-id> --after <dry-run-id> [--json] | proofshift demo generate <output-directory> [--scale fast|large] [--seed <integer>] | proofshift dry-run <config> [--json]");
 
     private sealed record SnapshotOutput(
         string CheckpointId,

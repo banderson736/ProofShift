@@ -119,3 +119,10 @@ Status: Accepted for PS-0.8
 Recovery assessment consumes a complete Verification result and actual graph-scoped journal/lineage coverage. Source checkpoints remain pre-migration source inputs; target restore capability must be separately captured and validated. PostgreSQL per-run schema copies and filesystem per-run tree copies are shadow-only rehearsal mechanisms and do not claim provider-native production backup behavior. Recovery evidence is a separate immutable graph referencing the finalized PS-0.7 evidence. Qualification re-observes the physical target and requires exact shadow cleanup to the verified baseline, even when a registered semantic compensator validates a non-identical intermediate recovery result. See `docs/adr/0010-recovery-readiness-and-dry-run-qualification.md`.
 
 PS-0.8 was accepted after Docker-backed [GitHub Actions run 37190061657, job 111400188926](https://github.com/banderson736/ProofShift/actions/runs/37190061657/job/111400188926) passed the full solution test suite: 103 passed, 0 failed, and 0 skipped.
+
+### D-023 — Pension semantic rules consume generic ordered verification-record streams
+Status: Accepted for PS-0.9
+
+PS-0.9 adds `IVerificationWorkspace.ReadArtifactRecordsAsync`, which streams typed source, expected-target, and actual-target records from the private disk-backed SQLite workspace and can order them by normalized fields. Pension rules merge ordered groups to bound transaction, payment, service-credit, and timeline working sets. The shared Verification layer contains no pension concepts; pack rules remain registered through `PensionPack`. See `docs/adr/0011-streamable-verification-record-observations.md`.
+
+PS-0.9 is in progress. Local focused tests cover the generator, exact rule-level defect findings, clean semantic differences, external-target rule execution, and CLI report/comparison. The new data export is not yet wired to a complete SQL Server/PostgreSQL/document dry-run graph, the two false-Reverse declarations are not executable graph edges, and remote Docker-backed PS-0.9 CI has not run.

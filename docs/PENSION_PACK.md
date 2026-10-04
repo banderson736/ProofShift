@@ -189,7 +189,7 @@ Member HAS_DOCUMENT Document
 
 Future models may introduce Employer/Plan/Payroll semantic types. Do not add them until a vertical slice needs them.
 
-## Initial rule catalog
+## PS-0.9 rule catalog
 
 ### Accounting
 
@@ -247,6 +247,49 @@ Future models may introduce Employer/Plan/Payroll semantic types. Do not add the
 
 - `RecoveryCoverageRule`
 - `RequiredSnapshotRule`
+
+The implemented provider currently registers `MemberAccountingRule`, `MemberUniquenessRule`, `PensionMemberPresenceRule`, `PensionMemberStatusRule`, `EmploymentTimelineRule`, `ContributionAccountingRule`, `ContributionTotalRule`, `ServiceCreditTotalRule`, `BeneficiaryRelationshipRule`, `RetirementElectionRule`, `BenefitPaymentRule`, `BenefitPaymentTotalRule`, `DocumentAccountingRule`, `DocumentRelationshipRule`, and `PensionCodeTransformationRule`. Generic source disposition, target lineage, unexpected-target, and physical attribute rules remain provided by generic Verification. All rule logic is resolved through the existing versioned provider registry; the provider identity is `proofshift.pension` version `0.9.0`.
+
+The installed rule types are configured by their registry identifiers (for example `pension-employment-timeline`, `pension-contribution-total`, and `pension-document-accounting`). Each configured definition supplies a rule version and options; its version/options and the Pension provider version contribute to the generic rule-set fingerprint. Financial rules use an explicit decimal `tolerance`, defaulting to `0.01`; the tolerance is part of the rule definition fingerprint.
+
+## Semantic comparison contracts
+
+### Employment history
+
+`EmploymentTimelineRule` groups source intervals and target events by configured member keys. It checks valid starts, overlaps, optional gaps, effective dates, and state transitions. A legacy ACTIVE/INACTIVE/ACTIVE interval sequence may correspond to target JOINED/TERMINATED/REINSTATED events. The rule compares semantic event dates/codes, not physical row shape or row count. Configure source/target node keys and field names explicitly; `allowGaps` defaults to false.
+
+The small generator currently creates three contiguous intervals per generated member and a structurally different target event record for each interval. It does not model every jurisdiction's rehire, leave, purchased service, concurrent employer, or plan-specific continuity rules.
+
+### Financial reconciliation
+
+`ContributionAccountingRule` compares transaction identity, member, period, category, and decimal amount. `ContributionTotalRule` compares exact transaction counts and decimal totals for configured member/period/category groups. `BenefitPaymentRule` performs transaction-level identity/member/period/date/amount checks; `BenefitPaymentTotalRule` adds period totals. Evidence stores safe grouping fingerprints and count/total/difference/tolerance values, not member names or raw record payloads.
+
+`ServiceCreditTotalRule` groups by member by default and compares decimal totals while allowing physical period records to be restructured. It intentionally does not require equal row counts. The rule does not calculate actuarial eligibility, vesting, or benefit amounts.
+
+### Relationships and elections
+
+`BeneficiaryRelationshipRule` checks beneficiary identity, member association, referenced-member existence when `memberNode` is configured, relationship type, and allocation tolerance. `DocumentRelationshipRule` checks document/member association. Retirement-election codes are expected to be mapped in the migration graph; `RetirementElectionRule` compares the graph-derived target option, identity, and effective date. The pack does not invent jurisdiction-specific election semantics.
+
+### Documents and exports
+
+`DocumentAccountingRule` compares expected and observed document identities/content hashes; its `missingCode` option lets the same generic pack rule classify historical exports separately. `DocumentRelationshipRule` checks member ownership. Source dispositions and target lineage are still calculated by generic Verification and must be inspected alongside the document rules. The current deterministic generator emits document/export metadata and content hashes into CSV; it does not yet create binary payload files or a configured archive disposition workflow.
+
+## Deterministic data and defects
+
+`PensionSyntheticDatasetGenerator` version `proofshift-pension-generator-v1` produces a clean dataset lazily. `PensionTargetDataModel` version `proofshift-pension-target-model-v1` changes names, code representations, and employment intervals to target events. `PensionDefectInjector` is a separate transformation identified by `proofshift-pension-defects-v1`. The default seed is `20261003`; identical seed, version, and scale produce the same source fingerprint and records.
+
+The fast scale is 100 members, 300 employment periods, 5,000 contributions, 350 service periods, 160 beneficiaries, 35 retirement elections, 2,000 benefit payments, 250 documents, and 25 historical exports. The lazy large scale targets 100,000 members, 300,000 employment periods, 5,000,000 contributions, 350,000 service periods, 160,000 beneficiaries, 35,000 elections, 2,000,000 payments, 250,000 documents, and 25,000 exports. Large-scale performance has not yet been benchmarked.
+
+The v1 defect manifest declares exactly 149 discrepancies across the 18 categories in `PensionDefectCounts.V1`; unit/evidence tests assert the implemented 17 record-level finding categories exactly, while the two false-Reverse declarations are tracked in the manifest and are not yet wired into an executable PS-0.9 migration graph. This is a remaining acceptance gap.
+
+## Known limitations
+
+- The new CSV generator and direct-target rule tests are not yet composed into a complete PS-0.9 SQL Server/PostgreSQL/filesystem dry-run fixture.
+- Recovery coverage is evaluated by generic `ProofShift.Recovery`; a separate Pension-owned `RecoveryCoverageRule` is not currently registered because Recovery runs after Verification and remains domain-neutral.
+- Direct-target testing proves rule/evidence independence from Projection at the workspace boundary, but an external target connector scenario through the full `VerificationService` checkpoint/graph binding is still required.
+- Rule streaming is bounded by one configured group/member timeline, except the beneficiary rule currently keeps the configured member-key set in memory. The evidence report materializes persisted evidence JSON; a production-scale report should become a streaming reader.
+- The demo command writes synthetic CSV representations; there is no million-record performance benchmark, physical document-payload archive, generated DDL for the larger source/target schema, or end-to-end scale result yet.
+- Timeline transition semantics and code maps are configurable but intentionally generic within the pension pack. Validate assumptions with a pension subject-matter expert before applying them to a real system.
 
 ## Important semantic distinction: artifact vs concept
 

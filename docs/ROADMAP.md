@@ -158,36 +158,32 @@ Acceptance requires:
 - the clean pension fixture returns `QUALIFIED DRY RUN`; fault scenarios return `NOT QUALIFIED` with stable reasons;
 - full solution validation and remote Docker-backed CI pass with no required skips.
 
-PS-0.8 is accepted. Do not begin PS-0.9 without an explicit new assignment.
+PS-0.8 is accepted. PS-0.9 Public Pension Assurance Vertical is the active assignment. Do not begin PS-0.10 without an explicit new assignment.
 
-### PS-0.9 Historical data
+### PS-0.9 Public Pension Assurance Vertical
 
-Add `EMPLOYMENT_HISTORY` with semantic timeline comparison.
+Status: In progress. The vertical extends `ProofShift.Packs.Pension` with versioned semantic rules, typed source/expected/actual record streams in the generic disk-backed Verification workspace, a deterministic clean-data generator and separate v1 defect injector, evidence-backed `report`/`compare` commands, and a CSV fixture generator.
 
-Demonstrate structurally different but semantically equivalent history.
+Implemented and locally validated:
 
-### PS-0.10 Financial data
+- Pension-owned rules cover member presence/uniqueness/status, interval/event employment timelines, contribution accounting/totals, service-credit totals, beneficiary relationships, retirement-election mapping, benefit-payment accounting/totals, document identity/hash/ownership, and code transformations;
+- generator `proofshift-pension-generator-v1`, target model `proofshift-pension-target-model-v1`, and defect set `proofshift-pension-defects-v1` are deterministic and versioned; fast and large lazy scales are defined;
+- exact rule-level assertions detect the 17 implemented artifact-level defect categories, clean timeline event/interval equivalence passes, and a regrouped service-credit representation passes on equal total;
+- direct external-target rule tests use the registered Pension provider and create an Evidence Graph without running Projection;
+- human/JSON report and run-comparison commands read persisted evidence, recovery artifacts, and verify run/fingerprint/configuration/graph binding;
+- Docker-backed existing PS-0.8 CLI/recovery scenarios still pass after pack expansion.
 
-Add:
+Acceptance still requires:
 
-- CONTRIBUTION;
-- BENEFIT_PAYMENT;
-- aggregate financial reconciliation;
-- tolerance semantics.
+- connect generated pension data to a complete multi-source SQL Server/filesystem/CSV to structurally different PostgreSQL/document shadow graph and run defective plus corrected end-to-end dry runs;
+- represent both false-Reverse cases as actual configured graph edges and assert the Recovery engine rejects them after successful Projection/Verification;
+- exact report counts for all 18 categories, including executable recovery findings, plus corrected zero counts, source accounting, target lineage, recovery readiness, and Qualified status;
+- exercise report redaction, evidence-backed exception drill-down, resolved/introduced run comparison, and difference attribution across distinct persisted defective/corrected runs;
+- run full service-level Verification against externally populated target state without depending on Projection output;
+- add an opt-in dataset/throughput/duration/memory benchmark and verify the large generator without running large benchmarks in ordinary CI;
+- update the full pension demo and buyer/operator flow, complete schema fixtures, and run all required remote Docker-backed CI with no skips.
 
-### PS-0.11 Relationships
-
-Add BENEFICIARY and correct/incorrect member relationships.
-
-### PS-0.12 Files/documents
-
-Add filesystem/object abstraction and document accounting/provenance.
-
-### PS-0.13 Full synthetic scenario
-
-Scale generator; inject full deterministic defect manifest; produce final dry-run/readiness report and machine-readable evidence.
-
-PS-0 is not complete until every deliberately introduced defect is detected with no false failures among deliberately correct transformations.
+Do not add production migration/rollback, SaaS, UI, AI, FHIR, Oracle, DB2, Kubernetes, or unrelated platform features. Do not begin PS-0.10 until PS-0.9 is accepted.
 
 ## Commercial validation gate after PS-0 / during PS-0
 

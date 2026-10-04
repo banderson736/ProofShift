@@ -442,6 +442,10 @@ public enum VerificationScope
 }
 ```
 
+PS-0.9's generic runtime `VerificationArtifactRecord` carries one source, expected-target, or observed-target normalized `RecordEnvelope` scoped to a graph node. `IVerificationWorkspace.ReadArtifactRecordsAsync` is an ordered asynchronous stream, optionally filtered by node/semantic type and sorted by normalized fields. The implementation persists the temporary typed working set in SQLite and removes it when the run completes. Pack rules may aggregate a current group, but must not retain the whole production-scale dataset.
+
+Pension concepts/rules remain outside Domain. `Pension.Member`, `Pension.Employment`, `Pension.Contribution`, `Pension.ServiceCredit`, `Pension.Beneficiary`, `Pension.RetirementElection`, `Pension.BenefitPayment`, and `Pension.Document` are pack-owned semantic types. Their evidence uses generic `EvidenceRecord`, graph-scoped `EvidenceReference`, `VerificationArtifactRecord`, dispositions, and lineage.
+
 ## Evidence
 
 ```csharp

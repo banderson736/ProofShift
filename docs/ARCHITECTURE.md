@@ -355,6 +355,10 @@ Every source has disposition; every target has lineage.
 ### Recovery
 Recovery coverage and destructive-operation readiness.
 
+PS-0.9 adds `VerificationArtifactRecord` as a generic typed source/expected-target/actual-target observation returned through `IVerificationWorkspace.ReadArtifactRecordsAsync`. The temporary SQLite workspace stores a private typed representation for the duration of verification and can order streams by configured normalized fields. Domain rules merge ordered groups and release each group before advancing, avoiding whole-transaction materialization in memory. The interface and workspace contain no pension concepts; pension rules remain in `ProofShift.Packs.Pension`. Evidence still stores only safe values/fingerprints and graph-scoped references.
+
+The CLI `report` consumes the persisted Verification Evidence Graph and integrity-checked Recovery summary. It requires exact Verification run/evidence/configuration/graph binding and derives exception counts from evidence records. `compare` compares persisted report projections and uses fingerprints for supported difference attribution; it does not recalculate verification.
+
 ## Observability
 
 ProofShift has two distinct observability layers.

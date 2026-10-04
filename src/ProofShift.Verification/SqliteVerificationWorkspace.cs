@@ -58,6 +58,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
                     identity_hash TEXT NOT NULL,
                     semantic_type TEXT NOT NULL,
                     record_hash TEXT NOT NULL,
+                    record_json TEXT NOT NULL,
                     PRIMARY KEY(node_key, artifact_id)
                 );
                 CREATE TABLE expected_targets (
@@ -73,7 +74,8 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
                     source_node_key TEXT NOT NULL,
                     edge_id TEXT NOT NULL,
                     edge_name TEXT NOT NULL,
-                    operation TEXT NOT NULL
+                    operation TEXT NOT NULL,
+                    record_json TEXT NOT NULL
                 );
                 CREATE INDEX expected_identity_idx ON expected_targets(node_key, identity_hash);
                 CREATE TABLE expected_values (
@@ -113,7 +115,8 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
                     target_type TEXT NOT NULL,
                     identity_hash TEXT NOT NULL,
                     semantic_type TEXT NOT NULL,
-                    record_hash TEXT NOT NULL
+                    record_hash TEXT NOT NULL,
+                    record_json TEXT NOT NULL
                 );
                 CREATE INDEX actual_identity_idx ON actual_targets(node_key, identity_hash);
                 CREATE TABLE actual_values (
@@ -140,10 +143,11 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         await using var transaction = _connection.BeginTransaction();
         await using var command = _connection.CreateCommand();
         command.Transaction = (SqliteTransaction)transaction;
-        command.CommandText = "INSERT INTO source_artifacts (artifact_id,node_key,system_id,endpoint_id,artifact_type,identity_hash,semantic_type,record_hash) VALUES ($id,$node,$system,$endpoint,$type,$identity,$semantic,$record) ON CONFLICT(node_key,artifact_id) DO NOTHING";
+        command.CommandText = "INSERT INTO source_artifacts (artifact_id,node_key,system_id,endpoint_id,artifact_type,identity_hash,semantic_type,record_hash,record_json) VALUES ($id,$node,$system,$endpoint,$type,$identity,$semantic,$record,$recordJson) ON CONFLICT(node_key,artifact_id) DO NOTHING";
         AddArtifactParameters(command, record.Artifact, nodeKey);
         command.Parameters.AddWithValue("$semantic", record.SemanticType);
         command.Parameters.AddWithValue("$record", SnapshotFingerprints.RecordFingerprint(record));
+        command.Parameters.AddWithValue("$recordJson", VerificationArtifactRecordCodec.Encode(record));
         var changed = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         if (changed > 0) SourceArtifactCount++;
@@ -170,7 +174,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         await using var transaction = _connection.BeginTransaction();
         await using var targetCommand = _connection.CreateCommand();
         targetCommand.Transaction = (SqliteTransaction)transaction;
-        targetCommand.CommandText = "INSERT INTO expected_targets (node_key,target_id,target_system,target_endpoint,target_type,identity_hash,semantic_type,source_id,source_node_key,edge_id,edge_name,operation) VALUES ($node,$id,$system,$endpoint,$type,$identity,$semantic,$source,$sourceNode,$edge,$edgeName,$operation)";
+        targetCommand.CommandText = "INSERT INTO expected_targets (node_key,target_id,target_system,target_endpoint,target_type,identity_hash,semantic_type,source_id,source_node_key,edge_id,edge_name,operation,record_json) VALUES ($node,$id,$system,$endpoint,$type,$identity,$semantic,$source,$sourceNode,$edge,$edgeName,$operation,$recordJson)";
         AddArtifactParameters(targetCommand, expected.Artifact, nodeKey, "$target");
         targetCommand.Parameters.AddWithValue("$semantic", expected.SemanticType);
         targetCommand.Parameters.AddWithValue("$source", source.Artifact.Id.Value);
@@ -178,6 +182,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         targetCommand.Parameters.AddWithValue("$edge", edge.Id.Value.ToString("D", CultureInfo.InvariantCulture));
         targetCommand.Parameters.AddWithValue("$edgeName", edge.Name);
         targetCommand.Parameters.AddWithValue("$operation", edge.Operation.Type.ToString());
+        targetCommand.Parameters.AddWithValue("$recordJson", VerificationArtifactRecordCodec.Encode(expected));
         await targetCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         var expectedSequence = await ReadLastInsertRowIdAsync(transaction, cancellationToken).ConfigureAwait(false);
         foreach (var pair in expected.Values.OrderBy(pair => pair.Key, StringComparer.Ordinal))
@@ -251,10 +256,11 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         await using var transaction = (SqliteTransaction)await _connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await using var targetCommand = _connection.CreateCommand();
         targetCommand.Transaction = (SqliteTransaction)transaction;
-        targetCommand.CommandText = "INSERT INTO actual_targets (node_key,target_id,target_system,target_endpoint,target_type,identity_hash,semantic_type,record_hash) VALUES ($node,$id,$system,$endpoint,$type,$identity,$semantic,$record)";
+        targetCommand.CommandText = "INSERT INTO actual_targets (node_key,target_id,target_system,target_endpoint,target_type,identity_hash,semantic_type,record_hash,record_json) VALUES ($node,$id,$system,$endpoint,$type,$identity,$semantic,$record,$recordJson)";
         AddArtifactParameters(targetCommand, record.Artifact, nodeKey, "$target");
         targetCommand.Parameters.AddWithValue("$semantic", record.SemanticType);
         targetCommand.Parameters.AddWithValue("$record", SnapshotFingerprints.RecordFingerprint(record));
+        targetCommand.Parameters.AddWithValue("$recordJson", VerificationArtifactRecordCodec.Encode(record));
         await targetCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         var sequence = await ReadLastInsertRowIdAsync(transaction, cancellationToken).ConfigureAwait(false);
         foreach (var pair in record.Values.OrderBy(pair => pair.Key, StringComparer.Ordinal))
@@ -303,6 +309,53 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
 
     public IAsyncEnumerable<VerificationTargetFact> ReadMaterializedJournalTargetsAsync(CancellationToken cancellationToken) =>
         ReadJournalTargetFactsAsync(requiredActualCount: null, cancellationToken);
+
+    public async IAsyncEnumerable<VerificationArtifactRecord> ReadArtifactRecordsAsync(VerificationArtifactRole role,
+        string? nodeKey, string? semanticType,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken,
+        IReadOnlyCollection<string>? orderByFields = null)
+    {
+        ThrowIfDisposed();
+        var (table, idColumn, sequenceColumn) = role switch
+        {
+            VerificationArtifactRole.Source => ("source_artifacts", "artifact_id", "rowid"),
+            VerificationArtifactRole.ExpectedTarget => ("expected_targets", "target_id", "seq"),
+            VerificationArtifactRole.ActualTarget => ("actual_targets", "target_id", "seq"),
+            _ => throw new ArgumentOutOfRangeException(nameof(role))
+        };
+        var filters = new List<string>();
+        var ordering = new List<string> { "t.node_key" };
+        await using var command = _connection.CreateCommand();
+        if (!string.IsNullOrWhiteSpace(nodeKey))
+        {
+            filters.Add("t.node_key=$node");
+            command.Parameters.AddWithValue("$node", nodeKey.Trim());
+        }
+        if (!string.IsNullOrWhiteSpace(semanticType))
+        {
+            filters.Add("t.semantic_type=$semantic");
+            command.Parameters.AddWithValue("$semantic", semanticType.Trim());
+        }
+        var orderIndex = 0;
+        foreach (var field in orderByFields ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(field)) throw new ArgumentException("Ordering fields must not be empty.", nameof(orderByFields));
+            var parameter = $"$orderField{orderIndex}";
+            command.Parameters.AddWithValue(parameter, field.Trim());
+            ordering.Add($"(SELECT COALESCE(json_extract(value, '$.value.text'), CAST(json_extract(value, '$.value.integer') AS TEXT), CASE json_extract(value, '$.value.boolean') WHEN 1 THEN 'true' WHEN 0 THEN 'false' ELSE '' END, '') FROM json_each(t.record_json, '$.values') WHERE json_extract(value, '$.name')={parameter} LIMIT 1)");
+            orderIndex++;
+        }
+        ordering.Add($"t.identity_hash");
+        ordering.Add($"t.{idColumn}");
+        command.CommandText = $"SELECT t.node_key,t.semantic_type,t.record_json FROM {table} AS t{(filters.Count == 0 ? string.Empty : " WHERE " + string.Join(" AND ", filters))} ORDER BY {string.Join(',', ordering)}";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return VerificationArtifactRecordCodec.Decode(reader.GetString(2), reader.GetString(0), role,
+                reader.GetString(1));
+        }
+    }
 
     public IAsyncEnumerable<VerificationTargetFact> ReadMissingTargetFactsAsync(CancellationToken cancellationToken) =>
         ReadJournalTargetFactsAsync(requiredActualCount: 0, cancellationToken);

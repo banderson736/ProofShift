@@ -58,6 +58,50 @@ public sealed class VerificationWorkspaceTests
         }
     }
 
+    [Fact]
+    public async Task ArtifactRecordStreamPreservesTypedValuesRelationshipsAndTemporalMetadata()
+    {
+        var temporaryRoot = Path.Combine(Path.GetTempPath(), $"proofshift-verification-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temporaryRoot);
+        try
+        {
+            await using var workspace = await SqliteVerificationWorkspace.CreateAsync(temporaryRoot, TestContext.Current.CancellationToken);
+            var member = Record("member-1", "source", "members", "7", "Pension.Member", "status", "ACTIVE");
+            var employmentArtifact = new ArtifactReference(new ArtifactId("employment-1"), new SystemId("source"),
+                new StorageEndpointId("employment"), "row", "7|2020-01-01");
+            var employment = new RecordEnvelope(employmentArtifact, "Pension.Employment",
+                [new KeyValuePair<string, ValueNode>("member_id", new IntegerValue(7)),
+                 new KeyValuePair<string, ValueNode>("credit", new DecimalValue(0.875m)),
+                 new KeyValuePair<string, ValueNode>("effective_from", new DateValue(new DateOnly(2020, 1, 1)))],
+                member.Provenance,
+                [new RelationshipReference("HAS_EMPLOYMENT", member.Artifact, RelationshipDirection.Outgoing)],
+                new TemporalMetadata(new DateTimeOffset(2020, 1, 1, 0, 0, 0, TimeSpan.Zero), null));
+
+            await workspace.AddSourceArtifactAsync("employment-history", employment, TestContext.Current.CancellationToken);
+
+            var actual = Assert.Single(await CollectAsync(workspace.ReadArtifactRecordsAsync(
+                VerificationArtifactRole.Source, "employment-history", "Pension.Employment", TestContext.Current.CancellationToken)));
+            Assert.Equal(employment.Artifact, actual.Artifact);
+            Assert.Equal(employment.Values, actual.Values);
+            Assert.Equal(employment.Relationships, actual.Relationships);
+            Assert.Equal(employment.Temporal, actual.Temporal);
+            Assert.Empty(await CollectAsync(workspace.ReadArtifactRecordsAsync(
+                VerificationArtifactRole.ActualTarget, null, null, TestContext.Current.CancellationToken)));
+
+            await workspace.AddSourceArtifactAsync("ordered-members",
+                Record("source-z", "source", "members", "z", "Pension.Member", "member_id", "z"), TestContext.Current.CancellationToken);
+            await workspace.AddSourceArtifactAsync("ordered-members",
+                Record("source-a", "source", "members", "a", "Pension.Member", "member_id", "a"), TestContext.Current.CancellationToken);
+            var ordered = await CollectAsync(workspace.ReadArtifactRecordsAsync(VerificationArtifactRole.Source,
+                "ordered-members", "Pension.Member", TestContext.Current.CancellationToken, ["member_id"]));
+            Assert.Equal(["a", "z"], ordered.Select(record => record.Artifact.Identity));
+        }
+        finally
+        {
+            if (Directory.Exists(temporaryRoot)) Directory.Delete(temporaryRoot, recursive: true);
+        }
+    }
+
     private static RecordEnvelope Record(string artifactId, string systemId, string nodeEndpoint, string identity,
         string semanticType, string field, string value) => new(
         new ArtifactReference(new ArtifactId(artifactId), new SystemId(systemId), new StorageEndpointId(nodeEndpoint), "row", identity),
