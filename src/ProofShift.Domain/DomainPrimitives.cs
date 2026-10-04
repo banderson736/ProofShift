@@ -59,6 +59,41 @@ public readonly record struct EvidenceId
     public EvidenceId(Guid value) => Value = DomainGuard.Required(value, nameof(value));
 }
 
+public readonly record struct RecoveryCheckpointId
+{
+    public Guid Value { get; }
+
+    public RecoveryCheckpointId(Guid value) => Value = DomainGuard.Required(value, nameof(value));
+}
+
+public readonly record struct RecoveryAssessmentId
+{
+    public Guid Value { get; }
+
+    public RecoveryAssessmentId(Guid value) => Value = DomainGuard.Required(value, nameof(value));
+}
+
+public readonly record struct RecoveryPlanId
+{
+    public Guid Value { get; }
+
+    public RecoveryPlanId(Guid value) => Value = DomainGuard.Required(value, nameof(value));
+}
+
+public readonly record struct RecoveryRehearsalId
+{
+    public Guid Value { get; }
+
+    public RecoveryRehearsalId(Guid value) => Value = DomainGuard.Required(value, nameof(value));
+}
+
+public readonly record struct DryRunId
+{
+    public Guid Value { get; }
+
+    public DryRunId(Guid value) => Value = DomainGuard.Required(value, nameof(value));
+}
+
 public readonly record struct ArtifactId
 {
     public string Value { get; }

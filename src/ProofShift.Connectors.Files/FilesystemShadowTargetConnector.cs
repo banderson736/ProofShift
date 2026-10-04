@@ -7,7 +7,7 @@ using ProofShift.Domain;
 
 namespace ProofShift.Connectors.Files;
 
-public sealed class FilesystemShadowTargetConnector : IShadowTargetConnector
+public sealed class FilesystemShadowTargetConnector : IShadowTargetRecoveryConnector
 {
     private readonly HashSet<string> _preparedRuns = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _prepareLock = new();
@@ -231,6 +231,109 @@ public sealed class FilesystemShadowTargetConnector : IShadowTargetConnector
         }
     }
 
+    public async Task<ShadowRecoveryCheckpoint> CaptureRecoveryCheckpointAsync(ShadowRecoveryRequest request,
+        CancellationToken cancellationToken)
+    {
+        ValidateRecoveryRequest(request);
+        var context = request.Targets[0].Context;
+        var root = ConnectorPathUtilities.ResolveRoot(context.ConnectorContext);
+        var runRoot = ResolveRunRoot(context);
+        var checkpointRelative = $".proofshift-recovery/{request.CheckpointId.Value:N}/contents";
+        if (!ConnectorPathUtilities.TryResolveContainedPath(root, checkpointRelative, out var checkpointContents))
+            throw RecoveryFailure(ShadowRecoveryIssueCodes.ContextMismatch, "Filesystem recovery path is outside the configured shadow root.");
+        var checkpointDirectory = Path.GetDirectoryName(checkpointContents)!;
+        if (Directory.Exists(checkpointDirectory) || File.Exists(checkpointDirectory))
+            throw RecoveryFailure(ShadowRecoveryIssueCodes.CheckpointUnavailable, "Filesystem recovery checkpoint ID already exists.");
+
+        try
+        {
+            Directory.CreateDirectory(checkpointDirectory);
+            await CopyDirectoryAsync(runRoot, checkpointContents, cancellationToken).ConfigureAwait(false);
+            var contentHash = await HashDirectoryAsync(checkpointContents, cancellationToken).ConfigureAwait(false);
+            return new ShadowRecoveryCheckpoint(request.CheckpointId, request.ShadowRunId, request.SystemId,
+                request.EndpointId, Id, Version, request.GraphHash, request.BaselineFingerprint,
+                request.TargetArtifactCount, checkpointRelative, contentHash, DateTimeOffset.UtcNow);
+        }
+        catch (OperationCanceledException)
+        {
+            TryDeleteDirectory(checkpointDirectory);
+            throw;
+        }
+        catch (ShadowRecoveryConnectorException)
+        {
+            TryDeleteDirectory(checkpointDirectory);
+            throw;
+        }
+        catch
+        {
+            TryDeleteDirectory(checkpointDirectory);
+            throw RecoveryFailure(ShadowRecoveryIssueCodes.CheckpointUnavailable, "Filesystem shadow recovery checkpoint could not be captured.");
+        }
+    }
+
+    public async Task ValidateRecoveryCheckpointAsync(ShadowRecoveryRequest request, ShadowRecoveryCheckpoint checkpoint,
+        CancellationToken cancellationToken)
+    {
+        ValidateRecoveryRequest(request);
+        ValidateCheckpointBinding(request, checkpoint);
+        var root = ConnectorPathUtilities.ResolveRoot(request.Targets[0].Context.ConnectorContext);
+        if (!ConnectorPathUtilities.TryResolveContainedPath(root, checkpoint.Reference, out var contents) ||
+            !Directory.Exists(contents))
+            throw RecoveryFailure(ShadowRecoveryIssueCodes.CheckpointUnavailable, "Filesystem shadow recovery checkpoint is unavailable.");
+        var actualHash = await HashDirectoryAsync(contents, cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(actualHash, checkpoint.ContentSha256, StringComparison.Ordinal))
+            throw RecoveryFailure(ShadowRecoveryIssueCodes.CheckpointIntegrityFailure, "Filesystem shadow recovery checkpoint failed integrity validation.");
+    }
+
+    public async Task<ShadowRecoveryMutation> ApplyControlledMutationAsync(ShadowRecoveryRequest request,
+        CancellationToken cancellationToken)
+    {
+        ValidateRecoveryRequest(request);
+        var runRoot = ResolveRunRoot(request.Targets[0].Context);
+        foreach (var target in request.Targets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var nodeDirectory = Path.Combine(runRoot, target.Context.ConnectorContext.NodeKey);
+            if (!Directory.Exists(nodeDirectory)) continue;
+            foreach (var file in EnumerateFilesSafely(nodeDirectory))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                EnsureNoReparsePoint(runRoot, file);
+                await using var stream = new FileStream(file, FileMode.Append, FileAccess.Write, FileShare.None,
+                    1, FileOptions.Asynchronous | FileOptions.WriteThrough);
+                await stream.WriteAsync(new byte[] { 0x58 }, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                return new ShadowRecoveryMutation(1, "Appended one controlled byte to one isolated shadow file.");
+            }
+        }
+
+        throw RecoveryFailure(ShadowRecoveryIssueCodes.RehearsalMutationFailed, "Filesystem recovery rehearsal found no shadow file to mutate.");
+    }
+
+    public async Task RestoreRecoveryCheckpointAsync(ShadowRecoveryRequest request, ShadowRecoveryCheckpoint checkpoint,
+        CancellationToken cancellationToken)
+    {
+        await ValidateRecoveryCheckpointAsync(request, checkpoint, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        var context = request.Targets[0].Context;
+        var root = ConnectorPathUtilities.ResolveRoot(context.ConnectorContext);
+        var runRoot = ResolveRunRoot(context);
+        if (!ConnectorPathUtilities.IsContained(root, runRoot) || string.Equals(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), Path.TrimEndingDirectorySeparator(Path.GetFullPath(runRoot)),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            throw RecoveryFailure(ShadowRecoveryIssueCodes.ContextMismatch, "Filesystem recovery target is not an isolated child of its configured root.");
+        var checkpointContents = Path.GetFullPath(Path.Combine(root, checkpoint.Reference.Replace('/', Path.DirectorySeparatorChar)));
+        Directory.Delete(runRoot, recursive: true);
+        try
+        {
+            await CopyDirectoryAsync(checkpointContents, runRoot, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            throw RecoveryFailure(ShadowRecoveryIssueCodes.RehearsalMutationFailed, "Filesystem shadow recovery restore failed.");
+        }
+    }
+
     private static string ResolveRunRoot(ShadowTargetContext context)
     {
         var root = ConnectorPathUtilities.ResolveRoot(context.ConnectorContext);
@@ -308,6 +411,112 @@ public sealed class FilesystemShadowTargetConnector : IShadowTargetConnector
         }
 
         return (length, Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant());
+    }
+
+    private void ValidateRecoveryRequest(ShadowRecoveryRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.ConnectorId != Id || request.Targets.Any(target => target.Context.ConnectorContext.Connector != Id ||
+            target.Context.Role != SystemRole.ShadowTarget || target.Context.RunId != request.ShadowRunId))
+            throw RecoveryFailure(ShadowRecoveryIssueCodes.ContextMismatch, "Filesystem recovery request does not match this shadow connector/run.");
+    }
+
+    private void ValidateCheckpointBinding(ShadowRecoveryRequest request, ShadowRecoveryCheckpoint checkpoint)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        if (checkpoint.Id != request.CheckpointId || checkpoint.ShadowRunId != request.ShadowRunId ||
+            checkpoint.SystemId != request.SystemId || checkpoint.EndpointId != request.EndpointId ||
+            checkpoint.ConnectorId != Id || checkpoint.ConnectorVersion != Version || checkpoint.GraphHash != request.GraphHash ||
+            checkpoint.BaselineFingerprint != request.BaselineFingerprint || checkpoint.TargetArtifactCount != request.TargetArtifactCount)
+            throw RecoveryFailure(ShadowRecoveryIssueCodes.ContextMismatch, "Filesystem recovery checkpoint binding does not match the requested shadow state.");
+    }
+
+    private static async Task CopyDirectoryAsync(string source, string destination, CancellationToken cancellationToken)
+    {
+        EnsureNoReparsePoint(source, source);
+        Directory.CreateDirectory(destination);
+        foreach (var file in Directory.EnumerateFiles(source).Order(StringComparer.Ordinal))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EnsureNoReparsePoint(source, file);
+            var target = Path.Combine(destination, Path.GetFileName(file));
+            await using var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            await using var output = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            await input.CopyToAsync(output, 64 * 1024, cancellationToken).ConfigureAwait(false);
+        }
+
+        foreach (var directory in Directory.EnumerateDirectories(source).Order(StringComparer.Ordinal))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EnsureNoReparsePoint(source, directory);
+            await CopyDirectoryAsync(directory, Path.Combine(destination, Path.GetFileName(directory)), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<string> HashDirectoryAsync(string directory, CancellationToken cancellationToken)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var file in EnumerateFilesSafely(directory))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EnsureNoReparsePoint(directory, file);
+            var relative = Path.GetRelativePath(directory, file).Replace(Path.DirectorySeparatorChar, '/');
+            var result = await HashFileAsync(file, cancellationToken).ConfigureAwait(false);
+            Append(hash, relative);
+            Append(hash, result.Length.ToString(CultureInfo.InvariantCulture));
+            Append(hash, result.Sha256);
+        }
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+    }
+
+    private static void Append(IncrementalHash hash, string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        Span<byte> size = stackalloc byte[sizeof(int)];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(size, bytes.Length);
+        hash.AppendData(size);
+        hash.AppendData(bytes);
+    }
+
+    private static void EnsureNoReparsePoint(string root, string path)
+    {
+        var current = Path.GetFullPath(path);
+        while (ConnectorPathUtilities.IsContained(root, current))
+        {
+            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                throw RecoveryFailure(ShadowRecoveryIssueCodes.ContextMismatch, "Filesystem recovery refuses to traverse a symbolic link.");
+            if (string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)), Path.TrimEndingDirectorySeparator(current),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) break;
+            current = Path.GetDirectoryName(current)!;
+        }
+    }
+
+    private static IEnumerable<string> EnumerateFilesSafely(string directory)
+    {
+        EnsureNoReparsePoint(directory, directory);
+        foreach (var file in Directory.EnumerateFiles(directory).Order(StringComparer.Ordinal))
+        {
+            EnsureNoReparsePoint(directory, file);
+            yield return file;
+        }
+        foreach (var child in Directory.EnumerateDirectories(directory).Order(StringComparer.Ordinal))
+        {
+            EnsureNoReparsePoint(directory, child);
+            foreach (var file in EnumerateFilesSafely(child)) yield return file;
+        }
+    }
+
+    private static ShadowRecoveryConnectorException RecoveryFailure(string code, string message) => new(code, message);
+
+    private static void TryDeleteDirectory(string directory)
+    {
+        try
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+        catch { }
     }
 
     private static async Task ReserveIdentityAsync(string runRoot, string nodeKey, string identity, string logicalPath,

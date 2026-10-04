@@ -97,7 +97,8 @@ edges:
         local_at: { source: LOCAL_AT }
         optional_value: { source: OPTIONAL_VALUE }
     recovery:
-      mode: reverse
+        mode: restore
+        requiresSnapshot: true
   supplemental-map:
     from: [source-csv]
     to: [supplemental-member]

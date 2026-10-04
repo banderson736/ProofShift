@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Data;
 using System.Globalization;
 using System.Security.Cryptography;
@@ -9,7 +10,7 @@ using ProofShift.Domain;
 
 namespace ProofShift.Connectors.Postgres;
 
-public sealed class PostgresShadowTargetConnector : IShadowTargetConnector
+public sealed class PostgresShadowTargetConnector : IShadowTargetRecoveryConnector
 {
     private static readonly Regex IdentifierPattern = new("^[A-Za-z_][A-Za-z0-9_$]*$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private readonly HashSet<string> _preparedSchemas = new(StringComparer.Ordinal);
@@ -199,6 +200,113 @@ public sealed class PostgresShadowTargetConnector : IShadowTargetConnector
         }
     }
 
+    public async Task<ShadowRecoveryCheckpoint> CaptureRecoveryCheckpointAsync(ShadowRecoveryRequest request,
+        CancellationToken cancellationToken)
+    {
+        ValidateRecoveryRequest(request);
+        var context = request.Targets[0].Context;
+        var sourceSchema = ShadowSchema(request.ShadowRunId);
+        var checkpointSchema = RecoverySchema(request.CheckpointId);
+        await using var connection = await OpenConnectionAsync(context, cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (await SchemaExistsAsync(connection, (NpgsqlTransaction)transaction, checkpointSchema, cancellationToken).ConfigureAwait(false))
+                throw RecoveryFailure(ShadowRecoveryIssueCodes.CheckpointUnavailable, "PostgreSQL recovery checkpoint ID already exists.");
+            await CopySchemaAsync(connection, (NpgsqlTransaction)transaction, sourceSchema, checkpointSchema, cancellationToken).ConfigureAwait(false);
+            var contentHash = await HashSchemaAsync(connection, (NpgsqlTransaction)transaction, checkpointSchema, cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return new ShadowRecoveryCheckpoint(request.CheckpointId, request.ShadowRunId, request.SystemId,
+                request.EndpointId, Id, Version, request.GraphHash, request.BaselineFingerprint,
+                request.TargetArtifactCount, $"postgres-schema-v1:{checkpointSchema}", contentHash, DateTimeOffset.UtcNow);
+        }
+        catch (OperationCanceledException)
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+        catch (ShadowRecoveryConnectorException)
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw RecoveryFailure(ShadowRecoveryIssueCodes.CheckpointUnavailable, "PostgreSQL shadow recovery checkpoint could not be captured.");
+        }
+    }
+
+    public async Task ValidateRecoveryCheckpointAsync(ShadowRecoveryRequest request, ShadowRecoveryCheckpoint checkpoint,
+        CancellationToken cancellationToken)
+    {
+        ValidateRecoveryRequest(request);
+        ValidateCheckpointBinding(request, checkpoint);
+        var schema = RecoverySchema(request.CheckpointId);
+        if (checkpoint.Reference != $"postgres-schema-v1:{schema}")
+            throw RecoveryFailure(ShadowRecoveryIssueCodes.ContextMismatch, "PostgreSQL recovery checkpoint reference is invalid.");
+        await using var connection = await OpenConnectionAsync(request.Targets[0].Context, cancellationToken).ConfigureAwait(false);
+        if (!await SchemaExistsAsync(connection, transaction: null, schema, cancellationToken).ConfigureAwait(false))
+            throw RecoveryFailure(ShadowRecoveryIssueCodes.CheckpointUnavailable, "PostgreSQL shadow recovery checkpoint is unavailable.");
+        var actualHash = await HashSchemaAsync(connection, transaction: null, schema, cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(actualHash, checkpoint.ContentSha256, StringComparison.Ordinal))
+            throw RecoveryFailure(ShadowRecoveryIssueCodes.CheckpointIntegrityFailure, "PostgreSQL shadow recovery checkpoint failed integrity validation.");
+    }
+
+    public async Task<ShadowRecoveryMutation> ApplyControlledMutationAsync(ShadowRecoveryRequest request,
+        CancellationToken cancellationToken)
+    {
+        ValidateRecoveryRequest(request);
+        var schema = ShadowSchema(request.ShadowRunId);
+        await using var connection = await OpenConnectionAsync(request.Targets[0].Context, cancellationToken).ConfigureAwait(false);
+        foreach (var target in request.Targets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var (_, table) = ResolveTable(target.Selector);
+            var identityFields = target.Selector.IdentityFields.ToArray();
+            if (identityFields.Length == 0 || identityFields.Any(field => !IdentifierPattern.IsMatch(field)))
+                throw RecoveryFailure(ShadowRecoveryIssueCodes.RehearsalMutationFailed, "PostgreSQL rehearsal requires valid target identity fields.");
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"DELETE FROM {Quote(schema)}.{Quote(table)} WHERE ctid = (SELECT ctid FROM {Quote(schema)}.{Quote(table)} ORDER BY {string.Join(", ", identityFields.Select(Quote))} LIMIT 1) RETURNING 1";
+            if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
+                return new ShadowRecoveryMutation(1, "Deleted one deterministic row from the isolated PostgreSQL shadow target.");
+        }
+
+        throw RecoveryFailure(ShadowRecoveryIssueCodes.RehearsalMutationFailed, "PostgreSQL recovery rehearsal found no shadow row to mutate.");
+    }
+
+    public async Task RestoreRecoveryCheckpointAsync(ShadowRecoveryRequest request, ShadowRecoveryCheckpoint checkpoint,
+        CancellationToken cancellationToken)
+    {
+        await ValidateRecoveryCheckpointAsync(request, checkpoint, cancellationToken).ConfigureAwait(false);
+        var targetSchema = ShadowSchema(request.ShadowRunId);
+        var checkpointSchema = RecoverySchema(request.CheckpointId);
+        var restoreSchema = $"proofshift_restore_{Guid.NewGuid():N}";
+        await using var connection = await OpenConnectionAsync(request.Targets[0].Context, cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await CopySchemaAsync(connection, (NpgsqlTransaction)transaction, checkpointSchema, restoreSchema, cancellationToken).ConfigureAwait(false);
+            await using (var command = connection.CreateCommand())
+            {
+                command.Transaction = (NpgsqlTransaction)transaction;
+                command.CommandText = $"DROP SCHEMA {Quote(targetSchema)} CASCADE; ALTER SCHEMA {Quote(restoreSchema)} RENAME TO {Quote(targetSchema)}";
+                await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw RecoveryFailure(ShadowRecoveryIssueCodes.RehearsalMutationFailed, "PostgreSQL shadow recovery restore failed.");
+        }
+    }
+
     private static async Task<NpgsqlConnection> OpenConnectionAsync(ShadowTargetContext context, CancellationToken cancellationToken)
     {
         try
@@ -345,5 +453,141 @@ public sealed class PostgresShadowTargetConnector : IShadowTargetConnector
             .ToLowerInvariant();
 
     private static string ShadowSchema(RunId runId) => $"proofshift_shadow_{runId.Value:N}";
+    private static string RecoverySchema(RecoveryCheckpointId checkpointId) => $"proofshift_recovery_{checkpointId.Value:N}";
+
+    private void ValidateRecoveryRequest(ShadowRecoveryRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.ConnectorId != Id || request.Targets.Any(target => target.Context.ConnectorContext.Connector != Id ||
+            target.Context.Role != SystemRole.ShadowTarget || target.Context.RunId != request.ShadowRunId))
+            throw RecoveryFailure(ShadowRecoveryIssueCodes.ContextMismatch, "PostgreSQL recovery request does not match this shadow connector/run.");
+    }
+
+    private void ValidateCheckpointBinding(ShadowRecoveryRequest request, ShadowRecoveryCheckpoint checkpoint)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        if (checkpoint.Id != request.CheckpointId || checkpoint.ShadowRunId != request.ShadowRunId ||
+            checkpoint.SystemId != request.SystemId || checkpoint.EndpointId != request.EndpointId ||
+            checkpoint.ConnectorId != Id || checkpoint.ConnectorVersion != Version || checkpoint.GraphHash != request.GraphHash ||
+            checkpoint.BaselineFingerprint != request.BaselineFingerprint || checkpoint.TargetArtifactCount != request.TargetArtifactCount)
+            throw RecoveryFailure(ShadowRecoveryIssueCodes.ContextMismatch, "PostgreSQL recovery checkpoint binding does not match the requested shadow state.");
+    }
+
+    private static async Task<bool> SchemaExistsAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction,
+        string schema, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = @schema)";
+        command.Parameters.AddWithValue("schema", schema);
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? false);
+    }
+
+    private static async Task CopySchemaAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
+        string sourceSchema, string targetSchema, CancellationToken cancellationToken)
+    {
+        await using (var create = connection.CreateCommand())
+        {
+            create.Transaction = transaction;
+            create.CommandText = $"CREATE SCHEMA {Quote(targetSchema)}";
+            await create.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using var list = connection.CreateCommand();
+        list.Transaction = transaction;
+        list.CommandText = "SELECT tablename FROM pg_tables WHERE schemaname = @schema ORDER BY tablename";
+        list.Parameters.AddWithValue("schema", sourceSchema);
+        var tables = new List<string>();
+        await using (var reader = await list.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+        {
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                tables.Add(reader.GetString(0));
+        }
+        if (tables.Count == 0)
+            throw RecoveryFailure(ShadowRecoveryIssueCodes.CheckpointUnavailable, "PostgreSQL shadow schema contains no recovery tables.");
+
+        foreach (var table in tables)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await using var copy = connection.CreateCommand();
+            copy.Transaction = transaction;
+            copy.CommandText = $"CREATE TABLE {Quote(targetSchema)}.{Quote(table)} (LIKE {Quote(sourceSchema)}.{Quote(table)} INCLUDING ALL); INSERT INTO {Quote(targetSchema)}.{Quote(table)} SELECT * FROM {Quote(sourceSchema)}.{Quote(table)}";
+            await copy.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<string> HashSchemaAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction,
+        string schema, CancellationToken cancellationToken)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Append(hash, "proofshift-postgres-shadow-checkpoint-v1");
+        await using var tablesCommand = connection.CreateCommand();
+        tablesCommand.Transaction = transaction;
+        tablesCommand.CommandText = "SELECT tablename FROM pg_tables WHERE schemaname = @schema ORDER BY tablename";
+        tablesCommand.Parameters.AddWithValue("schema", schema);
+        var tables = new List<string>();
+        await using (var tablesReader = await tablesCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+            while (await tablesReader.ReadAsync(cancellationToken).ConfigureAwait(false)) tables.Add(tablesReader.GetString(0));
+        if (tables.Count == 0)
+            throw RecoveryFailure(ShadowRecoveryIssueCodes.CheckpointUnavailable, "PostgreSQL recovery schema contains no tables.");
+
+        foreach (var table in tables)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Append(hash, table);
+            await using var columnsCommand = connection.CreateCommand();
+            columnsCommand.Transaction = transaction;
+            columnsCommand.CommandText = "SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = @schema AND table_name = @table ORDER BY ordinal_position";
+            columnsCommand.Parameters.AddWithValue("schema", schema);
+            columnsCommand.Parameters.AddWithValue("table", table);
+            var columns = new List<(string Name, string Type)>();
+            await using (var columnsReader = await columnsCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+                while (await columnsReader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    columns.Add((columnsReader.GetString(0), columnsReader.GetString(1)));
+            if (columns.Count == 0) throw RecoveryFailure(ShadowRecoveryIssueCodes.CheckpointIntegrityFailure, "PostgreSQL recovery table has no columns.");
+            foreach (var column in columns)
+            {
+                Append(hash, column.Name);
+                Append(hash, column.Type);
+            }
+
+            var ordering = string.Join(", ", columns.Select(column => Quote(column.Name)));
+            await using var rowsCommand = connection.CreateCommand();
+            rowsCommand.Transaction = transaction;
+            rowsCommand.CommandText = $"SELECT * FROM {Quote(schema)}.{Quote(table)} ORDER BY {ordering}";
+            await using var rows = await rowsCommand.ExecuteReaderAsync(System.Data.CommandBehavior.SequentialAccess, cancellationToken).ConfigureAwait(false);
+            while (await rows.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                Append(hash, "row");
+                for (var index = 0; index < columns.Count; index++)
+                {
+                    Append(hash, rows.IsDBNull(index) ? "null" : CanonicalDatabaseValue(rows.GetValue(index)));
+                }
+            }
+        }
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+    }
+
+    private static string CanonicalDatabaseValue(object value) => value switch
+    {
+        byte[] bytes => "bytes:" + Convert.ToHexString(bytes),
+        DateTimeOffset offset => "offset:" + offset.ToString("O", CultureInfo.InvariantCulture),
+        DateTime dateTime => "datetime:" + dateTime.ToString("O", CultureInfo.InvariantCulture),
+        Array array => "array:[" + string.Join(',', array.Cast<object?>().Select(item => item is null ? "null" : CanonicalDatabaseValue(item))) + "]",
+        IFormattable formatted => value.GetType().FullName + ":" + formatted.ToString(null, CultureInfo.InvariantCulture),
+        _ => value.GetType().FullName + ":" + Convert.ToString(value, CultureInfo.InvariantCulture)
+    };
+
+    private static void Append(IncrementalHash hash, string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        Span<byte> size = stackalloc byte[sizeof(int)];
+        BinaryPrimitives.WriteInt32BigEndian(size, bytes.Length);
+        hash.AppendData(size);
+        hash.AppendData(bytes);
+    }
+
+    private static ShadowRecoveryConnectorException RecoveryFailure(string code, string message) => new(code, message);
     private static string Quote(string identifier) => $"\"{identifier.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
 }

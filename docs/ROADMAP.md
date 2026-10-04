@@ -143,14 +143,22 @@ Acceptance requires:
 
 ### PS-0.8 Recovery
 
-Status: Next planned milestone; not assigned. Begin only when explicitly authorized.
+Status: In progress. PS-0.8 consumes the completed PS-0.7 checkpoint/projection/verification/evidence chain and adds a separate recovery assessment, recovery plan, target recovery checkpoints, shadow-only rehearsal, integrity-checked recovery artifacts, and first-class dry-run qualification.
 
-Add:
+The implementation supports deterministic Reverse loss analysis, Restore checkpoint validation, registered compensators, irreversible policy denial by default, PostgreSQL schema-copy and filesystem-run-root recovery checkpoints, semantic-type coverage metrics, and CLI `recovery`/`dry-run` commands. Source checkpoints remain source inputs and are never treated as target rollback backups. Recovery evidence is separate from finalized PS-0.7 evidence. Production migration and rollback remain out of scope.
 
-- snapshot manifest;
-- recovery classification;
-- recovery policy validation;
-- readiness report.
+Acceptance requires:
+
+- every executed material edge and every graph-scoped target artifact has a recovery assessment;
+- missing strategy/capability, corrupted recovery checkpoint, false Reverse, prohibited irreversible operation, and stale physical target all fail qualification;
+- the deterministic pension scenario proves two false-Reverse strategies can follow successful projection and verification yet fail qualification;
+- controlled PostgreSQL and filesystem shadow mutations are rehearsed and restored; failed rehearsal prevents qualification;
+- recovery policy, assessment, rehearsal, evidence, and dry-run semantic fingerprints are deterministic and versioned;
+- `proofshift dry-run` and `proofshift recovery` expose safe human/JSON reports and persisted recovery artifacts detect tampering;
+- the clean pension fixture returns `QUALIFIED DRY RUN`; fault scenarios return `NOT QUALIFIED` with stable reasons;
+- full solution validation and remote Docker-backed CI pass with no required skips.
+
+Do not begin PS-0.9 until PS-0.8 is accepted.
 
 ### PS-0.9 Historical data
 

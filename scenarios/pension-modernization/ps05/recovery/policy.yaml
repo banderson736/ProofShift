@@ -1,3 +1,5 @@
 requireRecoveryForDestructiveOperations: true
-allowIrreversible:
-  default: false
+allowIrreversible: {default: false}
+requireValidatedRestore: true
+requireRecoveryRehearsal: true
+maximumIrreversibleArtifacts: 0

@@ -212,9 +212,17 @@ Original state can be restored from a preserved snapshot or artifact.
 Exact reversal is not possible, but a defined compensating action restores an acceptable state.
 
 ### Irreversible
-Information is lost and cannot be reconstructed. Requires explicit policy/approval and is a readiness failure in PS-0.
+Information is lost and cannot be reconstructed. It is denied by default in PS-0.8; explicit policy allowance, justification, and artifact limits are required. Qualification is still not business/regulatory approval.
 
 A destructive operation without recovery metadata is invalid configuration.
+
+PS-0.8 implements the Recovery Assessment Engine in `ProofShift.Recovery`, downstream of Domain, Graph, Configuration, Connector Abstractions, Engine, Snapshots, Projection, Evidence, and Verification. Engine and Verification do not depend on Recovery. Concrete recovery adapters remain at the CLI composition boundary.
+
+Recovery resolves each terminal journal edge and graph-scoped target lineage to its configured mode, inverse-loss analysis, required capability, affected artifacts, and evidence. `Reverse` uses conservative transformation analysis; `Restore` requires a validated target recovery checkpoint; `Compensate` resolves an executable strategy ID from the compensator registry; `Irreversible` is denied by default and requires explicit policy allowance and justification.
+
+`SourceCheckpoint` continues to prove the exact source input. It is not a target rollback point. Optional `IShadowTargetRecoveryConnector` implementations capture only isolated target namespaces: PostgreSQL copies a per-run schema to a recovery schema, and filesystem copies a per-run tree to a contained recovery directory. These are local rehearsal fixtures, not claims about provider-native production backup behavior. A controlled mutation is applied, the checkpoint is validated/restored, and physical shadow state is re-observed before qualification.
+
+Recovery findings form a separate immutable Recovery Evidence Graph referencing the finalized Verification Run and Verification Evidence fingerprint. Recovery assessment/plan/rehearsal/qualification artifacts have separate integrity hashes. Fingerprints are versioned: `proofshift-recovery-policy-v1`, `proofshift-recovery-assessment-v1`, `proofshift-recovery-plan-v1`, `proofshift-recovery-rehearsal-v1`, `proofshift-recovery-evidence-v1`, and `proofshift-dry-run-fingerprint-v1`. `proofshift dry-run` qualifies only when checkpoint, projection, verification, accounting, lineage, recovery policy, required rehearsal, and final target re-observation are all bound and pass. A qualified dry run is a technical criterion, not human approval or production-safety advice.
 
 ## Source artifact accounting
 

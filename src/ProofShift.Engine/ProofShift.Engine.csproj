@@ -9,6 +9,5 @@
     <ProjectReference Include="../ProofShift.Configuration/ProofShift.Configuration.csproj" />
     <ProjectReference Include="../ProofShift.Connectors.Abstractions/ProofShift.Connectors.Abstractions.csproj" />
     <ProjectReference Include="../ProofShift.Evidence/ProofShift.Evidence.csproj" />
-    <ProjectReference Include="../ProofShift.Recovery/ProofShift.Recovery.csproj" />
   </ItemGroup>
 </Project>

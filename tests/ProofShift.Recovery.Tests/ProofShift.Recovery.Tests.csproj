@@ -10,5 +10,6 @@
   <ItemGroup>
     <ProjectReference Include="../../src/ProofShift.Recovery/ProofShift.Recovery.csproj" />
     <ProjectReference Include="../../src/ProofShift.Domain/ProofShift.Domain.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Configuration/ProofShift.Configuration.csproj" />
   </ItemGroup>
 </Project>

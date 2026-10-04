@@ -276,8 +276,11 @@ employment-continuity:
 ```yaml
 requireRecoveryForDestructiveOperations: true
 
-allowIrreversible:
-  default: false
+allowIrreversible: {default: false}
+
+requireValidatedRestore: true
+requireRecoveryRehearsal: true
+maximumIrreversibleArtifacts: 0
 
 requiredSnapshots:
   - system: legacy-pension
@@ -289,6 +292,8 @@ approval:
   irreversibleTransformations:
     required: true
 ```
+
+`requiredSnapshots` identifies source checkpoint endpoints. A PS-0.6 source checkpoint is never treated as a target restore capability. PS-0.8 separately captures and integrity-validates isolated shadow target recovery checkpoints through the registered target connector. Irreversible work is denied by default; policy allowance and an edge justification are required, and the artifact limit still applies. The effective policy is independently versioned and fingerprinted.
 
 ## Configuration implementation principles
 

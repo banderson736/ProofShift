@@ -42,3 +42,11 @@ Run `proofshift validate`, `proofshift plan`, and `proofshift inspect` against t
 - one capitalization-only difference that should normalize and pass.
 
 Later defect counts are specified in `docs/PS0_SPECIFICATION.md`.
+
+## PS-0.8 Recovery Readiness fixture
+
+The PS-0.5 synthetic fixture now declares `restore` for the member split because trimming and normalizing the source name are lossy, `reverse` for the field-preserving supplemental map, and `restore` for the copied document archive. The target recovery checkpoint is separate from the source checkpoint: PostgreSQL captures the isolated per-run schema, and filesystem recovery captures the isolated per-run directory and identity index.
+
+After a clean checkpoint-backed projection and verification, `proofshift dry-run <path-to-ps05/proofshift.yaml> --json` captures target baselines, applies a deterministic shadow-only mutation, restores and re-reads both target backends, then records dry-run qualification. `proofshift recovery <path-to-ps05/proofshift.yaml> --run <dry-run-id> --json` verifies persisted recovery-artifact integrity before reporting it.
+
+The end-to-end false-Reverse scenario includes two deliberately lossy mappings: a many-to-one status map and a pass-through code map. Projection and Verification succeed from the matching checkpoint/graph, while Recovery rejects both configured inverses and the dry run is not qualified.

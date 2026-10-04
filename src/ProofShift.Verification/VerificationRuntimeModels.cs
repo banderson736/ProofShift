@@ -271,6 +271,8 @@ public sealed record VerificationRunRecord
     public RunId ProjectionRunId { get; }
     public string ProjectionManifestHash { get; }
     public string ProjectionFingerprint { get; }
+    public long ProjectionSourceCount { get; }
+    public long ProjectionTargetCount { get; }
     public string RuleSetFingerprint { get; }
     public VerificationRuntimeFingerprint Runtime { get; }
     public string EvidenceFingerprint { get; }
@@ -298,6 +300,8 @@ public sealed record VerificationRunRecord
         ProjectionRunId = binding.ProjectionRunId;
         ProjectionManifestHash = binding.ProjectionManifestHash;
         ProjectionFingerprint = binding.ProjectionFingerprint;
+        ProjectionSourceCount = binding.ProjectionSourceCount;
+        ProjectionTargetCount = binding.ProjectionTargetCount;
         RuleSetFingerprint = RequiredHash(ruleSetFingerprint, nameof(ruleSetFingerprint));
         Runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         EvidenceFingerprint = RequiredHash(evidenceFingerprint, nameof(evidenceFingerprint));
@@ -381,4 +385,4 @@ public sealed record VerificationRuntimeFingerprint
 
 public sealed record VerificationResult(VerificationRunRecord Run, Evidence.EvidenceGraph EvidenceGraph,
     IReadOnlyList<ArtifactDispositionRecord> Dispositions, IReadOnlyList<LineageRecord> Lineage,
-    IReadOnlyList<VerificationFinding> Findings);
+    IReadOnlyList<VerificationFinding> Findings, IReadOnlyList<VerificationJournalEntry> JournalEntries);

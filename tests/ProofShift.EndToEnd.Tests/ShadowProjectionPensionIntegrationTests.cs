@@ -14,8 +14,10 @@ using ProofShift.Connectors.Postgres;
 using ProofShift.Connectors.SqlServer;
 using ProofShift.Domain;
 using ProofShift.Engine;
+using ProofShift.Graph;
 using ProofShift.Projection;
 using ProofShift.Packs.Pension;
+using ProofShift.Recovery;
 using ProofShift.Snapshots;
 using ProofShift.Verification;
 using Testcontainers.MsSql;
@@ -152,6 +154,12 @@ public sealed class ShadowProjectionPensionIntegrationTests
             Assert.Equal(3, capture.CapturedSourceNodes);
             Assert.False(capture.Checkpoint.CrossSystemAtomic);
             Assert.Equal(2, capture.Checkpoint.Endpoints.Count(endpoint => endpoint.SourceConsistency == SourceConsistencyGuarantee.Observed));
+            var falseReverseGraph = CreateFalseReverseGraph(graph);
+            var falseReverseCapture = await new SnapshotCaptureService(sourceConnectors, checkpointStore,
+                new RuntimeConnectorContextFactory(environment)).CaptureAsync(configuration, falseReverseGraph,
+                TestContext.Current.CancellationToken);
+            Assert.Equal(CheckpointStatus.Complete, falseReverseCapture.Status);
+            Assert.NotNull(falseReverseCapture.Checkpoint);
 
             await File.WriteAllTextAsync(Path.Combine(csvRoot, "supplemental.csv"), "MEMBER_ID;PAY_PERIOD;NOTE\n1;2025-01;modified-after-capture\n",
                 new UTF8Encoding(false), TestContext.Current.CancellationToken);
@@ -267,6 +275,140 @@ public sealed class ShadowProjectionPensionIntegrationTests
             Assert.Equal(clean.Run.EvidenceFingerprint, repaired.Run.EvidenceFingerprint);
             var changedRuleSet = ruleRegistry.Resolve(CreateVerificationRules(attribute: "amount"));
             Assert.NotEqual(ruleSet.Fingerprint, changedRuleSet.Fingerprint);
+
+            var recoveryService = new RecoveryService(checkpointStore,
+                new RecoveryCompensatorRegistry([new ShadowBaselineRestoreCompensator(), new SemanticNameCaseCompensator()]));
+            var recovery = await recoveryService.AssessAndRehearseAsync(configuration, graph, binding, repaired,
+                new EffectiveRecoveryPolicy(), targetRuntimes, projectRoot, TestContext.Current.CancellationToken);
+            Assert.True(recovery.Qualification.Status == DryRunQualificationStatus.Qualified,
+                $"Qualification={recovery.Qualification.Status}; assessment={recovery.Assessment.Outcome}; rehearsal={recovery.Rehearsal.Outcome}; issues={string.Join(" | ", recovery.Qualification.Reasons.Select(issue => $"{issue.Code}: {issue.Message}"))}; edges={string.Join(" | ", recovery.Assessment.Edges.Select(edge => $"{edge.EdgeName}={edge.Result}({string.Join(",", edge.Issues.Select(issue => issue.Code))})"))}");
+            Assert.Equal(RecoveryRehearsalOutcome.Passed, recovery.Rehearsal.Outcome);
+            Assert.Equal(replayed.Fingerprint, recovery.Rehearsal.BaselineFingerprint);
+            Assert.NotEqual(recovery.Rehearsal.BaselineFingerprint, recovery.Rehearsal.RestoredFingerprint);
+            Assert.Equal(recovery.Rehearsal.BaselineFingerprint, recovery.Rehearsal.ShadowCleanupFingerprint);
+            Assert.Equal(2, recovery.Rehearsal.Checkpoints.Count);
+            Assert.All(recovery.Rehearsal.Checkpoints, item =>
+            {
+                Assert.NotEqual(capture.Id.Value, item.Id.Value);
+                Assert.Equal("shadow-pension", item.SystemId.Value);
+            });
+            Assert.Equal(31, recovery.Assessment.Coverage.AffectedArtifacts);
+            Assert.Equal(31, recovery.Assessment.Coverage.RecoverableArtifacts);
+            Assert.NotEmpty(recovery.Assessment.Coverage.BySemanticType);
+
+            var repeatedRecovery = await recoveryService.AssessAndRehearseAsync(configuration, graph, binding, repaired,
+                new EffectiveRecoveryPolicy(), targetRuntimes, projectRoot, TestContext.Current.CancellationToken);
+            Assert.Equal(recovery.Assessment.Fingerprint, repeatedRecovery.Assessment.Fingerprint);
+            Assert.Equal(recovery.Rehearsal.Fingerprint, repeatedRecovery.Rehearsal.Fingerprint);
+            Assert.Equal(recovery.Qualification.DryRunFingerprint, repeatedRecovery.Qualification.DryRunFingerprint);
+
+            var recoveryArtifactStore = new FileSystemRecoveryArtifactStore(Path.Combine(projectRoot, ".proofshift", "recovery"));
+            var recoveryReceipt = await recoveryArtifactStore.SaveAsync(recovery, TestContext.Current.CancellationToken);
+            Assert.True(await recoveryArtifactStore.VerifyIntegrityAsync(recovery.Id, TestContext.Current.CancellationToken));
+            var recoverySummary = await recoveryArtifactStore.ReadSummaryAsync(recovery.Id, TestContext.Current.CancellationToken);
+            Assert.Equal(DryRunQualificationStatus.Qualified, recoverySummary.Status);
+            var assessmentArtifact = Path.Combine(projectRoot, ".proofshift", "recovery",
+                recovery.Id.Value.ToString("N"), "assessment.json");
+            Assert.True(File.Exists(assessmentArtifact));
+            Assert.NotEmpty(recoveryReceipt.IntegrityHash);
+
+            var changedPolicy = await recoveryService.AssessAndRehearseAsync(configuration, graph, binding, repaired,
+                new EffectiveRecoveryPolicy(requireRecoveryForDestructiveOperations: true, allowIrreversibleOperations: true,
+                    requireValidatedRestore: true, requireRecoveryRehearsal: true, maximumIrreversibleArtifacts: 1),
+                targetRuntimes, projectRoot, TestContext.Current.CancellationToken);
+            Assert.NotEqual(recovery.Qualification.PolicyFingerprint, changedPolicy.Qualification.PolicyFingerprint);
+            Assert.NotEqual(recovery.Assessment.Fingerprint, changedPolicy.Assessment.Fingerprint);
+            Assert.NotEqual(recovery.Qualification.DryRunFingerprint, changedPolicy.Qualification.DryRunFingerprint);
+
+            await using (var staleTarget = new NpgsqlConnection(postgresContainer.GetConnectionString()))
+            {
+                await staleTarget.OpenAsync(TestContext.Current.CancellationToken);
+                await using var update = staleTarget.CreateCommand();
+                update.CommandText = $"UPDATE \"{verifiedSchema}\".member_status SET status = 'RETIRED' WHERE id = 1";
+                Assert.Equal(1, await update.ExecuteNonQueryAsync(TestContext.Current.CancellationToken));
+            }
+            var stale = await recoveryService.AssessAndRehearseAsync(configuration, graph, binding, repaired,
+                new EffectiveRecoveryPolicy(), targetRuntimes, projectRoot, TestContext.Current.CancellationToken);
+            Assert.Equal(DryRunQualificationStatus.NotQualified, stale.Qualification.Status);
+            Assert.Contains(stale.Qualification.Reasons, issue => issue.Code == QualificationIssueCodes.StaleTarget);
+            await using (var repairTarget = new NpgsqlConnection(postgresContainer.GetConnectionString()))
+            {
+                await repairTarget.OpenAsync(TestContext.Current.CancellationToken);
+                await using var update = repairTarget.CreateCommand();
+                update.CommandText = $"UPDATE \"{verifiedSchema}\".member_status SET status = 'ACTIVE' WHERE id = 1";
+                Assert.Equal(1, await update.ExecuteNonQueryAsync(TestContext.Current.CancellationToken));
+            }
+
+            var missingCapabilityTargets = targetRuntimes.Select(target => target.Connector.Id.Value == "files"
+                ? new VerificationTargetRuntime(target.NodeKey, new ReadOnlyShadowConnectorProxy(target.Connector), target.Context)
+                : target).ToArray();
+            var missingCapability = await recoveryService.AssessAndRehearseAsync(configuration, graph, binding, repaired,
+                new EffectiveRecoveryPolicy(), missingCapabilityTargets, projectRoot, TestContext.Current.CancellationToken);
+            Assert.Equal(DryRunQualificationStatus.NotQualified, missingCapability.Qualification.Status);
+            Assert.Contains(missingCapability.Qualification.Reasons, issue => issue.Code == RecoveryIssueCodes.MissingCapability ||
+                issue.Code == RecoveryIssueCodes.RehearsalFailed);
+
+            var corruptCheckpointTargets = targetRuntimes.Select(target => target.Connector.Id.Value == "postgres"
+                ? new VerificationTargetRuntime(target.NodeKey,
+                    new RecoveryConnectorProxy((IShadowTargetRecoveryConnector)target.Connector, corruptCheckpoint: true), target.Context)
+                : target).ToArray();
+            var corruptCheckpoint = await recoveryService.AssessAndRehearseAsync(configuration, graph, binding, repaired,
+                new EffectiveRecoveryPolicy(), corruptCheckpointTargets, projectRoot, TestContext.Current.CancellationToken);
+            Assert.Equal(DryRunQualificationStatus.NotQualified, corruptCheckpoint.Qualification.Status);
+            Assert.Contains(corruptCheckpoint.Qualification.Reasons, issue => issue.Code == RecoveryIssueCodes.CorruptedCheckpoint);
+
+            var failedMutationTargets = targetRuntimes.Select(target => target.Connector.Id.Value == "postgres"
+                ? new VerificationTargetRuntime(target.NodeKey,
+                    new RecoveryConnectorProxy((IShadowTargetRecoveryConnector)target.Connector, failMutation: true), target.Context)
+                : target).ToArray();
+            var failedRehearsal = await recoveryService.AssessAndRehearseAsync(configuration, graph, binding, repaired,
+                new EffectiveRecoveryPolicy(), failedMutationTargets, projectRoot, TestContext.Current.CancellationToken);
+            Assert.Equal(DryRunQualificationStatus.NotQualified, failedRehearsal.Qualification.Status);
+            Assert.Equal(RecoveryRehearsalOutcome.Failed, failedRehearsal.Rehearsal.Outcome);
+            var postFailureVerification = await verificationService.VerifyAsync(configuration, graph, binding, ruleSet,
+                projectRoot, Path.Combine(projectRoot, ".proofshift", "temporary"), "0.1.0", targetRuntimes,
+                TestContext.Current.CancellationToken);
+            Assert.Equal(VerificationOutcome.Passed, postFailureVerification.Run.Outcome);
+            Assert.Equal(repaired.Run.EvidenceFingerprint, postFailureVerification.Run.EvidenceFingerprint);
+
+            await using var falseReverseCheckpoint = await checkpointStore.OpenCompleteAsync(
+                falseReverseCapture.Id.Value.ToString("N", CultureInfo.InvariantCulture), TestContext.Current.CancellationToken);
+            var falseReverseProjection = await new ShadowProjectionService(sourceConnectors, targetConnectors,
+                new RuntimeConnectorContextFactory(environment),
+                new CheckpointSourceArtifactStreamProvider(falseReverseCheckpoint)).ProjectAsync(configuration,
+                falseReverseGraph, projectRoot, TestContext.Current.CancellationToken);
+            Assert.Equal(ProjectionStatus.Succeeded, falseReverseProjection.Status);
+            await ProjectionRunManifestStore.WriteAsync(projectRoot, falseReverseProjection, TestContext.Current.CancellationToken);
+            var falseReverseManifest = await ProjectionRunManifestStore.ReadAsync(projectRoot, falseReverseProjection.Id,
+                TestContext.Current.CancellationToken);
+            var falseReverseBinding = new ProjectionVerificationBinding(falseReverseProjection.Id,
+                falseReverseProjection.ConfigurationHash, falseReverseProjection.GraphHash, falseReverseCapture.Id,
+                falseReverseCapture.Checkpoint!.ManifestHash!, falseReverseCapture.Checkpoint.SourceFingerprint!,
+                falseReverseProjection.Fingerprint!, falseReverseProjection.FingerprintVersion,
+                falseReverseProjection.SourceArtifactCount, falseReverseProjection.TargetArtifactCount, "succeeded",
+                falseReverseManifest.ManifestHash, falseReverseProjection.JournalPath, falseReverseProjection.ConnectorVersions);
+            var falseReverseTargets = falseReverseGraph.Nodes
+                .Where(node => node.Type is MigrationNodeType.Target or MigrationNodeType.Archive)
+                .Select(node => new VerificationTargetRuntime(node.Name,
+                    targetConnectors.Resolve(configuration.Systems.Single(system => system.Id == node.SystemId)
+                        .StorageEndpoints.Single(endpoint => endpoint.Id == node.EndpointId).Connector),
+                    new ShadowTargetContext(new RuntimeConnectorContextFactory(environment).Create(configuration, node),
+                        falseReverseProjection.Id, SystemRole.ShadowTarget))).ToArray();
+            var falseReverseVerification = await verificationService.VerifyAsync(configuration, falseReverseGraph,
+                falseReverseBinding, ruleSet, projectRoot, Path.Combine(projectRoot, ".proofshift", "temporary"),
+                "0.1.0", falseReverseTargets, TestContext.Current.CancellationToken);
+            Assert.Equal(VerificationOutcome.Passed, falseReverseVerification.Run.Outcome);
+            var falseReverseResult = await recoveryService.AssessAndRehearseAsync(configuration, falseReverseGraph,
+                falseReverseBinding, falseReverseVerification, new EffectiveRecoveryPolicy(), falseReverseTargets,
+                projectRoot, TestContext.Current.CancellationToken);
+            Assert.Equal(DryRunQualificationStatus.NotQualified, falseReverseResult.Qualification.Status);
+            Assert.Contains(falseReverseResult.Assessment.Edges, edge => edge.EdgeName == "member-split" &&
+                edge.Issues.Any(issue => issue.Code == RecoveryIssueCodes.InvalidReverse));
+            Assert.Contains(falseReverseResult.Assessment.Edges, edge => edge.EdgeName == "supplemental-map" &&
+                edge.Issues.Any(issue => issue.Code == RecoveryIssueCodes.InvalidReverse));
+
+            await File.AppendAllTextAsync(assessmentArtifact, "tampered", TestContext.Current.CancellationToken);
+            Assert.False(await recoveryArtifactStore.VerifyIntegrityAsync(recovery.Id, TestContext.Current.CancellationToken));
         }
         finally
         {
@@ -301,6 +443,97 @@ public sealed class ShadowProjectionPensionIntegrationTests
         public string Version => "1";
         public IReadOnlyCollection<VerificationRuleFactory> RuleFactories { get; } =
             [new("throwing-test", definition => new ThrowingRule(definition.Id, definition.Version))];
+    }
+
+    private sealed class SemanticNameCaseCompensator : IRecoveryCompensator
+    {
+        public string StrategyId => "semantic-member-name-case";
+        public string Version => "1";
+        public RecoveryValidationMode ValidationMode => RecoveryValidationMode.SemanticCompensation;
+
+        public RecoveryCheckResult Validate(MigrationEdge edge) =>
+            edge.Recovery?.Strategy == StrategyId ? RecoveryCheckResult.Pass : RecoveryCheckResult.Fail;
+
+        public async Task ExecuteShadowRehearsalAsync(IReadOnlyCollection<RecoveryShadowCheckpointBinding> checkpoints,
+            CancellationToken cancellationToken)
+        {
+            foreach (var checkpoint in checkpoints)
+                await checkpoint.Connector.RestoreRecoveryCheckpointAsync(checkpoint.Request, checkpoint.Checkpoint, cancellationToken);
+            var postgres = checkpoints.Single(checkpoint => checkpoint.Request.ConnectorId.Value == "postgres");
+            var context = postgres.Request.Targets.Single(target => target.Context.ConnectorContext.NodeKey == "participant").Context;
+            var connectionString = context.ConnectorContext.Configuration.GetRequired("connection").UseValue(value => value);
+            var schema = $"proofshift_shadow_{context.RunId.Value:N}";
+            await using var connection = new NpgsqlConnection(connectionString);
+            await connection.OpenAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"UPDATE \"{schema}\".participant SET first_name = lower(first_name) WHERE id = 1; UPDATE \"{schema}\".member_status SET first_name = lower(first_name) WHERE id = 1";
+            Assert.Equal(2, await command.ExecuteNonQueryAsync(cancellationToken));
+        }
+
+        public async Task<RecoveryCheckResult> ValidateShadowOutcomeAsync(MigrationEdge edge,
+            RecoveryCompensationValidationContext context, CancellationToken cancellationToken)
+        {
+            if (edge.Recovery?.Strategy != StrategyId || context.BaselineFingerprint == context.RestoredFingerprint ||
+                context.BaselineArtifactCount != context.RestoredArtifactCount) return RecoveryCheckResult.Fail;
+            var postgres = context.Checkpoints.Single(checkpoint => checkpoint.Request.ConnectorId.Value == "postgres");
+            var target = postgres.Request.Targets.Single(item => item.Context.ConnectorContext.NodeKey == "participant");
+            var connectionString = target.Context.ConnectorContext.Configuration.GetRequired("connection").UseValue(value => value);
+            var schema = $"proofshift_shadow_{target.Context.RunId.Value:N}";
+            await using var connection = new NpgsqlConnection(connectionString);
+            await connection.OpenAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"SELECT (SELECT COUNT(*) FROM \"{schema}\".participant WHERE id = 1 AND lower(first_name) = 'ada lovelace') + (SELECT COUNT(*) FROM \"{schema}\".member_status WHERE id = 1 AND lower(first_name) = 'ada lovelace')";
+            return (long)(await command.ExecuteScalarAsync(cancellationToken))! == 2
+                ? RecoveryCheckResult.Pass : RecoveryCheckResult.Fail;
+        }
+    }
+
+    private class ShadowConnectorProxy(IShadowTargetConnector inner) : IShadowTargetConnector
+    {
+        protected IShadowTargetConnector Inner { get; } = inner;
+        public ConnectorId Id => Inner.Id;
+        public string Version => Inner.Version;
+        public Task PrepareAsync(ShadowTargetContext context, ArtifactSelector selector, CancellationToken cancellationToken) =>
+            Inner.PrepareAsync(context, selector, cancellationToken);
+        public Task WriteAsync(ShadowWriteRequest request, CancellationToken cancellationToken) =>
+            Inner.WriteAsync(request, cancellationToken);
+        public Task CompleteAsync(ShadowTargetContext context, CancellationToken cancellationToken) =>
+            Inner.CompleteAsync(context, cancellationToken);
+        public IAsyncEnumerable<RecordEnvelope> ReadAsync(ReadRequest request, CancellationToken cancellationToken) =>
+            Inner.ReadAsync(request, cancellationToken);
+    }
+
+    private sealed class ReadOnlyShadowConnectorProxy(IShadowTargetConnector inner) : ShadowConnectorProxy(inner);
+
+    private sealed class RecoveryConnectorProxy(IShadowTargetRecoveryConnector inner,
+        bool corruptCheckpoint = false, bool failMutation = false) : ShadowConnectorProxy(inner), IShadowTargetRecoveryConnector
+    {
+        private IShadowTargetRecoveryConnector RecoveryInner { get; } = inner;
+
+        public async Task<ShadowRecoveryCheckpoint> CaptureRecoveryCheckpointAsync(ShadowRecoveryRequest request,
+            CancellationToken cancellationToken)
+        {
+            var checkpoint = await RecoveryInner.CaptureRecoveryCheckpointAsync(request, cancellationToken);
+            return corruptCheckpoint
+                ? new ShadowRecoveryCheckpoint(checkpoint.Id, checkpoint.ShadowRunId, checkpoint.SystemId,
+                    checkpoint.EndpointId, checkpoint.ConnectorId, checkpoint.ConnectorVersion, checkpoint.GraphHash,
+                    checkpoint.BaselineFingerprint, checkpoint.TargetArtifactCount, checkpoint.Reference,
+                    new string('0', 64), checkpoint.CapturedAt)
+                : checkpoint;
+        }
+
+        public Task ValidateRecoveryCheckpointAsync(ShadowRecoveryRequest request, ShadowRecoveryCheckpoint checkpoint,
+            CancellationToken cancellationToken) => RecoveryInner.ValidateRecoveryCheckpointAsync(request, checkpoint, cancellationToken);
+
+        public async Task<ShadowRecoveryMutation> ApplyControlledMutationAsync(ShadowRecoveryRequest request,
+            CancellationToken cancellationToken)
+        {
+            var mutation = await RecoveryInner.ApplyControlledMutationAsync(request, cancellationToken);
+            return failMutation ? new ShadowRecoveryMutation(0, "Injected deterministic rehearsal failure.") : mutation;
+        }
+
+        public Task RestoreRecoveryCheckpointAsync(ShadowRecoveryRequest request, ShadowRecoveryCheckpoint checkpoint,
+            CancellationToken cancellationToken) => RecoveryInner.RestoreRecoveryCheckpointAsync(request, checkpoint, cancellationToken);
     }
 
     private sealed class ThrowingRule(RuleId id, string version) : ProofShift.Verification.IVerificationRule
@@ -415,6 +648,25 @@ public sealed class ShadowProjectionPensionIntegrationTests
 
             originalCsv = await File.ReadAllBytesAsync(csvPath, TestContext.Current.CancellationToken);
             originalDocument = await File.ReadAllBytesAsync(documentPath, TestContext.Current.CancellationToken);
+            var dryRun = await RunCliAsync(cli, fixture, environment, "dry-run", "--json");
+            Assert.True(dryRun.ExitCode == 0,
+                $"Dry-run CLI failed with exit code {dryRun.ExitCode}. stdout: {dryRun.StandardOutput} stderr: {dryRun.StandardError}");
+            Assert.DoesNotContain(sqlBuilder.ConnectionString, dryRun.StandardOutput, StringComparison.Ordinal);
+            Assert.DoesNotContain(postgresContainer.GetConnectionString(), dryRun.StandardOutput, StringComparison.Ordinal);
+            using var dryRunJson = JsonDocument.Parse(dryRun.StandardOutput);
+            Assert.Equal("qualified", dryRunJson.RootElement.GetProperty("outcome").GetString());
+            Assert.Equal("succeeded", dryRunJson.RootElement.GetProperty("projectionStatus").GetString());
+            Assert.Equal("passed", dryRunJson.RootElement.GetProperty("verificationOutcome").GetString());
+            Assert.Equal("passed", dryRunJson.RootElement.GetProperty("rehearsalOutcome").GetString());
+            Assert.Equal(31, dryRunJson.RootElement.GetProperty("affectedArtifacts").GetInt64());
+            var dryRunId = dryRunJson.RootElement.GetProperty("dryRunId").GetString();
+            var recoveryReport = await RunCliAsync(cli, fixture, environment, "recovery", "--run", dryRunId!, "--json");
+            Assert.Equal(0, recoveryReport.ExitCode);
+            using var recoveryReportJson = JsonDocument.Parse(recoveryReport.StandardOutput);
+            Assert.Equal("qualified", recoveryReportJson.RootElement.GetProperty("status").GetString());
+            Assert.Equal(dryRunJson.RootElement.GetProperty("dryRunFingerprint").GetString(),
+                recoveryReportJson.RootElement.GetProperty("dryRunFingerprint").GetString());
+
             var snapshot = await RunCliAsync(cli, fixture, environment, "snapshot", "--json");
             Assert.Equal(0, snapshot.ExitCode);
             using var snapshotJson = JsonDocument.Parse(snapshot.StandardOutput);
@@ -538,7 +790,8 @@ public sealed class ShadowProjectionPensionIntegrationTests
         };
         var edges = new[]
         {
-            Edge("member-split", [memberSource], [participant, status], MigrationOperationType.Split, memberFields),
+            Edge("member-split", [memberSource], [participant, status], MigrationOperationType.Split, memberFields,
+                RecoveryMode.Compensate, "semantic-member-name-case"),
             Edge("supplemental-map", [csvSource], [supplemental], MigrationOperationType.Map,
             [
                 new TransformationFieldDefinition("member_id", "MEMBER_ID"),
@@ -550,6 +803,31 @@ public sealed class ShadowProjectionPensionIntegrationTests
         return new MigrationGraph(new MigrationGraphId(Guid.Parse("6e514548-8244-4dd0-9d91-4c93e975c3c5")),
             [memberSource, csvSource, documentSource, participant, status, supplemental, documents], edges,
             new string('d', 64), "test-v1");
+    }
+
+    private static MigrationGraph CreateFalseReverseGraph(MigrationGraph graph)
+    {
+        var edges = graph.Edges.Select(edge =>
+        {
+            var fields = edge.Operation.Fields.Select(field => field.Target switch
+            {
+                "status" when edge.Name == "member-split" => new TransformationFieldDefinition(field.Target, field.Source,
+                [new TransformationStep(TransformationStepType.CodeMap, "1",
+                [new KeyValuePair<string, string>("A", "ACTIVE"), new KeyValuePair<string, string>("R", "ACTIVE")])]),
+                "note" when edge.Name == "supplemental-map" => new TransformationFieldDefinition(field.Target, field.Source,
+                [new TransformationStep(TransformationStepType.CodeMap, "1",
+                [new KeyValuePair<string, string>("A", "ACTIVE"), new KeyValuePair<string, string>("unknown", "pass-through")])]),
+                _ => field
+            }).ToArray();
+            var operation = new MigrationOperation(edge.Operation.Type, edge.Operation.Steps,
+                edge.Operation.IsDestructive, fields, edge.Operation.Parameters);
+            return new MigrationEdge(edge.Id, edge.Name, edge.Sources, edge.Targets, operation, edge.Version,
+                new RecoveryDefinition(RecoveryMode.Reverse));
+        }).ToArray();
+        var externalNodeKeys = graph.Nodes.ToDictionary(node => node.Id, node => node.Name);
+        var canonical = GraphCanonicalizer.Canonicalize(1, graph.Nodes, edges, externalNodeKeys);
+        var graphHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+        return new MigrationGraph(graph.Id, graph.Nodes, edges, graphHash, GraphCanonicalizer.FormatVersion);
     }
 
     private static MigrationNode Node(string name, MigrationNodeType type, SystemId system, string endpoint, string kind,
@@ -571,10 +849,12 @@ public sealed class ShadowProjectionPensionIntegrationTests
     }
 
     private static MigrationEdge Edge(string name, IEnumerable<MigrationNode> sources, IEnumerable<MigrationNode> targets,
-        MigrationOperationType operation, IEnumerable<TransformationFieldDefinition> fields) =>
+        MigrationOperationType operation, IEnumerable<TransformationFieldDefinition> fields,
+        RecoveryMode recoveryMode = RecoveryMode.Restore, string? recoveryStrategy = "restore-shadow-baseline") =>
         new(new MigrationEdgeId(Guid.NewGuid()), name, sources.Select(node => node.Id), targets.Select(node => node.Id),
             new MigrationOperation(operation, fields: fields, isDestructive: operation == MigrationOperationType.Exclude), "1",
-            new RecoveryDefinition(RecoveryMode.Reverse));
+            new RecoveryDefinition(recoveryMode, recoveryStrategy,
+                requiresSnapshot: recoveryMode == RecoveryMode.Restore));
 
     private static StorageEndpointDefinition Endpoint(string name, string connector, params (string Key, string Value)[] settings) =>
         new(new StorageEndpointId(name), new ConnectorId(connector), settings.Select(pair => new KeyValuePair<string, string>(pair.Key, pair.Value)));

@@ -8,4 +8,4 @@ The repository documentation is part of the product specification. When code and
 
 PS-0.1 through PS-0.7 are accepted. PS-0.6 was accepted by Docker-backed GitHub Actions run 37180351598, job 111371493382 (88 passed, 0 failed, 0 skipped). PS-0.7 was accepted by Docker-backed GitHub Actions run 37185122084, job 111385343893 (96 passed, 0 failed, 0 skipped).
 
-PS-0.8 Recovery is the next planned milestone but is not assigned. Do not begin PS-0.8 or later until the user explicitly changes the assignment.
+PS-0.8 Recovery Readiness & Dry-Run Qualification is the active assignment. Do not implement production migration execution, production rollback, or any milestone beyond PS-0.8.

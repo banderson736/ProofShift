@@ -7,7 +7,6 @@
     <ProjectReference Include="../ProofShift.Domain/ProofShift.Domain.csproj" />
     <ProjectReference Include="../ProofShift.Evidence/ProofShift.Evidence.csproj" />
     <ProjectReference Include="../ProofShift.Graph/ProofShift.Graph.csproj" />
-    <ProjectReference Include="../ProofShift.Recovery/ProofShift.Recovery.csproj" />
     <ProjectReference Include="../ProofShift.Configuration/ProofShift.Configuration.csproj" />
     <ProjectReference Include="../ProofShift.Connectors.Abstractions/ProofShift.Connectors.Abstractions.csproj" />
     <ProjectReference Include="../ProofShift.Engine/ProofShift.Engine.csproj" />

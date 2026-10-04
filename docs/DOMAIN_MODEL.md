@@ -369,6 +369,12 @@ public enum RecoveryMode
 }
 ```
 
+The immutable edge definition is configuration, not demonstrated capability. PS-0.8 runtime concepts (`RecoveryAssessment`, `RecoveryCoverage`, `RecoveryPlan`, `RecoveryRehearsal`, and `DryRunQualification`) live in `ProofShift.Recovery`, not Domain. They bind to the Verification Run, source checkpoint, completed projection manifest, recovery policy, graph-scoped dispositions, and target lineage.
+
+`SourceCheckpoint` and `ShadowRecoveryCheckpoint` are distinct. The former is the known pre-migration source input. The latter is a connector-backed checkpoint of an isolated populated shadow target used only for recovery rehearsal. Recovery checkpoints carry system/endpoint/connector/run/graph identity, baseline fingerprint, target artifact count, opaque connector reference, content digest, and capture time.
+
+Recovery rehearsal records distinguish the strategy result fingerprint from the exact shadow cleanup fingerprint. Exact restore requires equality with the captured baseline. Semantic compensation is accepted only through a registered compensator's explicit validator; before dry-run qualification, the isolated shadow namespace is returned to the verified baseline and re-observed. Recovery evidence is a separate immutable graph referencing, not mutating, the finalized Verification Evidence Graph.
+
 ## ArtifactDisposition
 
 ```csharp

@@ -91,6 +91,7 @@ public sealed class VerificationService
         ValidateSourceRecordCoverage(checkpoint.Manifest, workspace.SourceArtifactCount);
         long producedEntries = 0;
         var producedKeys = new HashSet<(string NodeKey, string TargetId, string SourceNodeKey, string SourceId, MigrationEdgeId EdgeId)>();
+        var terminalJournalEntries = new List<VerificationJournalEntry>();
         await foreach (var journalEntry in ReadJournalAsync(journalPath, binding.ProjectionRunId, cancellationToken)
             .ConfigureAwait(false))
         {
@@ -142,9 +143,11 @@ public sealed class VerificationService
                 throw ContextMismatch("Projection journal contains an unsupported terminal result.");
             }
 
-            await workspace.AddJournalEntryAsync(new VerificationJournalEntry(journalEntry.Result,
+            var verifiedJournalEntry = new VerificationJournalEntry(journalEntry.Result,
                 journalEntry.TargetNode, journalEntry.Target, scopedSources, journalEntry.EdgeId,
-                journalEntry.EdgeName, journalEntry.EdgeVersion, journalEntry.FailureCode), cancellationToken).ConfigureAwait(false);
+                journalEntry.EdgeName, journalEntry.EdgeVersion, journalEntry.FailureCode);
+            await workspace.AddJournalEntryAsync(verifiedJournalEntry, cancellationToken).ConfigureAwait(false);
+            terminalJournalEntries.Add(verifiedJournalEntry);
         }
 
         if (producedEntries != workspace.ExpectedTargetCount || producedEntries != binding.ProjectionTargetCount)
@@ -294,7 +297,7 @@ public sealed class VerificationService
             ruleSet.Rules.Count + 1,
             Math.Max(0, ruleSet.Rules.Count + 1 - failureCount - warningCount),
             failureCount, warningCount, 0);
-        return new VerificationResult(run, evidenceGraph, dispositions, lineage, findings);
+        return new VerificationResult(run, evidenceGraph, dispositions, lineage, findings, terminalJournalEntries);
     }
 
     private static void ValidateConfigurationBinding(LoadedProjectConfiguration configuration, MigrationGraph graph,

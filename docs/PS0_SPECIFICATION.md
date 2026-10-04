@@ -356,7 +356,43 @@ Acceptance requires:
 - tampered evidence storage is rejected;
 - full solution validation and Docker-backed CI pass without required skips.
 
-PS-0.7 is accepted after Docker-backed [GitHub Actions run 37185122084, job 111385343893](https://github.com/banderson736/ProofShift/actions/runs/37185122084/job/111385343893) passed 96 tests with 0 failures and 0 skips. PS-0.8 and later remain deferred pending assignment.
+PS-0.7 is accepted after Docker-backed [GitHub Actions run 37185122084, job 111385343893](https://github.com/banderson736/ProofShift/actions/runs/37185122084/job/111385343893) passed 96 tests with 0 failures and 0 skips.
+
+## PS-0.8 Recovery Readiness and Dry-Run Qualification
+
+PS-0.8 extends the assurance chain after PS-0.7 verification. A passing verification alone does not make a migration ready. Every executed material edge and each graph-scoped target artifact must have an explainable recovery posture, and required recovery capability must be demonstrated in isolated shadow state.
+
+Recovery modes remain distinct:
+
+- `Reverse`: accepted only when the configured operation has a conservative, unambiguous inverse. Trimming, string/date normalization, split/concatenate without reversible semantics, lossy operations, and non-injective code maps fail Reverse analysis.
+- `Restore`: requires an available, integrity-validated target recovery checkpoint. PS-0.6 source checkpoints remain source inputs and are never accepted as target rollback capability.
+- `Compensate`: requires a strategy identifier resolved through the registered compensator registry. The compensator declares exact-restoration or semantic-compensation validation; semantic outcomes require the registered strategy's explicit validator.
+- `Irreversible`: explicit justification is required and policy denies it by default. Qualification requires explicit policy allowance and compliance with the configured artifact limit.
+
+The effective recovery policy is read from `recovery/policy.yaml` and has its own deterministic `proofshift-recovery-policy-v1` fingerprint. Recovery produces immutable edge/artifact assessments, a dependency-ordered plan, a separate Recovery Evidence Graph, and a rehearsal record. Recovery evidence references the finalized PS-0.7 Verification Run/Evidence Graph; it never mutates or rehashes PS-0.7 evidence.
+
+The initial recovery checkpoint capability is shadow-only:
+
+- PostgreSQL copies the isolated per-run schema into a recovery schema in the same test database, validates the copy, and restores by transactional schema replacement.
+- Filesystem copies the isolated per-run tree, including its node-scoped identity index, to a contained recovery directory; it validates file-tree hashes and restores the exact tree.
+
+These mechanisms demonstrate the rehearsal contract only. They are not provider-native production backups. The rehearsal captures the populated shadow baseline, applies a deterministic controlled mutation, executes/validates recovery, re-reads physical targets, and confirms exact baseline restoration for the current fixture. Any final target fingerprint change after verification prevents qualification. Semantic compensation may report a different recovery result fingerprint only when a registered explicit validator passes; the shadow namespace is then restored to its verified baseline before qualification.
+
+`proofshift dry-run <config>` orchestrates snapshot, checkpoint-backed projection, verification, recovery analysis, required shadow rehearsal, and qualification. `proofshift recovery <config> --run <dry-run-id>` reads the integrity-checked recovery artifact. Existing `snapshot`, `project`, and `verify` commands remain independent stages. Projection alone is not a dry run; verification alone is not readiness. Qualification means only `QUALIFIED DRY RUN`, never production safety or business approval.
+
+PS-0.8 acceptance requires:
+
+- every executed edge and target artifact is assessed, with graph-scoped source/target evidence and deterministic reverse-dependency plan ordering;
+- missing definitions/capabilities, corrupted target checkpoints, false Reverse, prohibited irreversible risk, failed rehearsal, and stale target state fail qualification with stable reasons;
+- the pension scenario includes two exact end-to-end false-Reverse assertions (a many-to-one status map and a pass-through code map); Projection and Verification pass, but Recovery denies qualification;
+- PostgreSQL and filesystem shadow recovery both demonstrate capture, mutation, validation, restore, and baseline fingerprint equality;
+- policy, assessment, rehearsal, recovery evidence, and dry-run fingerprints are versioned and deterministic; changing policy changes the policy, assessment, and dry-run fingerprints;
+- persisted assessment, plan, rehearsal, evidence, and qualification artifacts detect tampering and contain no raw record values or resolved secrets;
+- clean end-to-end dry run has zero unaccounted sources, unexplained targets, verification failures, and recovery failures, with qualification `Qualified`;
+- failed rehearsal, stale target, missing capability, false Reverse, and corrupted checkpoint each have exact assertions;
+- restore/build/full tests and Docker-backed CI pass with no required skips.
+
+PS-0.8 is the active milestone and is not accepted until remote CI passes. Production migration, production rollback, generalized merge recovery, and PS-0.9 or later remain deferred.
 
 ## PS-0 non-goals
 

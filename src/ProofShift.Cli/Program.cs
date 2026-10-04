@@ -11,6 +11,7 @@ using ProofShift.Evidence;
 using ProofShift.Graph;
 using ProofShift.Packs.Pension;
 using ProofShift.Projection;
+using ProofShift.Recovery;
 using ProofShift.Snapshots;
 using ProofShift.Domain;
 using ProofShift.Verification;
@@ -90,6 +91,12 @@ internal static class Program
             return await SnapshotAsync(args[1], jsonOutput).ConfigureAwait(false);
         }
 
+        if (string.Equals(args[0], "dry-run", StringComparison.OrdinalIgnoreCase) &&
+            checkpoint is null && projection is null && verificationRun is null)
+        {
+            return await DryRunAsync(args[1], jsonOutput).ConfigureAwait(false);
+        }
+
         if (string.Equals(args[0], "verify", StringComparison.OrdinalIgnoreCase) && checkpoint is not null && projection is not null)
         {
             return await VerifyAsync(args[1], checkpoint, projection, jsonOutput).ConfigureAwait(false);
@@ -98,6 +105,11 @@ internal static class Program
         if (string.Equals(args[0], "evidence", StringComparison.OrdinalIgnoreCase) && verificationRun is not null)
         {
             return await ReadEvidenceAsync(args[1], verificationRun, jsonOutput).ConfigureAwait(false);
+        }
+
+        if (string.Equals(args[0], "recovery", StringComparison.OrdinalIgnoreCase) && verificationRun is not null)
+        {
+            return await ReadRecoveryAsync(args[1], verificationRun, jsonOutput).ConfigureAwait(false);
         }
 
         WriteUsage();
@@ -551,6 +563,216 @@ internal static class Program
         }
     }
 
+    private static async Task<int> DryRunAsync(string path, bool jsonOutput)
+    {
+        using var cancellation = new CancellationTokenSource();
+        ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            cancellation.Cancel();
+        };
+        Console.CancelKeyPress += cancelHandler;
+        try
+        {
+            var loaded = await new ConfigurationLoader().LoadAsync(path, cancellation.Token).ConfigureAwait(false);
+            if (loaded.Configuration is null)
+            {
+                Console.Error.WriteLine("Configuration validation failed; dry run was not started.");
+                return 1;
+            }
+            var compilation = MigrationGraphCompiler.Compile(loaded.Configuration);
+            if (!compilation.IsValid || compilation.Graph is null)
+            {
+                Console.Error.WriteLine("Migration graph validation failed; dry run was not started.");
+                return 1;
+            }
+
+            var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(path))
+                ?? throw new InvalidOperationException("Project configuration directory is unavailable.");
+            var sourceConnectors = new ConnectorRegistry(
+            [
+                new PostgresSourceConnector(),
+                new SqlServerSourceConnector(),
+                new FilesystemSourceConnector(),
+                new CsvSourceConnector()
+            ]);
+            var shadowConnectors = new ShadowTargetConnectorRegistry(
+            [
+                new PostgresShadowTargetConnector(),
+                new FilesystemShadowTargetConnector()
+            ]);
+            var snapshotStore = new FileSystemSnapshotStore(Path.Combine(projectDirectory, ".proofshift", "checkpoints"));
+            var verificationService = new VerificationService(snapshotStore);
+            var recoveryService = new RecoveryService(snapshotStore,
+                new RecoveryCompensatorRegistry([new ShadowBaselineRestoreCompensator()]));
+            var orchestrator = new DryRunOrchestrator(sourceConnectors, shadowConnectors, snapshotStore,
+                verificationService, recoveryService);
+            var ruleRegistry = new VerificationRuleRegistry([new GenericVerificationRuleProvider(), new PensionPack()]);
+            var rules = ruleRegistry.Resolve(VerificationRuleConfigurationLoader.Load(loaded.Configuration));
+            var policy = RecoveryPolicyConfigurationLoader.Load(loaded.Configuration);
+            var evidenceStore = new FileSystemEvidenceStore(Path.Combine(projectDirectory, ".proofshift", "verifications"));
+            var recoveryStore = new FileSystemRecoveryArtifactStore(Path.Combine(projectDirectory, ".proofshift", "recovery"));
+            var result = await orchestrator.RunAsync(loaded.Configuration, compilation.Graph, rules, policy,
+                projectDirectory, Path.Combine(projectDirectory, ".proofshift", "temporary"), "0.1.0",
+                evidenceStore, recoveryStore, cancellation.Token).ConfigureAwait(false);
+            var output = ToDryRunOutput(loaded.Configuration.Root.Project?.Name, result);
+            if (jsonOutput) Console.WriteLine(JsonSerializer.Serialize(output, JsonOptions));
+            else WriteDryRunHuman(output);
+            return result.Outcome == DryRunExecutionOutcome.Qualified ? 0 :
+                result.Outcome == DryRunExecutionOutcome.Cancelled ? 130 : 1;
+        }
+        catch (OperationCanceledException) { return 130; }
+        catch (RecoveryException exception)
+        {
+            Console.Error.WriteLine($"Dry-run recovery analysis failed ({exception.Code}).");
+            return 1;
+        }
+        catch
+        {
+            Console.Error.WriteLine("Dry run could not be completed.");
+            return 1;
+        }
+        finally
+        {
+            Console.CancelKeyPress -= cancelHandler;
+        }
+    }
+
+    private static DryRunOutput ToDryRunOutput(string? projectName, DryRunExecutionResult result)
+    {
+        var recovery = result.Recovery;
+        return new DryRunOutput(projectName, result.Outcome.ToString().ToLowerInvariant(),
+            recovery?.Qualification.Id.Value.ToString("D", CultureInfo.InvariantCulture),
+            result.Checkpoint?.Status.ToString().ToLowerInvariant(),
+            result.Checkpoint?.Id.Value.ToString("N", CultureInfo.InvariantCulture),
+            result.Checkpoint?.Checkpoint?.ManifestHash, result.Checkpoint?.Checkpoint?.SourceFingerprint,
+            result.Checkpoint?.Checkpoint?.CrossSystemAtomic,
+            result.Projection?.Id.Value.ToString("D", CultureInfo.InvariantCulture),
+            result.Projection?.Status.ToString().ToLowerInvariant(), result.Projection?.Fingerprint,
+            recovery?.Assessment.Binding.ProjectionManifestHash,
+            result.Verification?.Run.Id.Value.ToString("D", CultureInfo.InvariantCulture),
+            result.Verification?.Run.Outcome.ToString().ToLowerInvariant(),
+            result.Verification?.Run.FailedRules,
+            result.Verification?.Findings.Count(finding => finding.Code == "UnaccountedSource"),
+            result.Verification?.Findings.Count(finding => finding.Code == "UnexpectedTarget"),
+            result.Verification?.Run.RuleSetFingerprint, result.Verification?.Run.EvidenceFingerprint,
+            recovery?.Assessment.Fingerprint, RecoveryAssessment.FingerprintVersion,
+            recovery?.Assessment.PolicyFingerprint, EffectiveRecoveryPolicy.FingerprintVersion,
+            recovery?.Plan.Fingerprint, RecoveryPlan.FingerprintVersion,
+            recovery?.Rehearsal.Outcome.ToString().ToLowerInvariant(), recovery?.Rehearsal.Fingerprint,
+            RecoveryRehearsal.FingerprintVersion, recovery?.Rehearsal.BaselineFingerprint,
+            recovery?.Rehearsal.RestoredFingerprint, recovery?.Rehearsal.ShadowCleanupFingerprint,
+            recovery?.Assessment.Coverage.ExecutedEdges, recovery?.Assessment.Coverage.ReverseEdges,
+            recovery?.Assessment.Coverage.RestoreEdges, recovery?.Assessment.Coverage.CompensateEdges,
+            recovery?.Assessment.Coverage.IrreversibleEdges, recovery?.Assessment.Coverage.AffectedArtifacts,
+            recovery?.Assessment.Coverage.RecoverableArtifacts, recovery?.Assessment.Coverage.FailedEdges,
+            recovery?.Assessment.Coverage.BySemanticType.Values.ToArray() ?? [],
+            recovery?.Assessment.Coverage.IrrecoverableArtifacts,
+            recovery?.Assessment.Coverage.UnknownArtifacts,
+            recovery?.Assessment.Coverage.RecoverablePercentage,
+            recovery?.EvidenceGraph.Fingerprint, RecoveryEvidenceGraph.FormatVersion,
+            recovery?.Qualification.DryRunFingerprint, DryRunQualification.FingerprintVersion,
+            result.RecoveryArtifacts?.RelativeDirectory,
+            recovery?.Qualification.Reasons.Select(reason => $"{reason.Code}: {reason.Message}").ToArray() ?? [],
+            result.FailureCode);
+    }
+
+    private static void WriteDryRunHuman(DryRunOutput output)
+    {
+        Console.WriteLine("ProofShift Dry Run");
+        Console.WriteLine();
+        Console.WriteLine($"Project: {output.Project ?? "unnamed"}");
+        if (output.DryRunId is not null) Console.WriteLine($"Dry Run: {output.DryRunId}");
+        Console.WriteLine();
+        Console.WriteLine("SOURCE CHECKPOINT");
+        Console.WriteLine($"Status: {output.CheckpointStatus?.ToUpperInvariant() ?? "NOT CREATED"}");
+        if (output.CheckpointId is not null) Console.WriteLine($"Checkpoint: {output.CheckpointId}");
+        if (output.CrossSystemAtomic is false) Console.WriteLine("Cross-System Atomic: NO");
+        Console.WriteLine();
+        Console.WriteLine("PROJECTION");
+        Console.WriteLine($"Status: {output.ProjectionStatus?.ToUpperInvariant() ?? "NOT CREATED"}");
+        if (output.ProjectionFingerprint is not null) Console.WriteLine($"Projection Fingerprint: {output.ProjectionFingerprint}");
+        Console.WriteLine();
+        Console.WriteLine("VERIFICATION");
+        Console.WriteLine($"Status: {output.VerificationOutcome?.ToUpperInvariant() ?? "NOT COMPLETED"}");
+        Console.WriteLine($"Verification Failures: {output.VerificationFailures ?? 0}");
+        Console.WriteLine($"Unaccounted Source Artifacts: {output.UnaccountedSources ?? 0}");
+        Console.WriteLine($"Unexplained Target Artifacts: {output.UnexplainedTargets ?? 0}");
+        if (output.VerificationEvidenceFingerprint is not null) Console.WriteLine($"Evidence Fingerprint: {output.VerificationEvidenceFingerprint}");
+        Console.WriteLine();
+        Console.WriteLine("RECOVERY");
+        Console.WriteLine($"Edges Assessed: {output.EdgesAssessed?.ToString(CultureInfo.InvariantCulture) ?? "0"}");
+        Console.WriteLine($"Reverse / Restore / Compensate / Irreversible: {output.ReverseEdges ?? 0} / {output.RestoreEdges ?? 0} / {output.CompensateEdges ?? 0} / {output.IrreversibleEdges ?? 0}");
+        Console.WriteLine($"Recovery Coverage: {output.RecoverableArtifacts?.ToString(CultureInfo.InvariantCulture) ?? "0"}/{output.AffectedArtifacts?.ToString(CultureInfo.InvariantCulture) ?? "0"} artifacts");
+        Console.WriteLine($"Irrecoverable / Unknown Artifacts: {output.IrrecoverableArtifacts ?? 0} / {output.UnknownArtifacts ?? 0}");
+        if (output.RecoverablePercentage is { } percentage) Console.WriteLine($"Recovery Coverage Percentage: {percentage.ToString(CultureInfo.InvariantCulture)}%");
+        Console.WriteLine($"Rehearsal: {output.RehearsalOutcome?.ToUpperInvariant() ?? "NOT RUN"}");
+        if (output.RecoveryPolicyFingerprint is not null) Console.WriteLine($"Recovery Policy Fingerprint ({output.RecoveryPolicyFingerprintVersion}): {output.RecoveryPolicyFingerprint}");
+        if (output.RecoveryAssessmentFingerprint is not null) Console.WriteLine($"Recovery Assessment Fingerprint ({output.RecoveryAssessmentFingerprintVersion}): {output.RecoveryAssessmentFingerprint}");
+        if (output.RecoveryBaselineFingerprint is not null) Console.WriteLine($"Rehearsal Baseline: {output.RecoveryBaselineFingerprint}");
+        if (output.RecoveryRestoredFingerprint is not null) Console.WriteLine($"Recovery Result: {output.RecoveryRestoredFingerprint}");
+        if (output.ShadowCleanupFingerprint is not null) Console.WriteLine($"Shadow Cleanup: {output.ShadowCleanupFingerprint}");
+        foreach (var coverage in output.RecoveryBySemanticType)
+            Console.WriteLine($"{coverage.SemanticType}: {coverage.RecoverableArtifacts}/{coverage.AffectedArtifacts} recoverable");
+        if (output.DryRunFingerprint is not null) Console.WriteLine($"Dry Run Fingerprint: {output.DryRunFingerprint}");
+        foreach (var reason in output.Reasons) Console.WriteLine($"Finding: {reason}");
+        if (output.FailureCode is not null) Console.WriteLine($"Failure Code: {output.FailureCode}");
+        Console.WriteLine();
+        Console.WriteLine($"RESULT: {(output.Outcome == "qualified" ? "QUALIFIED DRY RUN" : "DRY RUN NOT QUALIFIED")}");
+    }
+
+    private static async Task<int> ReadRecoveryAsync(string path, string dryRunId, bool jsonOutput)
+    {
+        try
+        {
+            if (!Guid.TryParse(dryRunId, out var runGuid))
+            {
+                Console.Error.WriteLine("Dry-run identifier must be a GUID.");
+                return 2;
+            }
+            var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(path))
+                ?? throw new InvalidOperationException("Project configuration directory is unavailable.");
+            var store = new FileSystemRecoveryArtifactStore(Path.Combine(projectDirectory, ".proofshift", "recovery"));
+            var summary = await store.ReadSummaryAsync(new DryRunId(runGuid), CancellationToken.None).ConfigureAwait(false);
+            var output = new RecoverySummaryOutput(summary.Id.Value.ToString("D", CultureInfo.InvariantCulture),
+                summary.Status.ToString().ToLowerInvariant(), summary.DryRunFingerprint, summary.PolicyFingerprint,
+                EffectiveRecoveryPolicy.FingerprintVersion,
+                summary.AssessmentFingerprint, summary.PlanFingerprint, summary.RehearsalFingerprint,
+                RecoveryAssessment.FingerprintVersion, RecoveryPlan.FingerprintVersion, RecoveryRehearsal.FingerprintVersion,
+                summary.VerificationEvidenceFingerprint, summary.RecoveryEvidenceFingerprint,
+                RecoveryEvidenceGraph.FormatVersion, DryRunQualification.FingerprintVersion, summary.ExecutedEdges,
+                summary.ReverseEdges, summary.RestoreEdges, summary.CompensateEdges, summary.IrreversibleEdges,
+                summary.AffectedArtifacts, summary.RecoverableArtifacts, summary.IrrecoverableArtifacts,
+                summary.UnknownArtifacts, summary.RecoverablePercentage, summary.FailedEdges,
+                summary.RehearsalOutcome.ToLowerInvariant(), summary.BySemanticType, summary.Reasons);
+            if (jsonOutput) Console.WriteLine(JsonSerializer.Serialize(output, JsonOptions));
+            else
+            {
+                Console.WriteLine("ProofShift Recovery Readiness");
+                Console.WriteLine($"Dry Run: {summary.Id.Value:D}");
+                Console.WriteLine($"Qualification: {summary.Status.ToString().ToUpperInvariant()}");
+                Console.WriteLine($"Recovery Edges: {summary.ExecutedEdges}");
+                Console.WriteLine($"Reverse / Restore / Compensate / Irreversible: {summary.ReverseEdges} / {summary.RestoreEdges} / {summary.CompensateEdges} / {summary.IrreversibleEdges}");
+                Console.WriteLine($"Recoverable Artifacts: {summary.RecoverableArtifacts}/{summary.AffectedArtifacts}");
+                Console.WriteLine($"Irrecoverable / Unknown Artifacts: {summary.IrrecoverableArtifacts} / {summary.UnknownArtifacts}");
+                if (summary.RecoverablePercentage is { } percentage) Console.WriteLine($"Recovery Coverage: {percentage.ToString(CultureInfo.InvariantCulture)}%");
+                Console.WriteLine($"Failed Edges: {summary.FailedEdges}");
+                Console.WriteLine($"Rehearsal: {summary.RehearsalOutcome.ToUpperInvariant()}");
+                Console.WriteLine($"Dry Run Fingerprint: {summary.DryRunFingerprint}");
+                Console.WriteLine("Integrity: VERIFIED");
+                foreach (var coverage in summary.BySemanticType)
+                    Console.WriteLine($"{coverage.SemanticType}: {coverage.RecoverableArtifacts}/{coverage.AffectedArtifacts} recoverable");
+                foreach (var reason in summary.Reasons) Console.WriteLine($"Finding: {reason}");
+            }
+            return summary.Status == DryRunQualificationStatus.Qualified ? 0 : 1;
+        }
+        catch
+        {
+            Console.Error.WriteLine("Recovery artifacts could not be read or failed integrity verification.");
+            return 1;
+        }
+    }
+
     private static async Task<int> ReadEvidenceAsync(string path, string verificationRunId, bool jsonOutput)
     {
         try
@@ -899,7 +1121,7 @@ internal static class Program
         issue.Message);
 
     private static void WriteUsage() =>
-        Console.Error.WriteLine("Usage: proofshift validate <config> [--json] | proofshift plan <config> [--json] | proofshift inspect <config> [--json] | proofshift snapshot <config> [--json] | proofshift project <config> [--checkpoint <id-or-path>] [--json] | proofshift verify <config> --checkpoint <id> --projection <run-id> [--json] | proofshift evidence <config> --run <verification-run-id> [--json]");
+        Console.Error.WriteLine("Usage: proofshift validate <config> [--json] | proofshift plan <config> [--json] | proofshift inspect <config> [--json] | proofshift snapshot <config> [--json] | proofshift project <config> [--checkpoint <id-or-path>] [--json] | proofshift verify <config> --checkpoint <id> --projection <run-id> [--json] | proofshift evidence <config> --run <verification-run-id> [--json] | proofshift recovery <config> --run <dry-run-id> [--json] | proofshift dry-run <config> [--json]");
 
     private sealed record SnapshotOutput(
         string CheckpointId,
@@ -984,6 +1206,89 @@ internal static class Program
         int FailedRules,
         int WarningRules,
         string EvidencePath);
+
+    private sealed record DryRunOutput(
+        string? Project,
+        string Outcome,
+        string? DryRunId,
+        string? CheckpointStatus,
+        string? CheckpointId,
+        string? CheckpointManifestHash,
+        string? SourceFingerprint,
+        bool? CrossSystemAtomic,
+        string? ProjectionRunId,
+        string? ProjectionStatus,
+        string? ProjectionFingerprint,
+        string? ProjectionManifestHash,
+        string? VerificationRunId,
+        string? VerificationOutcome,
+        int? VerificationFailures,
+        int? UnaccountedSources,
+        int? UnexplainedTargets,
+        string? RuleSetFingerprint,
+        string? VerificationEvidenceFingerprint,
+        string? RecoveryAssessmentFingerprint,
+        string? RecoveryAssessmentFingerprintVersion,
+        string? RecoveryPolicyFingerprint,
+        string? RecoveryPolicyFingerprintVersion,
+        string? RecoveryPlanFingerprint,
+        string? RecoveryPlanFingerprintVersion,
+        string? RehearsalOutcome,
+        string? RecoveryRehearsalFingerprint,
+        string? RecoveryRehearsalFingerprintVersion,
+        string? RecoveryBaselineFingerprint,
+        string? RecoveryRestoredFingerprint,
+        string? ShadowCleanupFingerprint,
+        long? EdgesAssessed,
+        long? ReverseEdges,
+        long? RestoreEdges,
+        long? CompensateEdges,
+        long? IrreversibleEdges,
+        long? AffectedArtifacts,
+        long? RecoverableArtifacts,
+        long? FailedEdges,
+        IReadOnlyCollection<RecoverySemanticTypeCoverage> RecoveryBySemanticType,
+        long? IrrecoverableArtifacts,
+        long? UnknownArtifacts,
+        decimal? RecoverablePercentage,
+        string? RecoveryEvidenceFingerprint,
+        string? RecoveryEvidenceFormatVersion,
+        string? DryRunFingerprint,
+        string? DryRunFingerprintVersion,
+        string? RecoveryArtifactDirectory,
+        IReadOnlyCollection<string> Reasons,
+        string? FailureCode);
+
+    private sealed record RecoverySummaryOutput(
+        string DryRunId,
+        string Status,
+        string DryRunFingerprint,
+        string PolicyFingerprint,
+        string PolicyFingerprintVersion,
+        string AssessmentFingerprint,
+        string PlanFingerprint,
+        string RehearsalFingerprint,
+        string AssessmentFingerprintVersion,
+        string PlanFingerprintVersion,
+        string RehearsalFingerprintVersion,
+        string VerificationEvidenceFingerprint,
+        string RecoveryEvidenceFingerprint,
+        string RecoveryEvidenceFormatVersion,
+        string DryRunFingerprintVersion,
+        long ExecutedEdges,
+        long ReverseEdges,
+        long RestoreEdges,
+        long CompensateEdges,
+        long IrreversibleEdges,
+        long AffectedArtifacts,
+        long RecoverableArtifacts,
+        long IrrecoverableArtifacts,
+        long UnknownArtifacts,
+        decimal? RecoverablePercentage,
+        long FailedEdges,
+        string RehearsalOutcome,
+        IReadOnlyCollection<RecoverySemanticTypeCoverage> BySemanticType,
+        IReadOnlyList<string> Reasons);
 
     private sealed record SourceColumnOutput(string Name, string DataType, bool Nullable, int? Ordinal);
 
