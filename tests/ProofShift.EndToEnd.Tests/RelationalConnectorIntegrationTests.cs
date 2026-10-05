@@ -96,6 +96,73 @@ public sealed class RelationalConnectorIntegrationTests
     }
 
     [Fact]
+    public async Task PostgreSqlShadowWriteSessionRollsBackDuplicateBatchAndCommitsNextBatch()
+    {
+        var container = await StartPostgresContainerAsync();
+        await using var cleanup = container;
+        await using (var setup = new NpgsqlConnection(container.GetConnectionString()))
+        {
+            await setup.OpenAsync(TestContext.Current.CancellationToken);
+            await using var command = setup.CreateCommand();
+            command.CommandText = "CREATE TABLE public.participant (id integer NOT NULL PRIMARY KEY, name text NOT NULL, amount numeric(28, 8) NOT NULL, birth_date date NOT NULL, local_at timestamp without time zone NOT NULL, instant_at timestamp with time zone NOT NULL, optional_value text NULL)";
+            await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+        }
+
+        var connector = new PostgresShadowTargetConnector();
+        var selector = TableSelector("public.participant", ["id"]);
+        var context = new ShadowTargetContext(
+            RelationalContext("postgres", "shadow-system", "shadow-db", container.GetConnectionString()),
+            new RunId(Guid.NewGuid()),
+            SystemRole.ShadowTarget);
+        await connector.PrepareAsync(context, selector, TestContext.Current.CancellationToken);
+        await using var session = await connector.OpenWriteSessionAsync(context, selector, 2, TestContext.Current.CancellationToken);
+
+        RecordEnvelope Record(int id, string identity)
+        {
+            var artifact = new ArtifactReference(new ArtifactId(StableArtifactIdentity.CreateArtifactId(
+                    "shadow-system", "shadow-db", "table", identity)),
+                new SystemId("shadow-system"), new StorageEndpointId("shadow-db"), "table", identity);
+            return new RecordEnvelope(artifact, "Generic.Member", new Dictionary<string, ValueNode>
+            {
+                ["id"] = new IntegerValue(id),
+                ["name"] = new StringValue($"Member {id.ToString(CultureInfo.InvariantCulture)}"),
+                ["amount"] = new DecimalValue(id),
+                ["birth_date"] = new DateValue(new DateOnly(1990, 2, 3)),
+                ["local_at"] = new LocalDateTimeValue(new DateTime(2025, 1, 2, 3, 4, 5, DateTimeKind.Unspecified)),
+                ["instant_at"] = new InstantValue(new DateTimeOffset(2025, 1, 2, 3, 4, 5, TimeSpan.Zero)),
+                ["optional_value"] = new NullValue()
+            }, new ProvenanceMetadata(new ConnectorId("postgres"), new StorageEndpointId("shadow-db"), identity, DateTimeOffset.UnixEpoch));
+        }
+
+        var duplicateBatch = new[]
+        {
+            new ShadowWriteRequest(context, selector, Record(1, "same-identity"), "member-node"),
+            new ShadowWriteRequest(context, selector, Record(2, "same-identity"), "member-node")
+        };
+        var duplicate = await Assert.ThrowsAsync<ProjectionConnectorException>(() =>
+            session.WriteBatchAsync(duplicateBatch, TestContext.Current.CancellationToken));
+        Assert.Equal("PSPROJ_TARGET_DUPLICATE", duplicate.Code);
+        Assert.Empty(await ReadAllAsync(connector.ReadAsync(new ReadRequest(context, selector), TestContext.Current.CancellationToken)));
+
+        await using (var verify = new NpgsqlConnection(container.GetConnectionString()))
+        {
+            await verify.OpenAsync(TestContext.Current.CancellationToken);
+            await using var command = verify.CreateCommand();
+            command.CommandText = $"SELECT COUNT(*) FROM \"proofshift_shadow_{context.RunId.Value:N}\".\"__ps_projection_identity\"";
+            Assert.Equal(0L, (long)(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken))!);
+        }
+
+        var validBatch = new[]
+        {
+            new ShadowWriteRequest(context, selector, Record(1, "identity-one"), "member-node"),
+            new ShadowWriteRequest(context, selector, Record(2, "identity-two"), "member-node")
+        };
+        await session.WriteBatchAsync(validBatch, TestContext.Current.CancellationToken);
+        await connector.CompleteAsync(context, TestContext.Current.CancellationToken);
+        Assert.Equal(2, (await ReadAllAsync(connector.ReadAsync(new ReadRequest(context, selector), TestContext.Current.CancellationToken))).Count);
+    }
+
+    [Fact]
     public async Task PostgreSqlConnectorInspectsAndStreamsCompositeIdentityAndTypedValues()
     {
         var container = await StartPostgresContainerAsync();

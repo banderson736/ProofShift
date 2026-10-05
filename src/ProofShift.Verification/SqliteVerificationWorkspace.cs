@@ -15,6 +15,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
     private readonly string _directory;
     private readonly string _databasePath;
     private readonly SqliteConnection _connection;
+    private readonly PerformanceRecorder? _performanceRecorder;
     private SqliteTransaction? _writeTransaction;
     private int _pendingWriteOperations;
     private bool _disposed;
@@ -23,14 +24,20 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
     public long ExpectedTargetCount { get; private set; }
     public long ActualTargetCount { get; private set; }
 
-    private SqliteVerificationWorkspace(string directory, string databasePath, SqliteConnection connection)
+    private SqliteVerificationWorkspace(string directory, string databasePath, SqliteConnection connection,
+        PerformanceRecorder? performanceRecorder)
     {
         _directory = directory;
         _databasePath = databasePath;
         _connection = connection;
+        _performanceRecorder = performanceRecorder;
     }
 
-    public static async Task<SqliteVerificationWorkspace> CreateAsync(string temporaryRoot, CancellationToken cancellationToken)
+    public static Task<SqliteVerificationWorkspace> CreateAsync(string temporaryRoot, CancellationToken cancellationToken) =>
+        CreateAsync(temporaryRoot, performanceRecorder: null, cancellationToken);
+
+    public static async Task<SqliteVerificationWorkspace> CreateAsync(string temporaryRoot,
+        PerformanceRecorder? performanceRecorder, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(temporaryRoot);
         var directory = Path.Combine(Path.GetFullPath(temporaryRoot), $"proofshift-verification-{Guid.NewGuid():N}");
@@ -50,8 +57,8 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
             command.CommandText = """
-                PRAGMA journal_mode=DELETE;
-                PRAGMA synchronous=FULL;
+                PRAGMA journal_mode=WAL;
+                PRAGMA synchronous=NORMAL;
                 CREATE TABLE source_artifacts (
                     artifact_id TEXT NOT NULL,
                     node_key TEXT NOT NULL,
@@ -81,6 +88,8 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
                     record_json TEXT NOT NULL
                 );
                 CREATE INDEX expected_identity_idx ON expected_targets(node_key, identity_hash);
+                CREATE INDEX expected_journal_binding_idx ON expected_targets(
+                    node_key,target_id,source_node_key,source_id,edge_id,target_system,target_endpoint,target_type,identity_hash);
                 CREATE TABLE expected_values (
                     expected_seq INTEGER NOT NULL,
                     field TEXT NOT NULL,
@@ -102,13 +111,20 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
                     failure_code TEXT
                 );
                 CREATE INDEX journal_target_idx ON journal_entries(result, target_node, target_identity_hash);
+                CREATE INDEX journal_produced_ancestry_idx ON journal_entries(result,target_node,target_id,edge_id);
                 CREATE TABLE journal_sources (
                     journal_seq INTEGER NOT NULL,
                     source_id TEXT NOT NULL,
                     source_node_key TEXT NOT NULL,
+                    source_system TEXT NOT NULL,
+                    source_endpoint TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    source_identity_hash TEXT NOT NULL,
                     PRIMARY KEY(journal_seq, source_node_key, source_id)
                 );
                 CREATE INDEX journal_source_idx ON journal_sources(source_id);
+                CREATE INDEX journal_source_binding_idx ON journal_sources(
+                    source_node_key,source_id,source_system,source_endpoint,source_type,source_identity_hash,journal_seq);
                 CREATE TABLE actual_targets (
                     seq INTEGER PRIMARY KEY AUTOINCREMENT,
                     node_key TEXT NOT NULL,
@@ -130,7 +146,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
                 );
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            return new SqliteVerificationWorkspace(directory, path, connection);
+            return new SqliteVerificationWorkspace(directory, path, connection, performanceRecorder);
         }
         catch
         {
@@ -159,8 +175,8 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
     public async Task<bool> ContainsSourceArtifactAsync(string nodeKey, ArtifactReference artifact, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
         await using var command = _connection.CreateCommand();
+        command.Transaction = _writeTransaction;
         command.CommandText = "SELECT 1 FROM source_artifacts WHERE node_key=$node AND artifact_id=$id AND system_id=$system AND endpoint_id=$endpoint AND artifact_type=$type AND identity_hash=$identity LIMIT 1";
         command.Parameters.AddWithValue("$node", nodeKey);
         command.Parameters.AddWithValue("$id", artifact.Id.Value);
@@ -207,8 +223,8 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         ArtifactReference source, MigrationEdgeId edgeId, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
         await using var command = _connection.CreateCommand();
+        command.Transaction = _writeTransaction;
         command.CommandText = "SELECT 1 FROM expected_targets WHERE node_key=$node AND target_id=$target AND target_system=$system AND target_endpoint=$endpoint AND target_type=$type AND identity_hash=$identity AND source_node_key=$sourceNode AND source_id=$source AND edge_id=$edge LIMIT 1";
         command.Parameters.AddWithValue("$node", nodeKey);
         command.Parameters.AddWithValue("$target", target.Id.Value);
@@ -246,13 +262,67 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         {
             await using var sourceCommand = _connection.CreateCommand();
             sourceCommand.Transaction = transaction;
-            sourceCommand.CommandText = "INSERT OR IGNORE INTO journal_sources (journal_seq,source_id,source_node_key) VALUES ($seq,$source,$sourceNode)";
+            sourceCommand.CommandText = "INSERT OR IGNORE INTO journal_sources (journal_seq,source_id,source_node_key,source_system,source_endpoint,source_type,source_identity_hash) VALUES ($seq,$source,$sourceNode,$system,$endpoint,$type,$identity)";
             sourceCommand.Parameters.AddWithValue("$seq", sequence);
             sourceCommand.Parameters.AddWithValue("$source", source.Artifact.Id.Value);
             sourceCommand.Parameters.AddWithValue("$sourceNode", source.NodeKey);
+            sourceCommand.Parameters.AddWithValue("$system", source.Artifact.SystemId.Value);
+            sourceCommand.Parameters.AddWithValue("$endpoint", source.Artifact.EndpointId.Value);
+            sourceCommand.Parameters.AddWithValue("$type", source.Artifact.ArtifactType);
+            sourceCommand.Parameters.AddWithValue("$identity", IdentityHash(source.Artifact.Identity));
             await sourceCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
         await CompleteWriteOperationAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<VerificationJournalValidationResult> ValidateJournalEntriesAsync(CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT
+                NOT EXISTS (
+                    SELECT 1
+                    FROM journal_sources js
+                    LEFT JOIN source_artifacts s
+                      ON s.node_key=js.source_node_key AND s.artifact_id=js.source_id
+                     AND s.system_id=js.source_system AND s.endpoint_id=js.source_endpoint
+                     AND s.artifact_type=js.source_type AND s.identity_hash=js.source_identity_hash
+                    WHERE s.artifact_id IS NULL
+                ),
+                NOT EXISTS (
+                    SELECT 1
+                    FROM journal_entries j
+                    WHERE j.result='produced' AND NOT EXISTS (
+                        SELECT 1
+                        FROM journal_sources js
+                        JOIN expected_targets e
+                          ON e.node_key=j.target_node AND e.target_id=j.target_id
+                         AND e.target_system=j.target_system AND e.target_endpoint=j.target_endpoint
+                         AND e.target_type=j.target_type AND e.identity_hash=j.target_identity_hash
+                         AND e.source_id=js.source_id AND e.source_node_key=js.source_node_key
+                         AND e.edge_id=j.edge_id
+                        WHERE js.journal_seq=j.seq
+                    )
+                ),
+                NOT EXISTS (
+                    SELECT 1 FROM (
+                        SELECT j.target_node,j.target_id,js.source_node_key,js.source_id,j.edge_id
+                        FROM journal_entries j
+                        JOIN journal_sources js ON js.journal_seq=j.seq
+                        WHERE j.result='produced'
+                        GROUP BY j.target_node,j.target_id,js.source_node_key,js.source_id,j.edge_id
+                        HAVING COUNT(*)>1
+                    ) duplicates
+                ),
+                (SELECT COUNT(*) FROM journal_entries WHERE result='produced')
+            """;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw new InvalidOperationException("SQLite journal validation did not return its summary row.");
+        return new VerificationJournalValidationResult(reader.GetInt64(3), reader.GetBoolean(0),
+            reader.GetBoolean(1), reader.GetBoolean(2));
     }
 
     public async Task AddTargetObservationAsync(string nodeKey, RecordEnvelope record, CancellationToken cancellationToken)
@@ -774,9 +844,17 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         if (_writeTransaction is not { } transaction) return;
         _writeTransaction = null;
         _pendingWriteOperations = 0;
-        try { await transaction.CommitAsync(cancellationToken).ConfigureAwait(false); }
+        try
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            _performanceRecorder?.ObserveTemporaryWorkspaceBytes(DirectorySize(_directory));
+        }
         finally { await transaction.DisposeAsync().ConfigureAwait(false); }
     }
+
+    private static long DirectorySize(string directory) =>
+        Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
+            .Sum(path => new FileInfo(path).Length);
 
     private static void TryDeleteDirectory(string directory)
     {

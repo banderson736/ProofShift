@@ -262,6 +262,7 @@ public sealed class PensionSemanticRuleTests
         public Task<bool> ContainsExpectedTargetAsync(string nodeKey, ArtifactReference target, string sourceNodeKey,
             ArtifactReference source, MigrationEdgeId edgeId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task AddJournalEntryAsync(VerificationJournalEntry entry, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<VerificationJournalValidationResult> ValidateJournalEntriesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task AddTargetObservationAsync(string nodeKey, RecordEnvelope record, CancellationToken cancellationToken) => throw new NotSupportedException();
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 

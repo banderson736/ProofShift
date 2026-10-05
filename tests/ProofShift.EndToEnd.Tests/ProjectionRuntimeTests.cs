@@ -1,5 +1,6 @@
 using System.Text;
 using System.Globalization;
+using System.Text.Json;
 using ProofShift.Configuration;
 using ProofShift.Connectors.Abstractions;
 using ProofShift.Domain;
@@ -235,6 +236,83 @@ public sealed class ProjectionRuntimeTests
     }
 
     [Fact]
+    public async Task ProjectionBatchSizePreservesFingerprintAndJournalsPendingBeforeProduced()
+    {
+        var records = CreateSourceRecords();
+        var scenario = Scenario(SystemRole.ShadowTarget, records);
+        var targetConnector = new BatchFakeShadowTargetConnector();
+        var service = new ShadowProjectionService(
+            new ConnectorRegistry([new FakeSourceConnector(scenario.SourceNode.Name, records)]),
+            new ShadowTargetConnectorRegistry([targetConnector]),
+            executionOptions: new ProjectionExecutionOptions(writeBatchSize: 2));
+        var singleWriteService = new ShadowProjectionService(
+            new ConnectorRegistry([new FakeSourceConnector(scenario.SourceNode.Name, records)]),
+            new ShadowTargetConnectorRegistry([targetConnector]),
+            executionOptions: new ProjectionExecutionOptions(writeBatchSize: 1));
+        var firstDirectory = CreateTemporaryDirectory();
+        var secondDirectory = CreateTemporaryDirectory();
+        try
+        {
+            var batched = await service.ProjectAsync(scenario.Configuration, scenario.Graph, firstDirectory, TestContext.Current.CancellationToken);
+            var singleWrites = await singleWriteService.ProjectAsync(scenario.Configuration, scenario.Graph, secondDirectory, TestContext.Current.CancellationToken);
+
+            Assert.Equal(ProjectionStatus.Succeeded, batched.Status);
+            Assert.Equal(ProjectionStatus.Succeeded, singleWrites.Status);
+            Assert.Equal(2, batched.TargetArtifactCount);
+            Assert.Equal(batched.Fingerprint, singleWrites.Fingerprint);
+            Assert.Equal([2, 1, 1], targetConnector.BatchSizes);
+
+            var journalPath = Path.Combine(firstDirectory, batched.JournalPath.Replace('/', Path.DirectorySeparatorChar));
+            var journalResults = (await File.ReadAllLinesAsync(journalPath, TestContext.Current.CancellationToken))
+                .Select(line =>
+                {
+                    using var document = JsonDocument.Parse(line);
+                    return document.RootElement.GetProperty("result").GetString();
+                }).ToArray();
+            Assert.Equal(["pending", "pending", "produced", "produced"], journalResults);
+        }
+        finally
+        {
+            Directory.Delete(firstDirectory, recursive: true);
+            Directory.Delete(secondDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ProjectionBatchDuplicateRollsBackEveryWriteAndJournalsEveryFailure()
+    {
+        var records = CreateSourceRecords(duplicateTargetId: true);
+        var scenario = Scenario(SystemRole.ShadowTarget, records);
+        var targetConnector = new BatchFakeShadowTargetConnector();
+        var service = new ShadowProjectionService(
+            new ConnectorRegistry([new FakeSourceConnector(scenario.SourceNode.Name, records)]),
+            new ShadowTargetConnectorRegistry([targetConnector]),
+            executionOptions: new ProjectionExecutionOptions(writeBatchSize: 2));
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var run = await service.ProjectAsync(scenario.Configuration, scenario.Graph, directory, TestContext.Current.CancellationToken);
+
+            Assert.Equal(ProjectionStatus.Failed, run.Status);
+            Assert.Equal("PSPROJ_TARGET_DUPLICATE", run.FailureCode);
+            Assert.Empty(targetConnector.RecordsFor(run.Id));
+            Assert.Equal([2], targetConnector.BatchSizes);
+            var journalPath = Path.Combine(directory, run.JournalPath.Replace('/', Path.DirectorySeparatorChar));
+            var journalResults = (await File.ReadAllLinesAsync(journalPath, TestContext.Current.CancellationToken))
+                .Select(line =>
+                {
+                    using var document = JsonDocument.Parse(line);
+                    return document.RootElement.GetProperty("result").GetString();
+                }).ToArray();
+            Assert.Equal(["pending", "pending", "failed", "failed"], journalResults);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ProjectionDuplicateTargetIdentityFailsAndKeepsJournaledPartialOutput()
     {
         var records = CreateSourceRecords(duplicateTargetId: true);
@@ -392,7 +470,7 @@ public sealed class ProjectionRuntimeTests
         }
     }
 
-    private sealed class FakeShadowTargetConnector : IShadowTargetConnector
+    private class FakeShadowTargetConnector : IShadowTargetConnector
     {
         private readonly Dictionary<(RunId Run, string Node), List<RecordEnvelope>> _records = [];
         public ConnectorId Id { get; } = new("fake-target");
@@ -449,5 +527,57 @@ public sealed class ProjectionRuntimeTests
 
         public List<RecordEnvelope> RecordsFor(RunId runId) =>
             _records.Where(pair => pair.Key.Run == runId).SelectMany(pair => pair.Value).ToList();
+
+        protected void WriteBatchAtomically(IReadOnlyList<ShadowWriteRequest> requests, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var key = (requests[0].Context.RunId, requests[0].NodeKey);
+            _records.TryGetValue(key, out var existingRecords);
+            var identities = existingRecords?.Select(record => record.Artifact.Identity).ToHashSet(StringComparer.Ordinal)
+                ?? new HashSet<string>(StringComparer.Ordinal);
+            if (requests.Any(request => !identities.Add(request.Record.Artifact.Identity)))
+            {
+                throw new ProjectionConnectorException("PSPROJ_TARGET_DUPLICATE", "Duplicate target artifact identity.");
+            }
+
+            if (existingRecords is null)
+            {
+                existingRecords = [];
+                _records.Add(key, existingRecords);
+            }
+
+            existingRecords.AddRange(requests.Select(request => request.Record));
+        }
+    }
+
+    private sealed class BatchFakeShadowTargetConnector : FakeShadowTargetConnector, IShadowTargetWriteSessionProvider
+    {
+        public List<int> BatchSizes { get; } = [];
+
+        public ValueTask<IShadowTargetWriteSession> OpenWriteSessionAsync(ShadowTargetContext context,
+            ArtifactSelector selector, int batchSize, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult<IShadowTargetWriteSession>(new FakeWriteSession(this, batchSize));
+        }
+
+        private sealed class FakeWriteSession(BatchFakeShadowTargetConnector connector, int batchSize) : IShadowTargetWriteSession
+        {
+            public int BatchSize { get; } = batchSize;
+
+            public Task WriteBatchAsync(IReadOnlyList<ShadowWriteRequest> requests, CancellationToken cancellationToken)
+            {
+                if (requests.Count == 0 || requests.Count > BatchSize)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(requests));
+                }
+
+                connector.BatchSizes.Add(requests.Count);
+                connector.WriteBatchAtomically(requests, cancellationToken);
+                return Task.CompletedTask;
+            }
+
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
     }
 }

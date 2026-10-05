@@ -23,15 +23,23 @@ public sealed class SnapshotCaptureService
         _contextFactory = contextFactory ?? new RuntimeConnectorContextFactory();
     }
 
+    public Task<SnapshotCaptureResult> CaptureAsync(
+        LoadedProjectConfiguration configuration,
+        MigrationGraph graph,
+        CancellationToken cancellationToken = default) =>
+        CaptureAsync(configuration, graph, performanceRecorder: null, cancellationToken);
+
     public async Task<SnapshotCaptureResult> CaptureAsync(
         LoadedProjectConfiguration configuration,
         MigrationGraph graph,
+        PerformanceRecorder? performanceRecorder,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(graph);
         var checkpointId = new CheckpointId(Guid.NewGuid());
         var startedAt = DateTimeOffset.UtcNow;
+        using var checkpointStage = performanceRecorder?.StartStage(PerformanceStageKind.Checkpoint, "checkpoint");
         var sources = graph.Nodes.Where(node => node.Type == MigrationNodeType.Source)
             .OrderBy(node => node.Name, StringComparer.Ordinal).ToArray();
         if (sources.Length == 0)
@@ -52,7 +60,11 @@ public sealed class SnapshotCaptureService
                 cancellationToken.ThrowIfCancellationRequested();
                 var context = _contextFactory.Create(configuration, node);
                 var connector = _connectors.Resolve(context.Connector);
+                using var inspectionStage = performanceRecorder?.StartStage(PerformanceStageKind.Checkpoint,
+                    "source inspection", connector.Id.Value, node.Name);
                 var inspection = await connector.InspectAsync(context, node.Selector, cancellationToken).ConfigureAwait(false);
+                inspectionStage?.AddArtifacts(inspection.EstimatedRecords ?? 0);
+                if (inspection.Bytes is { } inspectedBytes) inspectionStage?.AddBytes(inspectedBytes);
                 if (inspection.Status != SourceInspectionStatus.Valid)
                 {
                     throw new SnapshotStoreException(SnapshotIssueCodes.CaptureFailed,
@@ -60,6 +72,8 @@ public sealed class SnapshotCaptureService
                 }
 
                 var captureStart = DateTimeOffset.UtcNow;
+                using var nodeStage = performanceRecorder?.StartStage(PerformanceStageKind.Checkpoint,
+                    "checkpoint source node", connector.Id.Value, node.Name);
                 await session.BeginSourceNodeAsync(node.Name, cancellationToken).ConfigureAwait(false);
                 var fingerprint = new SnapshotFingerprints.MultisetAccumulator();
                 long nodeArtifacts = 0;
@@ -93,11 +107,15 @@ public sealed class SnapshotCaptureService
                         };
                     }
 
-                    nodeBytes = checked(nodeBytes + await session.WriteRecordAsync(node.Name, record, openBinary, cancellationToken).ConfigureAwait(false));
+                    var recordBytes = await session.WriteRecordAsync(node.Name, record, openBinary, cancellationToken).ConfigureAwait(false);
+                    nodeBytes = checked(nodeBytes + recordBytes);
                     nodeArtifacts++;
+                    nodeStage?.AddArtifacts();
+                    nodeStage?.AddBytes(recordBytes);
                 }
 
                 var segment = await session.CompleteSourceNodeAsync(node.Name, cancellationToken).ConfigureAwait(false);
+                nodeStage?.AddMeasurement("segmentBytes", segment.Length, "bytes");
                 var captureComplete = DateTimeOffset.UtcNow;
                 var consistency = checkpointConnector?.CheckpointConsistency ?? SourceConsistencyGuarantee.Observed;
                 endpoints.Add(new CheckpointEndpoint(

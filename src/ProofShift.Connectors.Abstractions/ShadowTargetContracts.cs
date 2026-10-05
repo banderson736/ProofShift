@@ -77,6 +77,18 @@ public interface IShadowTargetConnector
     IAsyncEnumerable<RecordEnvelope> ReadAsync(ReadRequest request, CancellationToken cancellationToken);
 }
 
+public interface IShadowTargetWriteSessionProvider
+{
+    ValueTask<IShadowTargetWriteSession> OpenWriteSessionAsync(ShadowTargetContext context,
+        ArtifactSelector selector, int batchSize, CancellationToken cancellationToken);
+}
+
+public interface IShadowTargetWriteSession : IAsyncDisposable
+{
+    int BatchSize { get; }
+    Task WriteBatchAsync(IReadOnlyList<ShadowWriteRequest> requests, CancellationToken cancellationToken);
+}
+
 public sealed class ShadowTargetConnectorRegistry
 {
     private readonly System.Collections.ObjectModel.ReadOnlyDictionary<ConnectorId, IShadowTargetConnector> _connectors;

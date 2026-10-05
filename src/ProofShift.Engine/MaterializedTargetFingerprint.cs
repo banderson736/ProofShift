@@ -21,9 +21,16 @@ public static class MaterializedTargetFingerprint
 
     public static MaterializedTargetFingerprintBuilder CreateBuilder(string graphHash) => new(graphHash);
 
+    public static Task<MaterializedTargetFingerprintResult> ComputeAsync(
+        IEnumerable<MaterializedTargetReadback> targets,
+        string graphHash,
+        CancellationToken cancellationToken) =>
+        ComputeAsync(targets, graphHash, performanceRecorder: null, cancellationToken);
+
     public static async Task<MaterializedTargetFingerprintResult> ComputeAsync(
         IEnumerable<MaterializedTargetReadback> targets,
         string graphHash,
+        PerformanceRecorder? performanceRecorder,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(targets);
@@ -31,13 +38,18 @@ public static class MaterializedTargetFingerprint
         var builder = CreateBuilder(graphHash);
         foreach (var target in targets.OrderBy(item => item.NodeKey, StringComparer.Ordinal))
         {
+            using var targetStage = performanceRecorder?.StartStage(PerformanceStageKind.Projection,
+                "target read-back node", target.Connector.Id.Value, target.NodeKey);
+            long nodeArtifactCount = 0;
             await foreach (var record in target.Connector.ReadAsync(
                 new ReadRequest(target.Context, target.Selector), cancellationToken)
                 .WithCancellation(cancellationToken).ConfigureAwait(false))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 builder.Add(target.NodeKey, record);
+                nodeArtifactCount++;
             }
+            targetStage?.AddArtifacts(nodeArtifactCount);
         }
 
         return builder.Finish();

@@ -7,6 +7,59 @@ namespace ProofShift.Verification.Tests;
 public sealed class VerificationWorkspaceTests
 {
     [Fact]
+    public async Task JournalValidationUsesIndexedBindingsAndRejectsMissingAndDuplicateAncestry()
+    {
+        var temporaryRoot = Path.Combine(Path.GetTempPath(), $"proofshift-verification-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(temporaryRoot);
+        try
+        {
+            await using var workspace = await SqliteVerificationWorkspace.CreateAsync(temporaryRoot,
+                TestContext.Current.CancellationToken);
+            var source = Record("source-1", "source", "members", "member-1", "Pension.Member", "status", "A");
+            var target = Record("target-1", "shadow", "participant", "member-1", "Pension.Member", "status", "ACTIVE");
+            var edgeId = new MigrationEdgeId(Guid.NewGuid());
+            var edge = new MigrationEdge(edgeId, "member-map", [new MigrationNodeId(Guid.NewGuid())],
+                [new MigrationNodeId(Guid.NewGuid())], new MigrationOperation(MigrationOperationType.Transform),
+                "1", new RecoveryDefinition(RecoveryMode.Reverse));
+
+            await workspace.AddSourceArtifactAsync("source-members", source, TestContext.Current.CancellationToken);
+            await workspace.AddExpectedTargetAsync("participant", target, "source-members", source, edge,
+                TestContext.Current.CancellationToken);
+            var validEntry = new VerificationJournalEntry("produced", "participant", target.Artifact,
+                [new VerificationGraphArtifact("source-members", source.Artifact)], edgeId, "member-map", "1", null);
+            await workspace.AddJournalEntryAsync(validEntry, TestContext.Current.CancellationToken);
+
+            var valid = await workspace.ValidateJournalEntriesAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(1, valid.ProducedEntryCount);
+            Assert.True(valid.SourceArtifactsMatch);
+            Assert.True(valid.ProducedTargetsMatchExpectations);
+            Assert.True(valid.ProducedAncestryIsUnique);
+
+            var missingSource = Record("missing-source", "source", "members", "missing", "Pension.Member", "status", "A");
+            await workspace.AddJournalEntryAsync(new VerificationJournalEntry("excluded", null, null,
+                [new VerificationGraphArtifact("source-members", missingSource.Artifact)], edgeId, "member-map", "1", null),
+                TestContext.Current.CancellationToken);
+            var missingBinding = await workspace.ValidateJournalEntriesAsync(TestContext.Current.CancellationToken);
+            Assert.False(missingBinding.SourceArtifactsMatch);
+
+            await workspace.AddJournalEntryAsync(validEntry, TestContext.Current.CancellationToken);
+            var duplicate = await workspace.ValidateJournalEntriesAsync(TestContext.Current.CancellationToken);
+            Assert.False(duplicate.ProducedAncestryIsUnique);
+
+            var mismatchedTarget = Record("target-other", "shadow", "participant", "member-other", "Pension.Member", "status", "ACTIVE");
+            await workspace.AddJournalEntryAsync(new VerificationJournalEntry("produced", "participant", mismatchedTarget.Artifact,
+                [new VerificationGraphArtifact("source-members", source.Artifact)], edgeId, "member-map", "1", null),
+                TestContext.Current.CancellationToken);
+            var mismatch = await workspace.ValidateJournalEntriesAsync(TestContext.Current.CancellationToken);
+            Assert.False(mismatch.ProducedTargetsMatchExpectations);
+        }
+        finally
+        {
+            if (Directory.Exists(temporaryRoot)) Directory.Delete(temporaryRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task TemporaryWorkspaceIndexesJournalAndTargetObservationsThenDeletesScratchDirectory()
     {
         var temporaryRoot = Path.Combine(Path.GetTempPath(), $"proofshift-verification-test-{Guid.NewGuid():N}");

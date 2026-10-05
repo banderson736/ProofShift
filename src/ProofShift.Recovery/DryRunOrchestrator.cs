@@ -27,7 +27,8 @@ public sealed record DryRunExecutionResult(
     RecoveryRunResult? Recovery,
     EvidenceStoreReceipt? VerificationEvidence,
     RecoveryArtifactReceipt? RecoveryArtifacts,
-    string? FailureCode);
+    string? FailureCode,
+    PerformanceRun? Performance = null);
 
 public sealed class DryRunOrchestrator
 {
@@ -50,10 +51,18 @@ public sealed class DryRunOrchestrator
         _contextFactory = contextFactory ?? new RuntimeConnectorContextFactory();
     }
 
+    public Task<DryRunExecutionResult> RunAsync(LoadedProjectConfiguration configuration, MigrationGraph graph,
+        VerificationRuleSet ruleSet, EffectiveRecoveryPolicy recoveryPolicy, string projectDirectory,
+        string temporaryDirectory, string proofShiftVersion, IEvidenceStore evidenceStore,
+        IRecoveryArtifactStore recoveryArtifactStore, CancellationToken cancellationToken) =>
+        RunAsync(configuration, graph, ruleSet, recoveryPolicy, projectDirectory, temporaryDirectory,
+            proofShiftVersion, evidenceStore, recoveryArtifactStore, performanceRecorder: null, cancellationToken);
+
     public async Task<DryRunExecutionResult> RunAsync(LoadedProjectConfiguration configuration, MigrationGraph graph,
         VerificationRuleSet ruleSet, EffectiveRecoveryPolicy recoveryPolicy, string projectDirectory,
         string temporaryDirectory, string proofShiftVersion, IEvidenceStore evidenceStore,
-        IRecoveryArtifactStore recoveryArtifactStore, CancellationToken cancellationToken)
+        IRecoveryArtifactStore recoveryArtifactStore, PerformanceRecorder? performanceRecorder,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(graph);
@@ -61,6 +70,13 @@ public sealed class DryRunOrchestrator
         ArgumentNullException.ThrowIfNull(recoveryPolicy);
         ArgumentNullException.ThrowIfNull(evidenceStore);
         ArgumentNullException.ThrowIfNull(recoveryArtifactStore);
+        var recorder = performanceRecorder ?? new PerformanceRecorder(configuration.Root.Project?.Id ?? "dry-run");
+
+        DryRunExecutionResult Complete(DryRunExecutionOutcome outcome, SnapshotCaptureResult? capturedCheckpoint,
+            ProjectionRun? projected, VerificationResult? verified, RecoveryRunResult? recovered,
+            EvidenceStoreReceipt? savedEvidence, RecoveryArtifactReceipt? savedRecovery, string? failureCode) =>
+            new(outcome, capturedCheckpoint, projected, verified, recovered, savedEvidence, savedRecovery,
+                failureCode, recorder.Complete());
 
         SnapshotCaptureResult? checkpoint = null;
         ProjectionRun? projection = null;
@@ -69,23 +85,24 @@ public sealed class DryRunOrchestrator
         try
         {
             var checkpointService = new SnapshotCaptureService(_sourceConnectors, _snapshotStore, _contextFactory);
-            checkpoint = await checkpointService.CaptureAsync(configuration, graph, cancellationToken).ConfigureAwait(false);
+            checkpoint = await checkpointService.CaptureAsync(configuration, graph, recorder, cancellationToken).ConfigureAwait(false);
             if (checkpoint.Status == CheckpointStatus.Cancelled)
-                return new DryRunExecutionResult(DryRunExecutionOutcome.Cancelled, checkpoint, null, null, null, null, null, checkpoint.FailureCode);
+                return Complete(DryRunExecutionOutcome.Cancelled, checkpoint, null, null, null, null, null, checkpoint.FailureCode);
             if (checkpoint.Status != CheckpointStatus.Complete || checkpoint.Checkpoint is null)
-                return new DryRunExecutionResult(DryRunExecutionOutcome.Failed, checkpoint, null, null, null, null, null, checkpoint.FailureCode);
+                return Complete(DryRunExecutionOutcome.Failed, checkpoint, null, null, null, null, null, checkpoint.FailureCode);
 
             await using (var loadedCheckpoint = await _snapshotStore.OpenCompleteAsync(
                 checkpoint.Id.Value.ToString("N", CultureInfo.InvariantCulture), cancellationToken).ConfigureAwait(false))
             {
                 var projectionService = new ShadowProjectionService(_sourceConnectors, _targetConnectors,
                     _contextFactory, new CheckpointSourceArtifactStreamProvider(loadedCheckpoint));
-                projection = await projectionService.ProjectAsync(configuration, graph, projectDirectory, cancellationToken).ConfigureAwait(false);
+                projection = await projectionService.ProjectAsync(configuration, graph, projectDirectory,
+                    recorder, cancellationToken).ConfigureAwait(false);
             }
             if (projection.Status == ProjectionStatus.Cancelled)
-                return new DryRunExecutionResult(DryRunExecutionOutcome.Cancelled, checkpoint, projection, null, null, null, null, projection.FailureCode);
+                return Complete(DryRunExecutionOutcome.Cancelled, checkpoint, projection, null, null, null, null, projection.FailureCode);
             if (projection.Status != ProjectionStatus.Succeeded || projection.Fingerprint is null)
-                return new DryRunExecutionResult(DryRunExecutionOutcome.NotQualified, checkpoint, projection, null, null, null, null, projection.FailureCode);
+                return Complete(DryRunExecutionOutcome.NotQualified, checkpoint, projection, null, null, null, null, projection.FailureCode);
 
             await ProjectionRunManifestStore.WriteAsync(projectDirectory, projection, cancellationToken).ConfigureAwait(false);
             var projectionManifest = await ProjectionRunManifestStore.ReadAsync(projectDirectory, projection.Id, cancellationToken).ConfigureAwait(false);
@@ -97,11 +114,20 @@ public sealed class DryRunOrchestrator
                 projectionManifest.ManifestHash, projectionManifest.JournalPath, projectionManifest.ConnectorVersions);
             var targetRuntimes = BuildTargetRuntimes(configuration, graph, projectionManifest.RunId);
             verification = await _verificationService.VerifyAsync(configuration, graph, binding, ruleSet,
-                projectDirectory, temporaryDirectory, proofShiftVersion, targetRuntimes, cancellationToken).ConfigureAwait(false);
-            evidenceReceipt = await evidenceStore.SaveAsync(verification.EvidenceGraph, cancellationToken).ConfigureAwait(false);
+                projectDirectory, temporaryDirectory, proofShiftVersion, targetRuntimes, recorder, cancellationToken).ConfigureAwait(false);
+            using (var evidenceStage = recorder.StartStage(PerformanceStageKind.Reporting, "verification evidence persistence"))
+            {
+                evidenceReceipt = await evidenceStore.SaveAsync(verification.EvidenceGraph, cancellationToken).ConfigureAwait(false);
+                evidenceStage.AddArtifacts(verification.EvidenceGraph.Records.Count);
+            }
             var result = await _recoveryService.AssessAndRehearseAsync(configuration, graph, binding, verification,
-                recoveryPolicy, targetRuntimes, projectDirectory, cancellationToken).ConfigureAwait(false);
-            var recoveryReceipt = await recoveryArtifactStore.SaveAsync(result, cancellationToken).ConfigureAwait(false);
+                recoveryPolicy, targetRuntimes, projectDirectory, recorder, cancellationToken).ConfigureAwait(false);
+            RecoveryArtifactReceipt recoveryReceipt;
+            using (var recoveryPersistenceStage = recorder.StartStage(PerformanceStageKind.Reporting, "recovery artifact persistence"))
+            {
+                recoveryReceipt = await recoveryArtifactStore.SaveAsync(result, cancellationToken).ConfigureAwait(false);
+                recoveryPersistenceStage.AddArtifacts(result.EvidenceGraph.Graph.Records.Count);
+            }
             var outcome = result.Qualification.Status switch
             {
                 DryRunQualificationStatus.Qualified => DryRunExecutionOutcome.Qualified,
@@ -109,37 +135,36 @@ public sealed class DryRunOrchestrator
                 DryRunQualificationStatus.Error => DryRunExecutionOutcome.Failed,
                 _ => DryRunExecutionOutcome.NotQualified
             };
-            return new DryRunExecutionResult(outcome, checkpoint, projection, verification, result,
-                evidenceReceipt, recoveryReceipt, null);
+            return Complete(outcome, checkpoint, projection, verification, result, evidenceReceipt, recoveryReceipt, null);
         }
         catch (OperationCanceledException)
         {
-            return new DryRunExecutionResult(DryRunExecutionOutcome.Cancelled, checkpoint, projection, verification,
+            return Complete(DryRunExecutionOutcome.Cancelled, checkpoint, projection, verification,
                 null, evidenceReceipt, null, "PSREADY_CANCELLED");
         }
         catch (SnapshotStoreException exception)
         {
-            return new DryRunExecutionResult(DryRunExecutionOutcome.Failed, checkpoint, projection, verification,
+            return Complete(DryRunExecutionOutcome.Failed, checkpoint, projection, verification,
                 null, evidenceReceipt, null, exception.Code);
         }
         catch (ProjectionExecutionException exception)
         {
-            return new DryRunExecutionResult(DryRunExecutionOutcome.NotQualified, checkpoint, projection, verification,
+            return Complete(DryRunExecutionOutcome.NotQualified, checkpoint, projection, verification,
                 null, evidenceReceipt, null, exception.Code);
         }
         catch (ProjectionManifestException exception)
         {
-            return new DryRunExecutionResult(DryRunExecutionOutcome.Failed, checkpoint, projection, verification,
+            return Complete(DryRunExecutionOutcome.Failed, checkpoint, projection, verification,
                 null, evidenceReceipt, null, exception.Code);
         }
         catch (RecoveryException exception)
         {
-            return new DryRunExecutionResult(DryRunExecutionOutcome.NotQualified, checkpoint, projection, verification,
+            return Complete(DryRunExecutionOutcome.NotQualified, checkpoint, projection, verification,
                 null, evidenceReceipt, null, exception.Code);
         }
         catch (VerificationRuleException exception)
         {
-            return new DryRunExecutionResult(DryRunExecutionOutcome.Failed, checkpoint, projection, verification,
+            return Complete(DryRunExecutionOutcome.Failed, checkpoint, projection, verification,
                 null, evidenceReceipt, null, exception.Code);
         }
     }

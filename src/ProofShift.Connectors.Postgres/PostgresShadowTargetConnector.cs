@@ -10,7 +10,7 @@ using ProofShift.Domain;
 
 namespace ProofShift.Connectors.Postgres;
 
-public sealed class PostgresShadowTargetConnector : IShadowTargetRecoveryConnector
+public sealed class PostgresShadowTargetConnector : IShadowTargetRecoveryConnector, IShadowTargetWriteSessionProvider
 {
     private static readonly Regex IdentifierPattern = new("^[A-Za-z_][A-Za-z0-9_$]*$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private readonly HashSet<string> _preparedSchemas = new(StringComparer.Ordinal);
@@ -19,6 +19,18 @@ public sealed class PostgresShadowTargetConnector : IShadowTargetRecoveryConnect
 
     public ConnectorId Id { get; } = new("postgres");
     public string Version => "0.1.0";
+
+    public async ValueTask<IShadowTargetWriteSession> OpenWriteSessionAsync(ShadowTargetContext context,
+        ArtifactSelector selector, int batchSize, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(selector);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+        var (_, table) = ResolveTable(selector);
+        var schema = ShadowSchema(context.RunId);
+        var connection = await OpenConnectionAsync(context, cancellationToken).ConfigureAwait(false);
+        return new PostgresShadowWriteSession(connection, context, selector, schema, table, batchSize);
+    }
 
     public async Task PrepareAsync(ShadowTargetContext context, ArtifactSelector selector, CancellationToken cancellationToken)
     {
@@ -324,6 +336,115 @@ public sealed class PostgresShadowTargetConnector : IShadowTargetRecoveryConnect
         catch
         {
             throw new ProjectionConnectorException("PostgreSQL shadow connection failed.");
+        }
+    }
+
+    private sealed class PostgresShadowWriteSession : IShadowTargetWriteSession
+    {
+        private readonly NpgsqlConnection _connection;
+        private readonly ShadowTargetContext _context;
+        private readonly ArtifactSelector _selector;
+        private readonly string _schema;
+        private readonly string _table;
+        private bool _disposed;
+
+        public int BatchSize { get; }
+
+        public PostgresShadowWriteSession(NpgsqlConnection connection, ShadowTargetContext context,
+            ArtifactSelector selector, string schema, string table, int batchSize)
+        {
+            _connection = connection;
+            _context = context;
+            _selector = selector;
+            _schema = schema;
+            _table = table;
+            BatchSize = batchSize;
+        }
+
+        public async Task WriteBatchAsync(IReadOnlyList<ShadowWriteRequest> requests, CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            ArgumentNullException.ThrowIfNull(requests);
+            if (requests.Count == 0 || requests.Count > BatchSize)
+                throw new ArgumentOutOfRangeException(nameof(requests), "PostgreSQL shadow write batches must contain 1..BatchSize artifacts.");
+
+            var selectedValues = new List<KeyValuePair<string, ValueNode>>[requests.Count];
+            string[]? columns = null;
+            for (var index = 0; index < requests.Count; index++)
+            {
+                var request = requests[index] ?? throw new ArgumentException("Write batch contains a null request.", nameof(requests));
+                if (request.Context.RunId != _context.RunId ||
+                    request.Context.ConnectorContext.SystemKey != _context.ConnectorContext.SystemKey ||
+                    request.Context.ConnectorContext.EndpointKey != _context.ConnectorContext.EndpointKey ||
+                    request.Context.ConnectorContext.NodeKey != _context.ConnectorContext.NodeKey ||
+                    request.NodeKey != _context.ConnectorContext.NodeKey)
+                    throw new ProjectionConnectorException("PSPROJ_BATCH_CONTEXT", "PostgreSQL write batch contains an artifact from a different target session.");
+
+                var values = SelectWriteValues(_selector, request.Record);
+                if (values.Any(pair => pair.Value is BinaryReferenceValue or ObjectValue ||
+                    pair.Value is CollectionValue collection && collection.Values.Any(value => value is not StringValue and not NullValue)))
+                    throw new ProjectionConnectorException("PostgreSQL PS-0.5 target writes support scalar values and text arrays; binary artifacts use filesystem shadow storage.");
+                var currentColumns = values.Select(pair => pair.Key).ToArray();
+                if (columns is null) columns = currentColumns;
+                else if (!columns.SequenceEqual(currentColumns, StringComparer.Ordinal))
+                    throw new ProjectionConnectorException("PostgreSQL write batch contains inconsistent target column sets.");
+                selectedValues[index] = values;
+            }
+
+            await using var transaction = await _connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await using var batch = new NpgsqlBatch(_connection) { Transaction = transaction };
+                for (var index = 0; index < requests.Count; index++)
+                {
+                    var request = requests[index];
+                    var identityCommand = new NpgsqlBatchCommand(
+                        $"INSERT INTO {Quote(_schema)}.{Quote("__ps_projection_identity")} (node_key, artifact_identity) VALUES (@node, @identity)");
+                    identityCommand.Parameters.AddWithValue("node", request.NodeKey);
+                    identityCommand.Parameters.AddWithValue("identity",
+                        SHA256.HashData(Encoding.UTF8.GetBytes(request.Record.Artifact.Identity)));
+                    batch.BatchCommands.Add(identityCommand);
+
+                    var values = selectedValues[index];
+                    var columnNames = values.Select(pair => Quote(pair.Key)).ToArray();
+                    var parameterNames = values.Select((_, valueIndex) => $"@v{valueIndex.ToString(CultureInfo.InvariantCulture)}").ToArray();
+                    var writeCommand = new NpgsqlBatchCommand(
+                        $"INSERT INTO {Quote(_schema)}.{Quote(_table)} ({string.Join(", ", columnNames)}) VALUES ({string.Join(", ", parameterNames)})");
+                    for (var valueIndex = 0; valueIndex < values.Count; valueIndex++)
+                        writeCommand.Parameters.AddWithValue(parameterNames[valueIndex][1..], ToDatabaseValue(values[valueIndex].Value));
+                    batch.BatchCommands.Add(writeCommand);
+                }
+
+                await batch.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                throw;
+            }
+            catch (PostgresException exception) when (exception.SqlState == PostgresErrorCodes.UniqueViolation)
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                throw new ProjectionConnectorException("PSPROJ_TARGET_DUPLICATE", "Duplicate target artifact identity or target uniqueness constraint violation.");
+            }
+            catch (PostgresException exception)
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                throw new ProjectionConnectorException($"PSPROJ_POSTGRES_{exception.SqlState}", "PostgreSQL rejected an atomic parameterized shadow write batch.");
+            }
+            catch
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                throw new ProjectionConnectorException("PostgreSQL shadow artifact write batch failed.");
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            await _connection.DisposeAsync().ConfigureAwait(false);
         }
     }
 

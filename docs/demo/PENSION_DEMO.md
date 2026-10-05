@@ -137,4 +137,4 @@ That physical fixture is the accepted 10-member projection/recovery slice. Its r
 
 ## Remaining demo acceptance
 
-PS-0.9 is still in progress. The complete fast heterogeneous graph, persisted defective/corrected reports and comparison, and operator script are implemented and locally exercised. Remaining acceptance is remote Docker-backed CI with no required skips; a large-scale integrated pipeline benchmark has not been run. The 8.22-million-record result covers generator enumeration only.
+PS-0.9 was accepted after Docker-backed [GitHub Actions run 37238973286, job 111543651181](https://github.com/banderson736/ProofShift/actions/runs/37238973286/job/111543651181) passed 113 tests with zero failures and zero skips. The 8.22-million-record result covers generator enumeration only; the integrated pipeline benchmark covers the fast corpus.

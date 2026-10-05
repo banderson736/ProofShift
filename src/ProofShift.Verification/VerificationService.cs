@@ -26,6 +26,19 @@ public sealed class VerificationService
     public VerificationService(IMaterializedSnapshotStore snapshotStore) =>
         _snapshotStore = snapshotStore ?? throw new ArgumentNullException(nameof(snapshotStore));
 
+    public Task<VerificationResult> VerifyAsync(
+        LoadedProjectConfiguration configuration,
+        MigrationGraph graph,
+        ProjectionVerificationBinding binding,
+        VerificationRuleSet ruleSet,
+        string projectDirectory,
+        string temporaryDirectory,
+        string proofShiftVersion,
+        IEnumerable<VerificationTargetRuntime> targets,
+        CancellationToken cancellationToken) =>
+        VerifyAsync(configuration, graph, binding, ruleSet, projectDirectory, temporaryDirectory,
+            proofShiftVersion, targets, performanceRecorder: null, cancellationToken);
+
     public async Task<VerificationResult> VerifyAsync(
         LoadedProjectConfiguration configuration,
         MigrationGraph graph,
@@ -35,6 +48,7 @@ public sealed class VerificationService
         string temporaryDirectory,
         string proofShiftVersion,
         IEnumerable<VerificationTargetRuntime> targets,
+        PerformanceRecorder? performanceRecorder,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -42,6 +56,7 @@ public sealed class VerificationService
         ArgumentNullException.ThrowIfNull(binding);
         ArgumentNullException.ThrowIfNull(ruleSet);
         ArgumentNullException.ThrowIfNull(targets);
+        using var verificationStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification, "verification");
         var startedAt = DateTimeOffset.UtcNow;
         var targetRuntimes = targets.OrderBy(target => target.NodeKey, StringComparer.Ordinal).ToArray();
         var graphNodes = graph.Nodes.ToDictionary(node => node.Name, StringComparer.Ordinal);
@@ -57,19 +72,29 @@ public sealed class VerificationService
         ValidateCheckpoint(checkpoint.Manifest, configuration, graph, binding);
 
         var verificationRunId = new RunId(Guid.NewGuid());
-        await using var workspace = await SqliteVerificationWorkspace.CreateAsync(temporaryDirectory, cancellationToken).ConfigureAwait(false);
+        SqliteVerificationWorkspace workspace;
+        using (var workspaceCreateStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
+            "verification workspace create"))
+            workspace = await SqliteVerificationWorkspace.CreateAsync(temporaryDirectory,
+                performanceRecorder, cancellationToken).ConfigureAwait(false);
+        await using var workspaceLifetime = workspace;
         var sourceNodes = graph.Nodes.Where(node => node.Type == MigrationNodeType.Source)
             .OrderBy(node => node.Name, StringComparer.Ordinal).ToArray();
 
         foreach (var sourceNode in sourceNodes)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            using var ingestStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
+                "verification workspace source and expected ingest", nodeKey: sourceNode.Name);
+            long sourceRecordCount = 0;
+            long expectedTargetCount = 0;
             await foreach (var source in checkpoint.ReadAsync(sourceNode.Name, sourceNode.Selector, cancellationToken)
                 .WithCancellation(cancellationToken).ConfigureAwait(false))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 ValidateRecordForNode(source, sourceNode);
                 await workspace.AddSourceArtifactAsync(sourceNode.Name, source, cancellationToken).ConfigureAwait(false);
+                sourceRecordCount++;
 
                 foreach (var edge in graph.Edges.Where(edge => edge.Sources.Contains(sourceNode.Id))
                     .OrderBy(edge => edge.Id.Value))
@@ -83,80 +108,106 @@ public sealed class VerificationService
                         var expected = GraphTransformationRuntime.Transform(source, edge, targetNode);
                         await workspace.AddExpectedTargetAsync(targetNode.Name, expected, sourceNode.Name, source, edge,
                             cancellationToken).ConfigureAwait(false);
+                        expectedTargetCount++;
                     }
                 }
             }
+            ingestStage?.AddArtifacts(checked(sourceRecordCount + expectedTargetCount));
+            ingestStage?.AddMeasurement("sourceRecords", sourceRecordCount, "records");
+            ingestStage?.AddMeasurement("expectedTargets", expectedTargetCount, "records");
         }
 
         ValidateSourceRecordCoverage(checkpoint.Manifest, workspace.SourceArtifactCount);
         long producedEntries = 0;
-        var producedKeys = new HashSet<(string NodeKey, string TargetId, string SourceNodeKey, string SourceId, MigrationEdgeId EdgeId)>();
         var terminalJournalEntries = new List<VerificationJournalEntry>();
-        await foreach (var journalEntry in ReadJournalAsync(journalPath, binding.ProjectionRunId, cancellationToken)
-            .ConfigureAwait(false))
+        using (var journalStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
+            "projection journal validation"))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!edges.TryGetValue(journalEntry.EdgeId, out var edge) || edge.Name != journalEntry.EdgeName || edge.Version != journalEntry.EdgeVersion)
-                throw ContextMismatch("Projection journal references an edge that does not match the configured graph.");
+            long validatedJournalEntries = 0;
+            await foreach (var journalEntry in ReadJournalAsync(journalPath, binding.ProjectionRunId, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!edges.TryGetValue(journalEntry.EdgeId, out var edge) || edge.Name != journalEntry.EdgeName || edge.Version != journalEntry.EdgeVersion)
+                    throw ContextMismatch("Projection journal references an edge that does not match the configured graph.");
 
-            var scopedSources = new List<VerificationGraphArtifact>();
-            foreach (var source in journalEntry.Sources)
-            {
-                var candidates = new List<MigrationNode>();
-                foreach (var node in edge.Sources.Select(id => graph.Nodes.Single(candidate => candidate.Id == id)))
-                    if (await workspace.ContainsSourceArtifactAsync(node.Name, source, cancellationToken).ConfigureAwait(false))
-                        candidates.Add(node);
-                if (candidates.Count != 1)
-                    throw ContextMismatch("Projection journal source cannot be resolved to exactly one checkpoint graph node.");
-                scopedSources.Add(new VerificationGraphArtifact(candidates[0].Name, source));
-            }
+                var scopedSources = new List<VerificationGraphArtifact>();
+                foreach (var source in journalEntry.Sources)
+                {
+                    if (edge.Sources.Count != 1)
+                        throw ContextMismatch("Projection journal source cannot be resolved under current direct-source graph semantics.");
+                    var sourceNode = graph.Nodes.Single(candidate => candidate.Id == edge.Sources[0]);
+                    if (sourceNode.Type != MigrationNodeType.Source)
+                        throw ContextMismatch("Projection journal source edge does not originate at a source graph node.");
+                    scopedSources.Add(new VerificationGraphArtifact(sourceNode.Name, source));
+                }
 
-            if (journalEntry.Result == "pending") continue;
-            if (journalEntry.Result == "failed")
-                throw ContextMismatch("A successful projection journal contains a failed terminal entry.");
-            if (journalEntry.Result == "produced")
-            {
-                if (journalEntry.Target is null || journalEntry.TargetNode is null || scopedSources.Count == 0)
-                    throw ContextMismatch("A produced journal entry is missing its target or source ancestry.");
-                if (!graphNodes.TryGetValue(journalEntry.TargetNode, out var targetNode) || !edge.Targets.Contains(targetNode.Id))
-                    throw ContextMismatch("Projection journal target node is not declared by its migration edge.");
-                if (scopedSources.Count != 1 || !await workspace.ContainsExpectedTargetAsync(targetNode.Name,
-                    journalEntry.Target, scopedSources[0].NodeKey, scopedSources[0].Artifact, edge.Id, cancellationToken).ConfigureAwait(false))
-                    throw ContextMismatch("Projection journal target does not match deterministic graph transformation output.");
-                if (!producedKeys.Add((targetNode.Name, journalEntry.Target.Id.Value, scopedSources[0].NodeKey,
-                    scopedSources[0].Artifact.Id.Value, edge.Id)))
-                    throw ContextMismatch("Projection journal contains duplicate terminal materialization ancestry.");
-                producedEntries++;
-            }
-            else if (journalEntry.Result == "excluded" && (edge.Operation.Type != MigrationOperationType.Exclude ||
-                scopedSources.Count != 1 || journalEntry.Target is not null || journalEntry.TargetNode is not null))
-            {
-                throw ContextMismatch("Projection journal exclusion does not match an explicit graph exclusion edge.");
-            }
-            else if (journalEntry.Result == "metadataonly" && (edge.Operation.Type != MigrationOperationType.Relationship ||
-                scopedSources.Count != 0 || journalEntry.Target is not null || journalEntry.TargetNode is not null))
-            {
-                throw ContextMismatch("Projection journal metadata-only entry does not match a relationship edge.");
-            }
-            else if (journalEntry.Result is not ("produced" or "excluded" or "metadataonly"))
-            {
-                throw ContextMismatch("Projection journal contains an unsupported terminal result.");
-            }
+                if (journalEntry.Result == "pending")
+                {
+                    await workspace.AddJournalEntryAsync(new VerificationJournalEntry(journalEntry.Result,
+                        journalEntry.TargetNode, journalEntry.Target, scopedSources, journalEntry.EdgeId,
+                        journalEntry.EdgeName, journalEntry.EdgeVersion, journalEntry.FailureCode), cancellationToken).ConfigureAwait(false);
+                    validatedJournalEntries++;
+                    continue;
+                }
+                if (journalEntry.Result == "failed")
+                    throw ContextMismatch("A successful projection journal contains a failed terminal entry.");
+                if (journalEntry.Result == "produced")
+                {
+                    if (journalEntry.Target is null || journalEntry.TargetNode is null || scopedSources.Count == 0)
+                        throw ContextMismatch("A produced journal entry is missing its target or source ancestry.");
+                    if (!graphNodes.TryGetValue(journalEntry.TargetNode, out var targetNode) || !edge.Targets.Contains(targetNode.Id))
+                        throw ContextMismatch("Projection journal target node is not declared by its migration edge.");
+                    if (scopedSources.Count != 1)
+                        throw ContextMismatch("Produced journal entry must identify exactly one source under current graph semantics.");
+                    producedEntries++;
+                }
+                else if (journalEntry.Result == "excluded" && (edge.Operation.Type != MigrationOperationType.Exclude ||
+                    scopedSources.Count != 1 || journalEntry.Target is not null || journalEntry.TargetNode is not null))
+                {
+                    throw ContextMismatch("Projection journal exclusion does not match an explicit graph exclusion edge.");
+                }
+                else if (journalEntry.Result == "metadataonly" && (edge.Operation.Type != MigrationOperationType.Relationship ||
+                    scopedSources.Count != 0 || journalEntry.Target is not null || journalEntry.TargetNode is not null))
+                {
+                    throw ContextMismatch("Projection journal metadata-only entry does not match a relationship edge.");
+                }
+                else if (journalEntry.Result is not ("produced" or "excluded" or "metadataonly"))
+                {
+                    throw ContextMismatch("Projection journal contains an unsupported terminal result.");
+                }
 
-            var verifiedJournalEntry = new VerificationJournalEntry(journalEntry.Result,
-                journalEntry.TargetNode, journalEntry.Target, scopedSources, journalEntry.EdgeId,
-                journalEntry.EdgeName, journalEntry.EdgeVersion, journalEntry.FailureCode);
-            await workspace.AddJournalEntryAsync(verifiedJournalEntry, cancellationToken).ConfigureAwait(false);
-            terminalJournalEntries.Add(verifiedJournalEntry);
+                var verifiedJournalEntry = new VerificationJournalEntry(journalEntry.Result,
+                    journalEntry.TargetNode, journalEntry.Target, scopedSources, journalEntry.EdgeId,
+                    journalEntry.EdgeName, journalEntry.EdgeVersion, journalEntry.FailureCode);
+                await workspace.AddJournalEntryAsync(verifiedJournalEntry, cancellationToken).ConfigureAwait(false);
+                terminalJournalEntries.Add(verifiedJournalEntry);
+                validatedJournalEntries++;
+            }
+            journalStage?.AddArtifacts(validatedJournalEntries);
         }
 
-        if (producedEntries != workspace.ExpectedTargetCount || producedEntries != binding.ProjectionTargetCount)
+        var journalValidation = await workspace.ValidateJournalEntriesAsync(cancellationToken).ConfigureAwait(false);
+        if (!journalValidation.SourceArtifactsMatch)
+            throw ContextMismatch("Projection journal source does not match an artifact in the exact source checkpoint.");
+        if (!journalValidation.ProducedTargetsMatchExpectations)
+            throw ContextMismatch("Projection journal target does not match deterministic graph transformation output.");
+        if (!journalValidation.ProducedAncestryIsUnique)
+            throw ContextMismatch("Projection journal contains duplicate terminal materialization ancestry.");
+        if (journalValidation.ProducedEntryCount != producedEntries)
+            throw ContextMismatch("Projection journal set validation count differs from graph-validated materializations.");
+
+        if (journalValidation.ProducedEntryCount != workspace.ExpectedTargetCount ||
+            journalValidation.ProducedEntryCount != binding.ProjectionTargetCount)
             throw ContextMismatch("Projection journal materialization coverage does not match graph-derived expectations and manifest counts.");
 
         using var targetFingerprint = MaterializedTargetFingerprint.CreateBuilder(graph.GraphHash);
         foreach (var targetRuntime in targetRuntimes)
         {
             var node = graphNodes[targetRuntime.NodeKey];
+            using var readStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
+                "actual target read-back and ingest", targetRuntime.Connector.Id.Value, node.Name);
+            long observedCount = 0;
             var request = new ReadRequest(targetRuntime.Context, node.Selector);
             await foreach (var actual in targetRuntime.Connector.ReadAsync(request, cancellationToken)
                 .WithCancellation(cancellationToken).ConfigureAwait(false))
@@ -169,7 +220,9 @@ public sealed class VerificationService
                     throw ContextMismatch("Shadow target connector returned an artifact identity inconsistent with its selector.");
                 targetFingerprint.Add(node.Name, actual);
                 await workspace.AddTargetObservationAsync(node.Name, actual, cancellationToken).ConfigureAwait(false);
+                observedCount++;
             }
+            readStage?.AddArtifacts(observedCount);
         }
         var actualFingerprint = targetFingerprint.Finish();
 
@@ -192,6 +245,9 @@ public sealed class VerificationService
         foreach (var rule in ruleSet.Rules)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            using var ruleStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
+                "verification rule", ruleId: rule.Id.Value);
+            long findingCount = 0;
             try
             {
                 await foreach (var finding in rule.EvaluateAsync(context, cancellationToken)
@@ -199,6 +255,7 @@ public sealed class VerificationService
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     findings.Add(finding);
+                    findingCount++;
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -210,39 +267,57 @@ public sealed class VerificationService
                 throw new VerificationRuleException(VerificationIssueCodes.RuleExecutionFailure,
                     $"Verification rule '{rule.Id.Value}' failed during execution: {exception.GetType().Name}.");
             }
+            finally
+            {
+                ruleStage?.AddArtifacts(findingCount);
+            }
         }
 
         var lineage = new List<LineageRecord>();
-        await foreach (var item in workspace.ReadLineageAsync(graph.GraphHash, nodeIds, cancellationToken)
-            .WithCancellation(cancellationToken).ConfigureAwait(false)) lineage.Add(item);
-        var lineageBySource = BuildLineageBySource(lineage, graph.Nodes.ToDictionary(node => node.Id, node => node.Name));
-        var dispositions = new List<ArtifactDispositionRecord>();
-        await foreach (var source in workspace.ReadSourceFactsAsync(cancellationToken)
-            .WithCancellation(cancellationToken).ConfigureAwait(false))
+        Dictionary<(string NodeKey, string ArtifactId), List<LineageRecord>> lineageBySource;
+        using (var lineageStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification, "lineage analysis"))
         {
-            var targetsForSource = lineageBySource.GetValueOrDefault((source.NodeKey, source.Artifact.Id.Value), []);
-            targetsForSource = targetsForSource.DistinctBy(item => (item.TargetNodeId, item.Target.Id)).ToList();
-            var targetArtifacts = targetsForSource.Select(item => item.Target).ToArray();
-            var targetNodeIds = targetsForSource.Select(item => item.TargetNodeId!.Value).ToArray();
-            var disposition = source.FailedEntries > 0 || source.ProducedEntries == 0 && source.ExcludedEntries == 0 ||
-                source.ProducedEntries > 0 && (source.ExcludedEntries > 0 || targetArtifacts.Length == 0)
-                ? ArtifactDisposition.Unaccounted
-                : source.ExcludedEntries > 0 ? ArtifactDisposition.Excluded : ResolveDisposition(source.EdgeIds, edges);
-            var reason = disposition switch
+            await foreach (var item in workspace.ReadLineageAsync(graph.GraphHash, nodeIds, cancellationToken)
+                .WithCancellation(cancellationToken).ConfigureAwait(false)) lineage.Add(item);
+            lineageBySource = BuildLineageBySource(lineage, graph.Nodes.ToDictionary(node => node.Id, node => node.Name));
+            lineageStage?.AddArtifacts(lineage.Count);
+        }
+        var dispositions = new List<ArtifactDispositionRecord>();
+        using (var dispositionStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification, "source disposition analysis"))
+        {
+            await foreach (var source in workspace.ReadSourceFactsAsync(cancellationToken)
+                .WithCancellation(cancellationToken).ConfigureAwait(false))
             {
-                ArtifactDisposition.Excluded => "Projection journal records an explicit graph exclusion.",
-                ArtifactDisposition.Unaccounted => "Projection journal does not establish one complete, successful graph disposition.",
-                _ => null
-            };
-            dispositions.Add(new ArtifactDispositionRecord(source.Artifact, disposition, targetArtifacts, reason,
-                nodeIds[source.NodeKey], targetNodeIds));
+                var targetsForSource = lineageBySource.GetValueOrDefault((source.NodeKey, source.Artifact.Id.Value), []);
+                targetsForSource = targetsForSource.DistinctBy(item => (item.TargetNodeId, item.Target.Id)).ToList();
+                var targetArtifacts = targetsForSource.Select(item => item.Target).ToArray();
+                var targetNodeIds = targetsForSource.Select(item => item.TargetNodeId!.Value).ToArray();
+                var disposition = source.FailedEntries > 0 || source.ProducedEntries == 0 && source.ExcludedEntries == 0 ||
+                    source.ProducedEntries > 0 && (source.ExcludedEntries > 0 || targetArtifacts.Length == 0)
+                    ? ArtifactDisposition.Unaccounted
+                    : source.ExcludedEntries > 0 ? ArtifactDisposition.Excluded : ResolveDisposition(source.EdgeIds, edges);
+                var reason = disposition switch
+                {
+                    ArtifactDisposition.Excluded => "Projection journal records an explicit graph exclusion.",
+                    ArtifactDisposition.Unaccounted => "Projection journal does not establish one complete, successful graph disposition.",
+                    _ => null
+                };
+                dispositions.Add(new ArtifactDispositionRecord(source.Artifact, disposition, targetArtifacts, reason,
+                    nodeIds[source.NodeKey], targetNodeIds));
+            }
+            dispositionStage?.AddArtifacts(dispositions.Count);
         }
 
         var sourceReferences = new List<GraphArtifactReference>();
-        await foreach (var source in workspace.ReadSourceFactsAsync(cancellationToken)
-            .WithCancellation(cancellationToken).ConfigureAwait(false))
-            sourceReferences.Add(new GraphArtifactReference(nodeIds[source.NodeKey], source.Artifact));
-        var dispositionIssues = new ArtifactDispositionLedger(dispositions).ValidateScopedCoverage(sourceReferences);
+        DomainList<ArtifactAccountingIssue> dispositionIssues;
+        using (var coverageStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification, "source disposition coverage"))
+        {
+            await foreach (var source in workspace.ReadSourceFactsAsync(cancellationToken)
+                .WithCancellation(cancellationToken).ConfigureAwait(false))
+                sourceReferences.Add(new GraphArtifactReference(nodeIds[source.NodeKey], source.Artifact));
+            dispositionIssues = new ArtifactDispositionLedger(dispositions).ValidateScopedCoverage(sourceReferences);
+            coverageStage?.AddArtifacts(dispositionIssues.Count);
+        }
         foreach (var issue in dispositionIssues)
         {
             var source = sourceReferences.SingleOrDefault(item => item.Artifact.Id == issue.ArtifactId && item.NodeId == issue.NodeId);
@@ -252,20 +327,25 @@ public sealed class VerificationService
                     [new EvidenceReference(checkpointId: binding.CheckpointId), new EvidenceReference(artifactId: source.Artifact.Id, graphNodeId: source.NodeId)]));
         }
 
-        var observedTargets = new List<GraphArtifactReference>();
-        await foreach (var target in workspace.ReadActualTargetsAsync(cancellationToken)
-            .WithCancellation(cancellationToken).ConfigureAwait(false))
-            for (var count = 0; count < target.ActualCount; count++)
-                observedTargets.Add(new GraphArtifactReference(nodeIds[target.NodeKey], target.Artifact));
-        foreach (var issue in new LineageLedger(lineage).ValidateScopedCoverage(observedTargets))
+        using (var lineageCoverageStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification, "target lineage coverage"))
         {
-            var nodeId = issue.NodeId;
-            findings.Add(new VerificationFinding(EvidenceType.Accounting, EvidenceResult.Fail, EvidenceSeverity.Error,
-                issue.Code.ToString(), issue.Message, $"lineage-coverage:{nodeId}:{issue.ArtifactId.Value}",
-                nodeId is null
-                    ? [new EvidenceReference(checkpointId: binding.CheckpointId), new EvidenceReference(projectionRunId: binding.ProjectionRunId)]
-                    : [new EvidenceReference(checkpointId: binding.CheckpointId), new EvidenceReference(projectionRunId: binding.ProjectionRunId),
-                       new EvidenceReference(artifactId: issue.ArtifactId, graphNodeId: nodeId.Value)]));
+            var observedTargets = new List<GraphArtifactReference>();
+            await foreach (var target in workspace.ReadActualTargetsAsync(cancellationToken)
+                .WithCancellation(cancellationToken).ConfigureAwait(false))
+                for (var count = 0; count < target.ActualCount; count++)
+                    observedTargets.Add(new GraphArtifactReference(nodeIds[target.NodeKey], target.Artifact));
+            var lineageIssues = new LineageLedger(lineage).ValidateScopedCoverage(observedTargets);
+            foreach (var issue in lineageIssues)
+            {
+                var nodeId = issue.NodeId;
+                findings.Add(new VerificationFinding(EvidenceType.Accounting, EvidenceResult.Fail, EvidenceSeverity.Error,
+                    issue.Code.ToString(), issue.Message, $"lineage-coverage:{nodeId}:{issue.ArtifactId.Value}",
+                    nodeId is null
+                        ? [new EvidenceReference(checkpointId: binding.CheckpointId), new EvidenceReference(projectionRunId: binding.ProjectionRunId)]
+                        : [new EvidenceReference(checkpointId: binding.CheckpointId), new EvidenceReference(projectionRunId: binding.ProjectionRunId),
+                           new EvidenceReference(artifactId: issue.ArtifactId, graphNodeId: nodeId.Value)]));
+            }
+            lineageCoverageStage?.AddArtifacts(lineageIssues.Count);
         }
 
         var failedRuleIds = findings.Where(finding => finding.Result == EvidenceResult.Fail &&
@@ -278,17 +358,22 @@ public sealed class VerificationService
         var warningCount = warningRuleIds.Count;
         var outcome = failureCount > 0 ? VerificationOutcome.Failed : warningCount > 0
             ? VerificationOutcome.PassedWithWarnings : VerificationOutcome.Passed;
-        var records = findings.Select(finding => ToEvidenceRecord(verificationRunId, finding)).ToList();
-        var summaryRule = new RuleId(SystemRuleId);
-        var summaryId = StableEvidenceId(verificationRunId, summaryRule, "verification-summary");
-        records.Add(new EvidenceRecord(summaryId, verificationRunId, EvidenceType.Decision, summaryRule, "1",
-            outcome == VerificationOutcome.Failed ? EvidenceResult.Fail : outcome == VerificationOutcome.PassedWithWarnings
-                ? EvidenceResult.Warning : EvidenceResult.Pass,
-            records.Select(record => new EvidenceReference(evidenceId: record.Id)),
-            $"Verification completed with outcome {outcome}; {findings.Count.ToString(CultureInfo.InvariantCulture)} findings were evaluated.",
-            DateTimeOffset.UtcNow, new EvidenceValue(new StringValue("all-configured-rules-evaluated")),
-            new EvidenceValue(new StringValue(outcome.ToString())), EvidenceSeverity.Error, "VerificationSummary"));
-        var evidenceGraph = new EvidenceGraph(verificationRunId, records);
+        EvidenceGraph evidenceGraph;
+        using (var evidenceStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification, "evidence graph construction"))
+        {
+            var records = findings.Select(finding => ToEvidenceRecord(verificationRunId, finding)).ToList();
+            var summaryRule = new RuleId(SystemRuleId);
+            var summaryId = StableEvidenceId(verificationRunId, summaryRule, "verification-summary");
+            records.Add(new EvidenceRecord(summaryId, verificationRunId, EvidenceType.Decision, summaryRule, "1",
+                outcome == VerificationOutcome.Failed ? EvidenceResult.Fail : outcome == VerificationOutcome.PassedWithWarnings
+                    ? EvidenceResult.Warning : EvidenceResult.Pass,
+                records.Select(record => new EvidenceReference(evidenceId: record.Id)),
+                $"Verification completed with outcome {outcome}; {findings.Count.ToString(CultureInfo.InvariantCulture)} findings were evaluated.",
+                DateTimeOffset.UtcNow, new EvidenceValue(new StringValue("all-configured-rules-evaluated")),
+                new EvidenceValue(new StringValue(outcome.ToString())), EvidenceSeverity.Error, "VerificationSummary"));
+            evidenceGraph = new EvidenceGraph(verificationRunId, records);
+            evidenceStage?.AddArtifacts(records.Count);
+        }
         var runtime = new VerificationRuntimeFingerprint(proofShiftVersion, binding, ruleSet.ProviderVersions,
             ruleSet.Definitions.Select(definition => new KeyValuePair<string, string>(definition.Id.Value, definition.Version)));
         var completedAt = DateTimeOffset.UtcNow;
@@ -300,6 +385,18 @@ public sealed class VerificationService
         return new VerificationResult(run, evidenceGraph, dispositions, lineage, findings, terminalJournalEntries);
     }
 
+    public Task<ExternalVerificationResult> VerifyExternalTargetAsync(
+        LoadedProjectConfiguration configuration,
+        MigrationGraph graph,
+        ExternalMigrationObservation observation,
+        VerificationRuleSet ruleSet,
+        string temporaryDirectory,
+        string proofShiftVersion,
+        IEnumerable<VerificationTargetRuntime> targets,
+        CancellationToken cancellationToken) =>
+        VerifyExternalTargetAsync(configuration, graph, observation, ruleSet, temporaryDirectory,
+            proofShiftVersion, targets, performanceRecorder: null, cancellationToken);
+
     public async Task<ExternalVerificationResult> VerifyExternalTargetAsync(
         LoadedProjectConfiguration configuration,
         MigrationGraph graph,
@@ -308,6 +405,7 @@ public sealed class VerificationService
         string temporaryDirectory,
         string proofShiftVersion,
         IEnumerable<VerificationTargetRuntime> targets,
+        PerformanceRecorder? performanceRecorder,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -315,6 +413,8 @@ public sealed class VerificationService
         ArgumentNullException.ThrowIfNull(observation);
         ArgumentNullException.ThrowIfNull(ruleSet);
         ArgumentNullException.ThrowIfNull(targets);
+        using var externalVerificationStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
+            "external target verification");
         var startedAt = DateTimeOffset.UtcNow;
         var targetRuntimes = targets.OrderBy(target => target.NodeKey, StringComparer.Ordinal).ToArray();
         ValidateExternalObservation(configuration, graph, observation);
@@ -325,18 +425,28 @@ public sealed class VerificationService
         ValidateExternalCheckpoint(checkpoint.Manifest, configuration, graph, observation);
 
         var runId = new RunId(Guid.NewGuid());
-        await using var workspace = await SqliteVerificationWorkspace.CreateAsync(temporaryDirectory, cancellationToken).ConfigureAwait(false);
+        SqliteVerificationWorkspace workspace;
+        using (var workspaceCreateStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
+            "external verification workspace create"))
+            workspace = await SqliteVerificationWorkspace.CreateAsync(temporaryDirectory,
+                performanceRecorder, cancellationToken).ConfigureAwait(false);
+        await using var workspaceLifetime = workspace;
         var sourceNodes = graph.Nodes.Where(node => node.Type == MigrationNodeType.Source)
             .OrderBy(node => node.Name, StringComparer.Ordinal).ToArray();
         foreach (var sourceNode in sourceNodes)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            using var ingestStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
+                "external source and expected-target ingest", nodeKey: sourceNode.Name);
+            long sourceCount = 0;
+            long expectedCount = 0;
             await foreach (var source in checkpoint.ReadAsync(sourceNode.Name, sourceNode.Selector, cancellationToken)
                 .WithCancellation(cancellationToken).ConfigureAwait(false))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 ValidateRecordForNode(source, sourceNode);
                 await workspace.AddSourceArtifactAsync(sourceNode.Name, source, cancellationToken).ConfigureAwait(false);
+                sourceCount++;
                 foreach (var edge in graph.Edges.Where(edge => edge.Sources.Contains(sourceNode.Id))
                     .OrderBy(edge => edge.Id.Value))
                 {
@@ -349,9 +459,13 @@ public sealed class VerificationService
                         var expected = GraphTransformationRuntime.Transform(source, edge, targetNode);
                         await workspace.AddExpectedTargetAsync(targetNode.Name, expected, sourceNode.Name, source, edge,
                             cancellationToken).ConfigureAwait(false);
+                        expectedCount++;
                     }
                 }
             }
+            ingestStage?.AddArtifacts(checked(sourceCount + expectedCount));
+            ingestStage?.AddMeasurement("sourceRecords", sourceCount, "records");
+            ingestStage?.AddMeasurement("expectedTargets", expectedCount, "records");
         }
         ValidateExternalSourceCoverage(checkpoint.Manifest, workspace.SourceArtifactCount);
 
@@ -359,6 +473,9 @@ public sealed class VerificationService
         foreach (var targetRuntime in targetRuntimes)
         {
             var node = graph.Nodes.Single(item => item.Name == targetRuntime.NodeKey);
+            using var targetReadStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
+                "external target read-back and ingest", targetRuntime.Connector.Id.Value, node.Name);
+            long observedCount = 0;
             await foreach (var actual in targetRuntime.Connector.ReadAsync(new ReadRequest(targetRuntime.Context, node.Selector), cancellationToken)
                 .WithCancellation(cancellationToken).ConfigureAwait(false))
             {
@@ -370,7 +487,9 @@ public sealed class VerificationService
                     throw ContextMismatch("Externally populated target connector returned an identity inconsistent with its configured selector.");
                 targetFingerprint.Add(node.Name, actual);
                 await workspace.AddTargetObservationAsync(node.Name, actual, cancellationToken).ConfigureAwait(false);
+                observedCount++;
             }
+            targetReadStage?.AddArtifacts(observedCount);
         }
         var observedTarget = targetFingerprint.Finish();
         var context = new VerificationExecutionContext(configuration, graph, observation, runId, workspace);
@@ -388,6 +507,9 @@ public sealed class VerificationService
         foreach (var rule in ruleSet.Rules)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            using var ruleStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
+                "external verification rule", ruleId: rule.Id.Value);
+            long findingCount = 0;
             try
             {
                 await foreach (var finding in rule.EvaluateAsync(context, cancellationToken)
@@ -395,6 +517,7 @@ public sealed class VerificationService
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     findings.Add(finding);
+                    findingCount++;
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
@@ -403,32 +526,47 @@ public sealed class VerificationService
                 throw new VerificationRuleException(VerificationIssueCodes.RuleExecutionFailure,
                     $"Verification rule '{rule.Id.Value}' failed during external target evaluation: {exception.GetType().Name}.");
             }
+            finally
+            {
+                ruleStage?.AddArtifacts(findingCount);
+            }
         }
 
         var nodeIds = graph.Nodes.ToDictionary(node => node.Name, node => node.Id, StringComparer.Ordinal);
         var lineage = new List<LineageRecord>();
-        await foreach (var item in workspace.ReadGraphDerivedLineageAsync(graph.GraphHash, nodeIds, cancellationToken)
-            .WithCancellation(cancellationToken).ConfigureAwait(false)) lineage.Add(item);
-        var lineageBySource = BuildLineageBySource(lineage, graph.Nodes.ToDictionary(node => node.Id, node => node.Name));
+        Dictionary<(string NodeKey, string ArtifactId), List<LineageRecord>> lineageBySource;
+        using (var lineageStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
+            "external target lineage analysis"))
+        {
+            await foreach (var item in workspace.ReadGraphDerivedLineageAsync(graph.GraphHash, nodeIds, cancellationToken)
+                .WithCancellation(cancellationToken).ConfigureAwait(false)) lineage.Add(item);
+            lineageBySource = BuildLineageBySource(lineage, graph.Nodes.ToDictionary(node => node.Id, node => node.Name));
+            lineageStage?.AddArtifacts(lineage.Count);
+        }
         var edgeMap = graph.Edges.ToDictionary(edge => edge.Id);
         var sourceFacts = workspace.ReadGraphDerivedSourceFactsAsync(cancellationToken);
         var dispositions = new List<ArtifactDispositionRecord>();
         var sourceReferences = new List<GraphArtifactReference>();
-        await foreach (var source in sourceFacts.WithCancellation(cancellationToken).ConfigureAwait(false))
+        using (var dispositionStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
+            "external source disposition analysis"))
         {
-            var sourceNodeId = nodeIds[source.NodeKey];
-            sourceReferences.Add(new GraphArtifactReference(sourceNodeId, source.Artifact));
-            var mapped = lineageBySource.GetValueOrDefault((source.NodeKey, source.Artifact.Id.Value), [])
-                .DistinctBy(item => (item.TargetNodeId, item.Target.Id)).ToArray();
-            var disposition = source.ProducedEntries == 0 || mapped.Length == 0
-                ? ArtifactDisposition.Unaccounted
-                : ResolveDisposition(source.EdgeIds, edgeMap);
-            var reason = disposition == ArtifactDisposition.Unaccounted
-                ? "Checkpoint and migration graph do not establish an expected target mapping."
-                : null;
-            dispositions.Add(new ArtifactDispositionRecord(source.Artifact, disposition,
-                mapped.Select(item => item.Target).ToArray(), reason, sourceNodeId,
-                mapped.Select(item => item.TargetNodeId!.Value).ToArray()));
+            await foreach (var source in sourceFacts.WithCancellation(cancellationToken).ConfigureAwait(false))
+            {
+                var sourceNodeId = nodeIds[source.NodeKey];
+                sourceReferences.Add(new GraphArtifactReference(sourceNodeId, source.Artifact));
+                var mapped = lineageBySource.GetValueOrDefault((source.NodeKey, source.Artifact.Id.Value), [])
+                    .DistinctBy(item => (item.TargetNodeId, item.Target.Id)).ToArray();
+                var disposition = source.ProducedEntries == 0 || mapped.Length == 0
+                    ? ArtifactDisposition.Unaccounted
+                    : ResolveDisposition(source.EdgeIds, edgeMap);
+                var reason = disposition == ArtifactDisposition.Unaccounted
+                    ? "Checkpoint and migration graph do not establish an expected target mapping."
+                    : null;
+                dispositions.Add(new ArtifactDispositionRecord(source.Artifact, disposition,
+                    mapped.Select(item => item.Target).ToArray(), reason, sourceNodeId,
+                    mapped.Select(item => item.TargetNodeId!.Value).ToArray()));
+            }
+            dispositionStage?.AddArtifacts(dispositions.Count);
         }
         foreach (var issue in new ArtifactDispositionLedger(dispositions).ValidateScopedCoverage(sourceReferences))
         {
@@ -439,17 +577,23 @@ public sealed class VerificationService
                     new EvidenceReference(artifactId: scopedSource.Artifact.Id, graphNodeId: scopedSource.NodeId)]));
         }
 
-        var observedTargets = new List<GraphArtifactReference>();
-        await foreach (var target in workspace.ReadActualTargetsAsync(cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
-            for (var count = 0; count < target.ActualCount; count++)
-                observedTargets.Add(new GraphArtifactReference(nodeIds[target.NodeKey], target.Artifact));
-        foreach (var issue in new LineageLedger(lineage).ValidateScopedCoverage(observedTargets))
+        using (var lineageCoverageStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
+            "external target lineage coverage"))
         {
-            var inputs = issue.NodeId is { } nodeId
-                ? context.BindingReferences.Append(new EvidenceReference(artifactId: issue.ArtifactId, graphNodeId: nodeId)).ToArray()
-                : context.BindingReferences.ToArray();
-            findings.Add(new VerificationFinding(EvidenceType.Accounting, EvidenceResult.Fail, EvidenceSeverity.Error,
-                issue.Code.ToString(), issue.Message, $"external-lineage:{issue.NodeId}:{issue.ArtifactId.Value}", inputs));
+            var observedTargets = new List<GraphArtifactReference>();
+            await foreach (var target in workspace.ReadActualTargetsAsync(cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
+                for (var count = 0; count < target.ActualCount; count++)
+                    observedTargets.Add(new GraphArtifactReference(nodeIds[target.NodeKey], target.Artifact));
+            var lineageIssues = new LineageLedger(lineage).ValidateScopedCoverage(observedTargets);
+            foreach (var issue in lineageIssues)
+            {
+                var inputs = issue.NodeId is { } nodeId
+                    ? context.BindingReferences.Append(new EvidenceReference(artifactId: issue.ArtifactId, graphNodeId: nodeId)).ToArray()
+                    : context.BindingReferences.ToArray();
+                findings.Add(new VerificationFinding(EvidenceType.Accounting, EvidenceResult.Fail, EvidenceSeverity.Error,
+                    issue.Code.ToString(), issue.Message, $"external-lineage:{issue.NodeId}:{issue.ArtifactId.Value}", inputs));
+            }
+            lineageCoverageStage?.AddArtifacts(lineageIssues.Count);
         }
 
         var failedRuleIds = findings.Where(finding => finding.Result == EvidenceResult.Fail &&
@@ -460,16 +604,22 @@ public sealed class VerificationService
             .Select(finding => finding.RuleId).ToHashSet();
         var outcome = failedRuleIds.Count > 0 ? VerificationOutcome.Failed : warningRuleIds.Count > 0
             ? VerificationOutcome.PassedWithWarnings : VerificationOutcome.Passed;
-        var records = findings.Select(finding => ToEvidenceRecord(runId, finding)).ToList();
-        var summaryRule = new RuleId(SystemRuleId);
-        records.Add(new EvidenceRecord(StableEvidenceId(runId, summaryRule, "external-verification-summary"), runId,
-            EvidenceType.Decision, summaryRule, "1", outcome == VerificationOutcome.Failed ? EvidenceResult.Fail :
-                outcome == VerificationOutcome.PassedWithWarnings ? EvidenceResult.Warning : EvidenceResult.Pass,
-            records.Select(record => new EvidenceReference(evidenceId: record.Id)),
-            $"External target verification completed with outcome {outcome}; ProofShift execution was not observed.",
-            DateTimeOffset.UtcNow, new EvidenceValue(new StringValue("all-configured-rules-evaluated")),
-            new EvidenceValue(new StringValue(outcome.ToString())), EvidenceSeverity.Error, "ExternalVerificationSummary"));
-        var evidenceGraph = new EvidenceGraph(runId, records);
+        EvidenceGraph evidenceGraph;
+        using (var evidenceStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
+            "external evidence graph construction"))
+        {
+            var records = findings.Select(finding => ToEvidenceRecord(runId, finding)).ToList();
+            var summaryRule = new RuleId(SystemRuleId);
+            records.Add(new EvidenceRecord(StableEvidenceId(runId, summaryRule, "external-verification-summary"), runId,
+                EvidenceType.Decision, summaryRule, "1", outcome == VerificationOutcome.Failed ? EvidenceResult.Fail :
+                    outcome == VerificationOutcome.PassedWithWarnings ? EvidenceResult.Warning : EvidenceResult.Pass,
+                records.Select(record => new EvidenceReference(evidenceId: record.Id)),
+                $"External target verification completed with outcome {outcome}; ProofShift execution was not observed.",
+                DateTimeOffset.UtcNow, new EvidenceValue(new StringValue("all-configured-rules-evaluated")),
+                new EvidenceValue(new StringValue(outcome.ToString())), EvidenceSeverity.Error, "ExternalVerificationSummary"));
+            evidenceGraph = new EvidenceGraph(runId, records);
+            evidenceStage?.AddArtifacts(records.Count);
+        }
         var runtimeFingerprint = ExternalRuntimeFingerprint(configuration, graph, observation, ruleSet, proofShiftVersion);
         var run = new ExternalVerificationRunRecord(runId, observation.ObservationId, observation.ObservationRunId,
             configuration.ConfigurationHash, graph.GraphHash, observation.CheckpointId, observation.CheckpointManifestHash,

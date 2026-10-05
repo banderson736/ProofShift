@@ -261,6 +261,9 @@ public sealed record VerificationJournalEntry
         string.IsNullOrWhiteSpace(value) ? throw new ArgumentException("Value must not be empty.", parameterName) : value.Trim();
 }
 
+public sealed record VerificationJournalValidationResult(long ProducedEntryCount, bool SourceArtifactsMatch,
+    bool ProducedTargetsMatchExpectations, bool ProducedAncestryIsUnique);
+
 public sealed record VerificationSourceFact(string NodeKey, string SemanticType, ArtifactReference Artifact, int ProducedEntries,
     int ExcludedEntries, int FailedEntries, IReadOnlyCollection<ArtifactId> TargetIds,
     IReadOnlyCollection<MigrationEdgeId> EdgeIds);
@@ -319,6 +322,7 @@ public interface IVerificationWorkspace : IAsyncDisposable
     Task<bool> ContainsExpectedTargetAsync(string nodeKey, ArtifactReference target, string sourceNodeKey,
         ArtifactReference source, MigrationEdgeId edgeId, CancellationToken cancellationToken);
     Task AddJournalEntryAsync(VerificationJournalEntry entry, CancellationToken cancellationToken);
+    Task<VerificationJournalValidationResult> ValidateJournalEntriesAsync(CancellationToken cancellationToken);
     Task AddTargetObservationAsync(string nodeKey, RecordEnvelope record, CancellationToken cancellationToken);
 
     IAsyncEnumerable<VerificationSourceFact> ReadSourceFactsAsync(CancellationToken cancellationToken);

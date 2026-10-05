@@ -158,11 +158,11 @@ Acceptance requires:
 - the clean pension fixture returns `QUALIFIED DRY RUN`; fault scenarios return `NOT QUALIFIED` with stable reasons;
 - full solution validation and remote Docker-backed CI pass with no required skips.
 
-PS-0.8 is accepted. PS-0.9 Public Pension Assurance Vertical is the active assignment. Do not begin PS-0.10 without an explicit new assignment.
+PS-0.8 and PS-0.9 are accepted. Do not begin PS-0.10 without an explicit new assignment.
 
 ### PS-0.9 Public Pension Assurance Vertical
 
-Status: In progress; remote CI acceptance remains outstanding. The vertical extends `ProofShift.Packs.Pension` with versioned semantic rules, typed source/expected/actual record streams in the generic disk-backed Verification workspace, a deterministic clean-data generator and separate v1 defect injector, evidence-backed `report`/`compare` commands, and a complete local fast-scale heterogeneous physical scenario.
+Status: Accepted after Docker-backed [GitHub Actions run 37238973286, job 111543651181](https://github.com/banderson736/ProofShift/actions/runs/37238973286/job/111543651181) passed 113 tests with zero failures and zero skips. The vertical extends `ProofShift.Packs.Pension` with versioned semantic rules, typed source/expected/actual record streams in the generic disk-backed Verification workspace, a deterministic clean-data generator and separate v1 defect injector, evidence-backed `report`/`compare` commands, and a complete local fast-scale heterogeneous physical scenario.
 
 Implemented and locally validated:
 
@@ -175,13 +175,9 @@ Implemented and locally validated:
 - The integrated fast corpus materializes 7,945 relational SQL rows, 275 CSV metadata rows, and 275 filesystem payloads; it checkpoints 8,495 artifacts and projects 8,595 PostgreSQL/filesystem targets.
 - The projected defective run records exactly 149 discrepancies and fails qualification; the corrected run records zero discrepancies and qualifies. Both persist Evidence/Recovery artifacts and human/machine reports; the CLI comparison resolves all 149 defects and attributes changes to source/checkpoint and graph.
 - The integrated fast-scale run completed in 396,017 ms with 519,651,328 bytes peak working set and zero temporary workspace bytes after cleanup. The separate large benchmark remains generator-only.
-- Full local solution tests exited successfully; EndToEnd reported 41 passed, 0 failed, 2 Windows symlink-capability skips. This does not satisfy the no-required-skips remote CI gate.
+- Docker-backed GitHub Actions run 37238973286 passed the full solution suite: 113 passed, 0 failed, 0 skipped.
 
-Acceptance still requires:
-
-- run the complete restore/build/test workflow in remote Docker-backed GitHub Actions with no required skips; the candidate is uncommitted and no commit/push was authorized;
-- keep large-scale performance claims limited to generator enumeration until the integrated multi-store pipeline has a representative large-scale benchmark;
-- retain the existing limits on exception drill-down and report streaming; do not overstate external target lineage as observed vendor execution history.
+PS-0.9 acceptance is complete. The large-scale measurement covers generator enumeration only; the integrated benchmark covers the fast multi-store corpus. External target lineage remains graph-derived expected lineage, not observed vendor execution history. PS-0.10 remains unassigned.
 
 Do not add production migration/rollback, SaaS, UI, AI, FHIR, Oracle, DB2, Kubernetes, or unrelated platform features. Do not begin PS-0.10 until PS-0.9 is accepted.
 

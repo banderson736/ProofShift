@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -15,23 +16,34 @@ public sealed class ShadowProjectionService
     private readonly ShadowTargetConnectorRegistry _targetConnectors;
     private readonly RuntimeConnectorContextFactory _contextFactory;
     private readonly ISourceArtifactStreamProvider? _sourceProvider;
+    private readonly ProjectionExecutionOptions _executionOptions;
 
     public ShadowProjectionService(
         ConnectorRegistry sourceConnectors,
         ShadowTargetConnectorRegistry targetConnectors,
         RuntimeConnectorContextFactory? contextFactory = null,
-        ISourceArtifactStreamProvider? sourceProvider = null)
+        ISourceArtifactStreamProvider? sourceProvider = null,
+        ProjectionExecutionOptions? executionOptions = null)
     {
         _sourceConnectors = sourceConnectors ?? throw new ArgumentNullException(nameof(sourceConnectors));
         _targetConnectors = targetConnectors ?? throw new ArgumentNullException(nameof(targetConnectors));
         _contextFactory = contextFactory ?? new RuntimeConnectorContextFactory();
         _sourceProvider = sourceProvider;
+        _executionOptions = executionOptions ?? new ProjectionExecutionOptions();
     }
+
+    public Task<ProjectionRun> ProjectAsync(
+        LoadedProjectConfiguration configuration,
+        MigrationGraph graph,
+        string projectDirectory,
+        CancellationToken cancellationToken = default) =>
+        ProjectAsync(configuration, graph, projectDirectory, performanceRecorder: null, cancellationToken);
 
     public async Task<ProjectionRun> ProjectAsync(
         LoadedProjectConfiguration configuration,
         MigrationGraph graph,
         string projectDirectory,
+        PerformanceRecorder? performanceRecorder,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -40,6 +52,7 @@ public sealed class ShadowProjectionService
 
         var runId = new RunId(Guid.NewGuid());
         var startedAt = DateTimeOffset.UtcNow;
+        using var projectionStage = performanceRecorder?.StartStage(PerformanceStageKind.Projection, "projection");
         var runDirectoryName = runId.Value.ToString("N", CultureInfo.InvariantCulture);
         var journalRelativePath = Path.Combine(".proofshift", "projections", runDirectoryName, "journal.jsonl").Replace('\\', '/');
         var journalPath = Path.Combine(projectDirectory, ".proofshift", "projections", runDirectoryName, "journal.jsonl");
@@ -51,6 +64,7 @@ public sealed class ShadowProjectionService
         string? fingerprint = null;
         var versions = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var destinationContexts = new List<(MigrationNode Node, IShadowTargetConnector Connector, ShadowTargetContext Context)>();
+        var writeSessions = new Dictionary<MigrationNodeId, IShadowTargetWriteSession>();
         var journal = new ProjectionJournalWriter(journalPath, runId);
 
         try
@@ -89,7 +103,11 @@ public sealed class ShadowProjectionService
                 string connectorVersion;
                 if (_sourceProvider is null)
                 {
+                    using var inspectionStage = performanceRecorder?.StartStage(PerformanceStageKind.Projection,
+                        "projection source inspection", connector!.Id.Value, source.Name);
                     var inspection = await connector!.InspectAsync(context, source.Selector, cancellationToken).ConfigureAwait(false);
+                    inspectionStage?.AddArtifacts(inspection.EstimatedRecords ?? 0);
+                    if (inspection.Bytes is { } inspectedBytes) inspectionStage?.AddBytes(inspectedBytes);
                     if (inspection.Status != SourceInspectionStatus.Valid)
                     {
                         throw new ProjectionExecutionException("PSPROJ_SOURCE_INSPECTION", $"Source inspection failed for graph node '{source.Name}'.");
@@ -125,18 +143,47 @@ public sealed class ShadowProjectionService
             foreach (var destination in destinationContexts)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                using var prepareStage = performanceRecorder?.StartStage(PerformanceStageKind.Projection,
+                    "shadow target prepare", destination.Connector.Id.Value, destination.Node.Name);
                 await destination.Connector.PrepareAsync(destination.Context, destination.Node.Selector, cancellationToken).ConfigureAwait(false);
+            }
+
+            var batchTargetIds = graph.Edges
+                .Where(edge => edge.Operation.Type is not (MigrationOperationType.Exclude or MigrationOperationType.Relationship) && edge.Targets.Count == 1)
+                .SelectMany(edge => edge.Targets)
+                .ToHashSet();
+            foreach (var destination in destinationContexts)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (batchTargetIds.Contains(destination.Node.Id) && destination.Connector is IShadowTargetWriteSessionProvider provider)
+                {
+                    writeSessions.Add(destination.Node.Id, await provider.OpenWriteSessionAsync(
+                        destination.Context, destination.Node.Selector, _executionOptions.WriteBatchSize, cancellationToken).ConfigureAwait(false));
+                }
             }
 
             var destinationsById = destinationContexts.ToDictionary(item => item.Node.Id);
             foreach (var edge in OrderEdges(graph))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                using var edgeStage = performanceRecorder?.StartStage(PerformanceStageKind.Projection,
+                    "projection edge", edge.Name);
+                var edgeSourceCount = 0L;
+                var edgeTargetCount = 0L;
+                var targetWriteTicks = 0L;
+                var journalTicks = 0L;
+                var journalEntryCount = 0L;
+                var edgeTransformations = GetTransformations(edge);
                 if (edge.Operation.Type == MigrationOperationType.Relationship)
                 {
+                    var journalStarted = Stopwatch.GetTimestamp();
                     await journal.AppendAsync(new ProjectionJournalEntry(
                         runId, null, null, [], edge.Id, edge.Name, edge.Version,
-                        GetTransformations(edge), ProjectionJournalResult.MetadataOnly, edge.Recovery), cancellationToken).ConfigureAwait(false);
+                        edgeTransformations, ProjectionJournalResult.MetadataOnly, edge.Recovery), cancellationToken).ConfigureAwait(false);
+                    journalTicks += Stopwatch.GetTimestamp() - journalStarted;
+                    journalEntryCount++;
+                    edgeStage?.AddMeasurement("journalMilliseconds", ToMilliseconds(journalTicks), "ms");
+                    edgeStage?.AddMeasurement("journalEntries", journalEntryCount, "entries");
                     continue;
                 }
 
@@ -158,6 +205,66 @@ public sealed class ShadowProjectionService
                     throw new ProjectionExecutionException("PSPROJ_GRAPH", "Executable projection edge has no target node.");
                 }
 
+                IShadowTargetWriteSession? edgeWriteSession = null;
+                if (targets.Length == 1)
+                {
+                    writeSessions.TryGetValue(targets[0].Id, out edgeWriteSession);
+                }
+
+                var bufferedWrites = new List<BufferedProjectionWrite>(edgeWriteSession?.BatchSize ?? 0);
+                async Task FlushBufferedWritesAsync()
+                {
+                    if (bufferedWrites.Count == 0)
+                    {
+                        return;
+                    }
+
+                    var batch = bufferedWrites.ToArray();
+                    var pendingStarted = Stopwatch.GetTimestamp();
+                    await journal.AppendBatchAsync(batch.Select(write => write.Pending).ToArray(), cancellationToken).ConfigureAwait(false);
+                    journalTicks += Stopwatch.GetTimestamp() - pendingStarted;
+                    journalEntryCount += batch.Length;
+                    var writeStarted = Stopwatch.GetTimestamp();
+                    try
+                    {
+                        await edgeWriteSession!.WriteBatchAsync(batch.Select(write => write.Request).ToArray(), cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        targetWriteTicks += Stopwatch.GetTimestamp() - writeStarted;
+                        var failedStarted = Stopwatch.GetTimestamp();
+                        await journal.AppendBatchAsync(batch.Select(write => CreateBatchFailureEntry(write, runId, "PSPROJ_BATCH_CANCELLED")).ToArray(), CancellationToken.None).ConfigureAwait(false);
+                        journalTicks += Stopwatch.GetTimestamp() - failedStarted;
+                        journalEntryCount += batch.Length;
+                        failureCount += batch.Length;
+                        failureCode = "PSPROJ_BATCH_CANCELLED";
+                        throw;
+                    }
+                    catch (Exception exception)
+                    {
+                        var code = exception is ProjectionConnectorException connector
+                            ? connector.Code
+                            : "PSPROJ_BATCH_FAILED";
+                        targetWriteTicks += Stopwatch.GetTimestamp() - writeStarted;
+                        var failedStarted = Stopwatch.GetTimestamp();
+                        await journal.AppendBatchAsync(batch.Select(write => CreateBatchFailureEntry(write, runId, code)).ToArray(), CancellationToken.None).ConfigureAwait(false);
+                        journalTicks += Stopwatch.GetTimestamp() - failedStarted;
+                        journalEntryCount += batch.Length;
+                        failureCount += batch.Length;
+                        failureCode = code;
+                        throw new ProjectionExecutionException(code, "Projection failed while committing a target write batch.");
+                    }
+
+                    targetWriteTicks += Stopwatch.GetTimestamp() - writeStarted;
+                    targetCount += batch.Length;
+                    edgeTargetCount += batch.Length;
+                    var producedStarted = Stopwatch.GetTimestamp();
+                    await journal.AppendBatchAsync(batch.Select(write => CreateProducedEntry(write, runId)).ToArray(), cancellationToken).ConfigureAwait(false);
+                    journalTicks += Stopwatch.GetTimestamp() - producedStarted;
+                    journalEntryCount += batch.Length;
+                    bufferedWrites.Clear();
+                }
+
                 var sourceRecords = _sourceProvider is null
                     ? sourceRuntime.Connector!.ReadAsync(sourceRuntime.Context, sourceNode.Selector, new ReadOptions(), cancellationToken)
                     : _sourceProvider.ReadAsync(sourceNode.Name, sourceRuntime.Context, sourceNode.Selector, cancellationToken);
@@ -166,12 +273,16 @@ public sealed class ShadowProjectionService
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     sourceCount++;
+                    edgeSourceCount++;
                     if (edge.Operation.Type == MigrationOperationType.Exclude)
                     {
+                        var journalStarted = Stopwatch.GetTimestamp();
                         await journal.AppendAsync(new ProjectionJournalEntry(
                             runId, null, null, [sourceRecord.Artifact], edge.Id, edge.Name, edge.Version,
-                            GetTransformations(edge), ProjectionJournalResult.Excluded, edge.Recovery),
+                            edgeTransformations, ProjectionJournalResult.Excluded, edge.Recovery),
                             cancellationToken).ConfigureAwait(false);
+                        journalTicks += Stopwatch.GetTimestamp() - journalStarted;
+                        journalEntryCount++;
                         continue;
                     }
 
@@ -207,16 +318,33 @@ public sealed class ShadowProjectionService
                                 };
                             }
 
-                            await journal.AppendAsync(new ProjectionJournalEntry(
+                            var pendingEntry = new ProjectionJournalEntry(
                                 runId, projected.Artifact, target.Name, [sourceRecord.Artifact], edge.Id, edge.Name, edge.Version,
-                                GetTransformations(edge), ProjectionJournalResult.Pending, edge.Recovery), cancellationToken).ConfigureAwait(false);
-                            await destination.Connector.WriteAsync(
-                                new ShadowWriteRequest(destination.Context, target.Selector, projected, target.Name, openBinary),
-                                cancellationToken).ConfigureAwait(false);
-                            targetCount++;
-                            await journal.AppendAsync(new ProjectionJournalEntry(
-                                runId, projected.Artifact, target.Name, [sourceRecord.Artifact], edge.Id, edge.Name, edge.Version,
-                                GetTransformations(edge), ProjectionJournalResult.Produced, edge.Recovery), cancellationToken).ConfigureAwait(false);
+                                edgeTransformations, ProjectionJournalResult.Pending, edge.Recovery);
+                            var writeRequest = new ShadowWriteRequest(destination.Context, target.Selector, projected, target.Name, openBinary);
+                            if (edgeWriteSession is not null)
+                            {
+                                bufferedWrites.Add(new BufferedProjectionWrite(writeRequest, sourceRecord.Artifact,
+                                    edge, edgeTransformations, pendingEntry));
+                            }
+                            else
+                            {
+                                var pendingJournalStarted = Stopwatch.GetTimestamp();
+                                await journal.AppendAsync(pendingEntry, cancellationToken).ConfigureAwait(false);
+                                journalTicks += Stopwatch.GetTimestamp() - pendingJournalStarted;
+                                journalEntryCount++;
+                                var targetWriteStarted = Stopwatch.GetTimestamp();
+                                await destination.Connector.WriteAsync(writeRequest, cancellationToken).ConfigureAwait(false);
+                                targetWriteTicks += Stopwatch.GetTimestamp() - targetWriteStarted;
+                                targetCount++;
+                                edgeTargetCount++;
+                                var producedJournalStarted = Stopwatch.GetTimestamp();
+                                await journal.AppendAsync(new ProjectionJournalEntry(
+                                    runId, projected.Artifact, target.Name, [sourceRecord.Artifact], edge.Id, edge.Name, edge.Version,
+                                    edgeTransformations, ProjectionJournalResult.Produced, edge.Recovery), cancellationToken).ConfigureAwait(false);
+                                journalTicks += Stopwatch.GetTimestamp() - producedJournalStarted;
+                                journalEntryCount++;
+                            }
                         }
                         catch (OperationCanceledException)
                         {
@@ -231,23 +359,43 @@ public sealed class ShadowProjectionService
                                     ? execution.Code
                                     : exception is ProjectionConnectorException connector
                                         ? connector.Code
-                                    : "PSPROJ_ARTIFACT_FAILED";
+                                        : "PSPROJ_ARTIFACT_FAILED";
                             failureCode = code;
+                            var failedJournalStarted = Stopwatch.GetTimestamp();
                             await journal.AppendAsync(new ProjectionJournalEntry(
                                 runId, projected?.Artifact, target.Name, [sourceRecord.Artifact], edge.Id, edge.Name, edge.Version,
-                                GetTransformations(edge), ProjectionJournalResult.Failed, edge.Recovery, code), CancellationToken.None).ConfigureAwait(false);
+                                edgeTransformations, ProjectionJournalResult.Failed, edge.Recovery, code), CancellationToken.None).ConfigureAwait(false);
+                            journalTicks += Stopwatch.GetTimestamp() - failedJournalStarted;
+                            journalEntryCount++;
                             throw new ProjectionExecutionException(code, "Projection failed while materializing a source artifact.");
+                        }
+
+                        if (edgeWriteSession is not null && bufferedWrites.Count >= edgeWriteSession.BatchSize)
+                        {
+                            await FlushBufferedWritesAsync().ConfigureAwait(false);
                         }
                     }
                 }
+
+                await FlushBufferedWritesAsync().ConfigureAwait(false);
+
+                edgeStage?.AddArtifacts(edgeTargetCount);
+                edgeStage?.AddMeasurement("sourceArtifacts", edgeSourceCount, "artifacts");
+                edgeStage?.AddMeasurement("targetArtifacts", edgeTargetCount, "artifacts");
+                edgeStage?.AddMeasurement("shadowTargetWriteMilliseconds", ToMilliseconds(targetWriteTicks), "ms");
+                edgeStage?.AddMeasurement("journalMilliseconds", ToMilliseconds(journalTicks), "ms");
+                edgeStage?.AddMeasurement("journalEntries", journalEntryCount, "entries");
             }
 
             foreach (var destination in destinationContexts)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                using var completeStage = performanceRecorder?.StartStage(PerformanceStageKind.Projection,
+                    "shadow target complete", destination.Connector.Id.Value, destination.Node.Name);
                 await destination.Connector.CompleteAsync(destination.Context, cancellationToken).ConfigureAwait(false);
             }
 
+            using var readBackStage = performanceRecorder?.StartStage(PerformanceStageKind.Projection, "target read-back");
             var readBack = await MaterializedTargetFingerprint.ComputeAsync(
                 destinationContexts.Select(destination => new MaterializedTargetReadback(
                     destination.Node.Name,
@@ -255,7 +403,8 @@ public sealed class ShadowProjectionService
                     destination.Connector,
                     destination.Context)),
                 graph.GraphHash,
-                cancellationToken).ConfigureAwait(false);
+                performanceRecorder, cancellationToken).ConfigureAwait(false);
+            readBackStage?.AddArtifacts(readBack.RecordCount);
             if (readBack.RecordCount != targetCount)
             {
                 throw new ProjectionExecutionException("PSPROJ_READBACK_COUNT", "Materialized shadow output count did not match successful writes.");
@@ -283,6 +432,20 @@ public sealed class ShadowProjectionService
         }
         finally
         {
+            foreach (var session in writeSessions.Values)
+            {
+                try
+                {
+                    await session.DisposeAsync().ConfigureAwait(false);
+                }
+                catch
+                {
+                    status = ProjectionStatus.Failed;
+                    failureCode = "PSPROJ_WRITE_SESSION_DISPOSE";
+                    failureCount = Math.Max(1, failureCount);
+                    fingerprint = null;
+                }
+            }
             try
             {
                 await journal.DisposeAsync().ConfigureAwait(false);
@@ -479,6 +642,24 @@ public sealed class ShadowProjectionService
         _ => type.ToString().ToLowerInvariant()
     };
 
+    private static ProjectionJournalEntry CreateProducedEntry(BufferedProjectionWrite write, RunId runId) =>
+        new(runId, write.Request.Record.Artifact, write.Request.NodeKey, [write.SourceArtifact], write.Edge.Id,
+            write.Edge.Name, write.Edge.Version, write.Transformations, ProjectionJournalResult.Produced, write.Edge.Recovery);
+
+    private static ProjectionJournalEntry CreateBatchFailureEntry(BufferedProjectionWrite write, RunId runId, string code) =>
+        new(runId, write.Request.Record.Artifact, write.Request.NodeKey, [write.SourceArtifact], write.Edge.Id,
+            write.Edge.Name, write.Edge.Version, write.Transformations, ProjectionJournalResult.Failed, write.Edge.Recovery, code);
+
+    private sealed record BufferedProjectionWrite(
+        ShadowWriteRequest Request,
+        ArtifactReference SourceArtifact,
+        MigrationEdge Edge,
+        ProjectionTransformation[] Transformations,
+        ProjectionJournalEntry Pending);
+
+    private static double ToMilliseconds(long stopwatchTicks) =>
+        stopwatchTicks * 1_000d / Stopwatch.Frequency;
+
     private sealed class ProjectionJournalWriter : IAsyncDisposable
     {
         private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -494,6 +675,20 @@ public sealed class ShadowProjectionService
         }
 
         public async Task AppendAsync(ProjectionJournalEntry entry, CancellationToken cancellationToken)
+        {
+            await WriteEntryAsync(entry, cancellationToken).ConfigureAwait(false);
+            await _writer.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        public async Task AppendBatchAsync(ProjectionJournalEntry[] entries, CancellationToken cancellationToken)
+        {
+            if (entries.Length == 0) return;
+            foreach (var entry in entries)
+                await WriteEntryAsync(entry, cancellationToken).ConfigureAwait(false);
+            await _writer.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task WriteEntryAsync(ProjectionJournalEntry entry, CancellationToken cancellationToken)
         {
             var journalRecord = new JournalRecord(
                 _runId.Value.ToString("D", CultureInfo.InvariantCulture),
@@ -512,7 +707,6 @@ public sealed class ShadowProjectionService
                 entry.Result.ToString().ToLowerInvariant(),
                 entry.FailureCode);
             await _writer.WriteLineAsync(JsonSerializer.Serialize(journalRecord, JsonOptions).AsMemory(), cancellationToken).ConfigureAwait(false);
-            await _writer.FlushAsync(cancellationToken).ConfigureAwait(false);
         }
 
         public ValueTask DisposeAsync() => _writer.DisposeAsync();

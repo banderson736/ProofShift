@@ -24,10 +24,17 @@ public sealed class RecoveryService
         _compensators = compensators ?? throw new ArgumentNullException(nameof(compensators));
     }
 
+    public Task<RecoveryRunResult> AssessAndRehearseAsync(LoadedProjectConfiguration configuration,
+        MigrationGraph graph, ProjectionVerificationBinding projectionBinding, VerificationResult verification,
+        EffectiveRecoveryPolicy policy, IEnumerable<VerificationTargetRuntime> targets, string projectDirectory,
+        CancellationToken cancellationToken) =>
+        AssessAndRehearseAsync(configuration, graph, projectionBinding, verification, policy, targets,
+            projectDirectory, performanceRecorder: null, cancellationToken);
+
     public async Task<RecoveryRunResult> AssessAndRehearseAsync(LoadedProjectConfiguration configuration,
         MigrationGraph graph, ProjectionVerificationBinding projectionBinding, VerificationResult verification,
         EffectiveRecoveryPolicy policy, IEnumerable<VerificationTargetRuntime> targets, string projectDirectory,
-        CancellationToken cancellationToken)
+        PerformanceRecorder? performanceRecorder, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(graph);
@@ -35,6 +42,7 @@ public sealed class RecoveryService
         ArgumentNullException.ThrowIfNull(verification);
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(targets);
+        using var recoveryStage = performanceRecorder?.StartStage(PerformanceStageKind.Recovery, "recovery analysis and rehearsal");
         var startedAt = DateTimeOffset.UtcNow;
         var dryRunId = new DryRunId(Guid.NewGuid());
         var binding = new RecoveryExecutionBinding(verification.Run);
@@ -71,6 +79,14 @@ public sealed class RecoveryService
         var targetGroups = BuildTargetGroups(configuration, graph, projectionBinding, targetRuntimes);
         var issues = new List<RecoveryAssessmentIssue>();
 
+        async Task<TargetState> ReadTargetStateMeasuredAsync(string stageName, CancellationToken token)
+        {
+            using var stage = performanceRecorder?.StartStage(PerformanceStageKind.Recovery, stageName);
+            var state = await ReadTargetStateAsync(graph, targetGroups, token).ConfigureAwait(false);
+            stage?.AddArtifacts(state.RecordCount);
+            return state;
+        }
+
         if (!verification.Run.State.Equals(VerificationRunState.Complete) ||
             verification.Run.Outcome is not (VerificationOutcome.Passed or VerificationOutcome.PassedWithWarnings) ||
             verification.EvidenceGraph.Fingerprint != verification.Run.EvidenceFingerprint)
@@ -86,7 +102,7 @@ public sealed class RecoveryService
             issues.Add(new RecoveryAssessmentIssue(QualificationIssueCodes.TargetLineageFailed,
                 "Verified target lineage does not cover every projected graph-scoped target."));
 
-        var targetState = await ReadTargetStateAsync(graph, targetGroups, cancellationToken).ConfigureAwait(false);
+        var targetState = await ReadTargetStateMeasuredAsync("recovery baseline target read-back", cancellationToken).ConfigureAwait(false);
         foreach (var group in targetGroups)
         {
             if (!targetState.GroupStates.TryGetValue(group.Key, out var groupState))
@@ -113,6 +129,7 @@ public sealed class RecoveryService
         string? shadowCleanupFingerprint = null;
         string? rehearsalFailure = null;
         var rehearsalFailureCode = RecoveryIssueCodes.RehearsalFailed;
+        var rehearsalStage = performanceRecorder?.StartStage(PerformanceStageKind.Recovery, "recovery rehearsal");
         try
         {
             if (needRecoveryCheckpoints && targetMatchesVerification)
@@ -131,8 +148,11 @@ public sealed class RecoveryService
                     var checkpointId = new RecoveryCheckpointId(Guid.NewGuid());
                     var request = new ShadowRecoveryRequest(checkpointId, graph.GraphHash, group.Fingerprint,
                         group.TargetCount, group.Targets.Select(target => new ShadowRecoveryTarget(target.Context, graphNodes[target.NodeKey].Selector)));
+                    using var checkpointStage = performanceRecorder?.StartStage(PerformanceStageKind.Recovery,
+                        "target recovery checkpoint", group.Connector.Id.Value, nodeKey: group.Key);
                     var checkpoint = await recoveryConnector.CaptureRecoveryCheckpointAsync(request, cancellationToken).ConfigureAwait(false);
                     await recoveryConnector.ValidateRecoveryCheckpointAsync(request, checkpoint, cancellationToken).ConfigureAwait(false);
+                    checkpointStage?.AddArtifacts(group.TargetCount);
                     checkpointBindings.Add(new RecoveryShadowCheckpointBinding(recoveryConnector, request, checkpoint));
                     group.Checkpoint = checkpoint;
                     group.Request = request;
@@ -175,7 +195,7 @@ public sealed class RecoveryService
 
                 await RestoreShadowBaselineAsync(checkpointBindings, verification.JournalEntries, graphEdges,
                     cancellationToken).ConfigureAwait(false);
-                var restoredState = await ReadTargetStateAsync(graph, targetGroups, cancellationToken).ConfigureAwait(false);
+                var restoredState = await ReadTargetStateMeasuredAsync("recovery restored target read-back", cancellationToken).ConfigureAwait(false);
                 restoredFingerprint = restoredState.Fingerprint;
                 var compensatingEdges = graph.Edges.Where(edge => edge.Recovery?.Mode == RecoveryMode.Compensate &&
                     verification.JournalEntries.Any(entry => entry.EdgeId == edge.Id && entry.Result == "produced")).ToArray();
@@ -196,7 +216,7 @@ public sealed class RecoveryService
                         _compensators.Resolve(edge.Recovery!.Strategy!).ValidationMode != RecoveryValidationMode.SemanticCompensation))
                         throw new RecoveryException(RecoveryIssueCodes.RehearsalFailed, "Exact shadow restoration fingerprint does not match its pre-mutation baseline.");
                     await RestoreRecoveryCheckpointsAsync(checkpointBindings, cancellationToken).ConfigureAwait(false);
-                    var cleanupState = await ReadTargetStateAsync(graph, targetGroups, cancellationToken).ConfigureAwait(false);
+                    var cleanupState = await ReadTargetStateMeasuredAsync("recovery cleanup target read-back", cancellationToken).ConfigureAwait(false);
                     shadowCleanupFingerprint = cleanupState.Fingerprint;
                     if (shadowCleanupFingerprint != targetState.Fingerprint || cleanupState.RecordCount != targetState.RecordCount)
                         throw new RecoveryException(RecoveryIssueCodes.RehearsalFailed, "Shadow cleanup after semantic compensation did not restore the verified baseline.");
@@ -235,6 +255,8 @@ public sealed class RecoveryService
             rehearsalState = RecoveryRehearsalState.Failed;
             await TryRestoreShadowBaselineAsync(checkpointBindings).ConfigureAwait(false);
         }
+        rehearsalStage?.AddArtifacts(mutatedArtifacts);
+        rehearsalStage?.Dispose();
 
         if (rehearsalOutcome == RecoveryRehearsalOutcome.Failed)
             issues.Add(new RecoveryAssessmentIssue(rehearsalFailureCode,
@@ -243,11 +265,21 @@ public sealed class RecoveryService
             issues.Add(new RecoveryAssessmentIssue(RecoveryIssueCodes.RehearsalFailed,
                 rehearsalFailure ?? "Shadow recovery rehearsal was cancelled."));
 
-        var edgeAssessments = AssessEdges(graph, verification, policy, targetGroups, groupIssues, graphNodeIds);
+        List<RecoveryEdgeAssessment> edgeAssessments;
+        using (var edgeAnalysisStage = performanceRecorder?.StartStage(PerformanceStageKind.Recovery, "recovery edge analysis"))
+        {
+            edgeAssessments = AssessEdges(graph, verification, policy, targetGroups, groupIssues, graphNodeIds);
+            edgeAnalysisStage?.AddArtifacts(edgeAssessments.Count);
+        }
         foreach (var edgeAssessment in edgeAssessments)
             issues.AddRange(edgeAssessment.Issues);
 
-        var artifactCoverage = AssessArtifactCoverage(graph, verification, edgeAssessments);
+        List<RecoveryArtifactCoverage> artifactCoverage;
+        using (var coverageStage = performanceRecorder?.StartStage(PerformanceStageKind.Recovery, "recovery artifact coverage"))
+        {
+            artifactCoverage = AssessArtifactCoverage(graph, verification, edgeAssessments);
+            coverageStage?.AddArtifacts(artifactCoverage.Count);
+        }
         foreach (var item in artifactCoverage.Where(item => !item.Covered ||
             item.Modes.Contains(RecoveryMode.Irreversible) && !item.ApprovedIrreversible))
             issues.Add(new RecoveryAssessmentIssue(RecoveryIssueCodes.MissingCapability, item.Reason,
@@ -261,7 +293,12 @@ public sealed class RecoveryService
                 rehearsalOutcome is RecoveryRehearsalOutcome.Passed or RecoveryRehearsalOutcome.NotRequired
                 ? RecoveryAssessmentOutcome.Passed
                 : RecoveryAssessmentOutcome.Failed;
-        var plan = BuildRecoveryPlan(graph, verification, edgeAssessments, policy, graphNodesById, checkpointBindings);
+        RecoveryPlan plan;
+        using (var planStage = performanceRecorder?.StartStage(PerformanceStageKind.Recovery, "recovery plan construction"))
+        {
+            plan = BuildRecoveryPlan(graph, verification, edgeAssessments, policy, graphNodesById, checkpointBindings);
+            planStage?.AddArtifacts(plan.Steps.Count);
+        }
         var rehearsalFingerprint = FingerprintRehearsal(targetState.Fingerprint, restoredFingerprint, shadowCleanupFingerprint,
             rehearsalOutcome, mutatedArtifacts, checkpointBindings);
         var rehearsal = new RecoveryRehearsal(new RecoveryRehearsalId(Guid.NewGuid()), rehearsalState,
@@ -276,7 +313,12 @@ public sealed class RecoveryService
             rehearsalOutcome == RecoveryRehearsalOutcome.Cancelled ? RecoveryAssessmentState.Cancelled : RecoveryAssessmentState.Complete,
             outcome, binding, policy.Fingerprint, assessmentFingerprint, edgeAssessments, artifactCoverage,
             issues, startedAt, DateTimeOffset.UtcNow);
-        var recoveryEvidence = BuildRecoveryEvidence(verification.Run.Id, projectionBinding, assessment, plan, rehearsal);
+        RecoveryEvidenceGraph recoveryEvidence;
+        using (var evidenceStage = performanceRecorder?.StartStage(PerformanceStageKind.Recovery, "recovery evidence construction"))
+        {
+            recoveryEvidence = BuildRecoveryEvidence(verification.Run.Id, projectionBinding, assessment, plan, rehearsal);
+            evidenceStage?.AddArtifacts(recoveryEvidence.Graph.Records.Count);
+        }
         var qualificationStatus = DetermineQualification(verification, sourceCheckpoint.Manifest, policy,
             targetState, projectionBinding, assessment, rehearsal, issues);
         var dryRunFingerprint = FingerprintDryRun(verification.Run, policy, assessment, plan, rehearsal, recoveryEvidence);
