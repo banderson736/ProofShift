@@ -78,6 +78,7 @@ public sealed class PensionExternalCorpusVerificationTests
         if (Directory.Exists(directory) && Directory.EnumerateFileSystemEntries(directory).Any())
             throw new IOException("Integrated pension run directory is not empty; refusing to overwrite persisted artifacts.");
         Directory.CreateDirectory(directory);
+        await using var workloadSampling = performanceRecorder.StartSampling(directory, TimeSpan.FromSeconds(5));
         var csvRoot = Path.Combine(directory, "source-csv");
         var sourceFilesRoot = Path.Combine(directory, "source-files");
         var targetFilesRoot = Path.Combine(directory, "target-files");
@@ -441,6 +442,7 @@ public sealed class PensionExternalCorpusVerificationTests
         }
         finally
         {
+            await workloadSampling.DisposeAsync();
             if (deleteRunDirectory && Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
         }
     }

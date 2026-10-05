@@ -100,6 +100,7 @@ public sealed class VerificationService
                 await workspace.AddSourceArtifactAsync(sourceNode.Name, source, cancellationToken).ConfigureAwait(false);
                 await ledgerStore.RegisterSourceAsync(sourceNode.Name, sourceNode.Id, source.Artifact, cancellationToken).ConfigureAwait(false);
                 sourceRecordCount++;
+                ingestStage?.AddArtifacts();
 
                 foreach (var edge in graph.Edges.Where(edge => edge.Sources.Contains(sourceNode.Id))
                     .OrderBy(edge => edge.Id.Value))
@@ -114,10 +115,10 @@ public sealed class VerificationService
                         await workspace.AddExpectedTargetAsync(targetNode.Name, expected, sourceNode.Name, source, edge,
                             cancellationToken).ConfigureAwait(false);
                         expectedTargetCount++;
+                        ingestStage?.AddArtifacts();
                     }
                 }
             }
-            ingestStage?.AddArtifacts(checked(sourceRecordCount + expectedTargetCount));
             ingestStage?.AddMeasurement("sourceRecords", sourceRecordCount, "records");
             ingestStage?.AddMeasurement("expectedTargets", expectedTargetCount, "records");
         }
@@ -498,6 +499,7 @@ public sealed class VerificationService
                 await workspace.AddSourceArtifactAsync(sourceNode.Name, source, cancellationToken).ConfigureAwait(false);
                 await ledgerStore.RegisterSourceAsync(sourceNode.Name, sourceNode.Id, source.Artifact, cancellationToken).ConfigureAwait(false);
                 sourceCount++;
+                ingestStage?.AddArtifacts();
                 foreach (var edge in graph.Edges.Where(edge => edge.Sources.Contains(sourceNode.Id))
                     .OrderBy(edge => edge.Id.Value))
                 {
@@ -511,10 +513,10 @@ public sealed class VerificationService
                         await workspace.AddExpectedTargetAsync(targetNode.Name, expected, sourceNode.Name, source, edge,
                             cancellationToken).ConfigureAwait(false);
                         expectedCount++;
+                        ingestStage?.AddArtifacts();
                     }
                 }
             }
-            ingestStage?.AddArtifacts(checked(sourceCount + expectedCount));
             ingestStage?.AddMeasurement("sourceRecords", sourceCount, "records");
             ingestStage?.AddMeasurement("expectedTargets", expectedCount, "records");
         }

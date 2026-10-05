@@ -1,5 +1,7 @@
 using System.Text;
+using System.Text.Json;
 using ProofShift.Domain;
+using ProofShift.Engine;
 using ProofShift.Verification;
 using Xunit;
 
@@ -7,6 +9,63 @@ namespace ProofShift.Verification.Tests;
 
 public sealed class VerificationWorkspaceTests
 {
+    [Fact]
+    public async Task GraphDerivedCoverageSeeksIdentityAndRejectsUnboundOrWrongScopeWithoutFlaggingBoundDuplicates()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-coverage-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var recorder = new PerformanceRecorder("synthetic graph coverage");
+            long finalScratchBytes;
+            await using (var workspace = await SqliteVerificationWorkspace.CreateAsync(root, recorder,
+                TestContext.Current.CancellationToken))
+            {
+                var source = Record("source-bound", "source", "members", "source-1", "Generic.Member", "status", "A");
+                var missingSource = Record("source-missing", "source", "members", "missing", "Generic.Member", "status", "A");
+                var bound = Record("target-bound", "shadow", "members", "target-1", "Generic.Member", "status", "A");
+                var unbound = Record("target-unbound", "shadow", "members", "target-2", "Generic.Member", "status", "A");
+                var wrongSourceScope = Record("target-wrong-scope", "shadow", "members", "target-3", "Generic.Member", "status", "A");
+                var edge = new MigrationEdge(new MigrationEdgeId(Guid.NewGuid()), "synthetic-map",
+                    [new MigrationNodeId(Guid.NewGuid())], [new MigrationNodeId(Guid.NewGuid())],
+                    new MigrationOperation(MigrationOperationType.Transform), "1", new RecoveryDefinition(RecoveryMode.Reverse));
+                await workspace.AddSourceArtifactAsync("source-node", source, TestContext.Current.CancellationToken);
+                await workspace.AddExpectedTargetAsync("target-node", bound, "source-node", source, edge, TestContext.Current.CancellationToken);
+                await workspace.AddExpectedTargetAsync("target-node", unbound, "source-node", missingSource, edge, TestContext.Current.CancellationToken);
+                await workspace.AddExpectedTargetAsync("target-node", wrongSourceScope, "wrong-source-node", source, edge, TestContext.Current.CancellationToken);
+                await workspace.AddTargetObservationAsync("target-node", bound, TestContext.Current.CancellationToken);
+                await workspace.AddTargetObservationAsync("target-node", bound, TestContext.Current.CancellationToken);
+                await workspace.AddTargetObservationAsync("target-node", unbound, TestContext.Current.CancellationToken);
+                await workspace.AddTargetObservationAsync("target-node", wrongSourceScope, TestContext.Current.CancellationToken);
+                await workspace.AddTargetObservationAsync("other-target-node", bound, TestContext.Current.CancellationToken);
+                var missing = new List<VerificationTargetFact>();
+                await foreach (var fact in workspace.ReadTargetsWithoutGraphDerivedLineageAsync(TestContext.Current.CancellationToken))
+                    missing.Add(fact);
+                Assert.Equal(3, missing.Count);
+                Assert.Contains(missing, fact => fact.NodeKey == "other-target-node" && fact.Artifact.Id == bound.Artifact.Id);
+                Assert.Contains(missing, fact => fact.Artifact.Id == unbound.Artifact.Id);
+                Assert.Contains(missing, fact => fact.Artifact.Id == wrongSourceScope.Artifact.Id);
+                Assert.DoesNotContain(missing, fact => fact.NodeKey == "target-node" && fact.Artifact.Id == bound.Artifact.Id);
+                Assert.True(await workspace.ContainsFieldValueAsync(VerificationArtifactRole.Source,
+                    "source-node", "Generic.Member", "status", new StringValue("A"), TestContext.Current.CancellationToken));
+                finalScratchBytes = Directory.EnumerateFiles(Directory.GetDirectories(root, "proofshift-verification-*").Single())
+                    .Sum(path => new FileInfo(path).Length);
+            }
+            Assert.True(recorder.Complete().TemporaryWorkspacePeakBytes >= finalScratchBytes);
+            using var diagnostics = JsonDocument.Parse(await File.ReadAllTextAsync(
+                Directory.GetFiles(root, "*-diagnostics.json").Single(), TestContext.Current.CancellationToken));
+            var plan = diagnostics.RootElement.GetProperty("queryPlans").EnumerateObject().Single().Value
+                .EnumerateArray().Select(item => item.GetString()!).ToArray();
+            Assert.Contains(plan, step => step.Contains("expected_identity_idx", StringComparison.Ordinal) &&
+                step.Contains("node_key=? AND identity_hash=?", StringComparison.Ordinal));
+            Assert.DoesNotContain(plan, step => step.Contains("expected_journal_binding_idx", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task JournalValidationUsesIndexedBindingsAndRejectsMissingAndDuplicateAncestry()
     {

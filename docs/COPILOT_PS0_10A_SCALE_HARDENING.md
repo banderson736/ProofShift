@@ -983,3 +983,163 @@ The reusable physical runner is `scripts/pension-benchmark.ps1 -Scale fast|mediu
 Final local validation: restore and solution build passed; the full solution test suite completed with 121 total, 119 passed, 0 failed, and 2 Windows symlink-capability skips. The CLI aggregate-PASS expectation is now 9 findings instead of the former 57 artifact-level findings. Target-lineage counts include member-status split outputs and payload archives; Fast remains exactly 8,595 targets. Exact business-discrepancy assertions were not weakened.
 
 Still outstanding for acceptance: diagnose and complete Medium with counts, stage durations, workspace/ledger/evidence sizes, throughput, verified workload working set, and managed heap; investigate Fast runtime and scratch-storage cost; retain before/after stage-level comparisons; and obtain remote Docker-backed CI with zero required skips. GitHub CLI is unavailable and these workspace changes have not been committed or pushed. Do not begin PS-0.10B/C.
+
+---
+
+# 41. Performance Investigation
+
+## Recovered Fast Measurements
+
+The former statement that baseline stage measurements were unavailable was incorrect. The retained `%TEMP%/ProofShift-PS010A-fast-wal-final/integrated-assurance/performance-run.json` is the 117.108-second run. The current pre-investigation artifact is `ProofShift-PS010A-fast-final-500bf4b36a4241328d356fc04cc8f560`; the optimized, sampled run is `ProofShift-PS010A-investigation-final-fast`. All execute the same Fast physical scenario with three external verifications and three projected assurance runs. Seconds below are actual sums of matching named stage records, not estimates.
+
+| Stage (Seconds Unless Noted) | WAL Baseline | Pre-Investigation | Optimized/Sampled |
+| --- | ---: | ---: | ---: |
+| Docker startup | 11.538 | 12.636 | 12.548 |
+| Source fixture load | 1.187 | 1.213 | 1.169 |
+| External target fixture loads | 11.512 | 12.824 | 11.392 |
+| Checkpoint (two captures) | 5.858 | 5.856 | 5.610 |
+| Projection (three runs, inclusive) | 15.493 | 15.868 | 15.340 |
+| Projection journal validation (three runs) | 13.298 | 23.583 | 21.104 |
+| Projection target readback | 1.100 | 1.186 | 1.137 |
+| Projected source/expected ingest | 10.496 | 39.711 | 22.166 |
+| External source/expected ingest | 10.474 | 39.929 | 22.534 |
+| Projected actual-target ingest | 4.717 | 15.553 | 9.221 |
+| External actual-target ingest | 4.570 | 14.953 | 9.045 |
+| Secondary ordering-index build | Unavailable | Unavailable | 3.632 |
+| Projected rules (includes deferred index build) | 3.655 | 3.957 | 5.247 |
+| External rules (includes deferred index build) | 3.689 | 3.752 | 5.397 |
+| Projected source accounting | 0.671 | 1.730 | 1.554 |
+| External source accounting | 0.607 | 1.662 | 1.606 |
+| Projected target lineage | 0.624 | 3.017 | 2.843 |
+| External target lineage | 0.638 | 4.240 | 4.150 |
+| External lineage coverage/finalization | 0.299 | 7.252 | 7.085 |
+| Ledger writes (nested in ingest/analysis) | Unavailable | 23.039 | 22.300 |
+| Projected Evidence construction | 0.004 | 0.004 | 0.004 |
+| External Evidence construction | 0.031 | 0.036 | 0.031 |
+| Verification Evidence persistence | 0.024 | 0.024 | 0.020 |
+| Recovery (inclusive) | 6.212 | 8.499 | 7.626 |
+| Recovery persistence | 0.542 | 0.123 | 0.104 |
+| Persisted report/compare construction | 0.299 | 0.074 | 0.070 |
+| CLI reporting/compare | 2.539 | 1.490 | 1.458 |
+| Workspace diagnostics | Unavailable | Unavailable | 0.512 |
+| Projected Verification (inclusive) | 36.867 | 91.845 | 66.407 |
+| External Verification (inclusive) | 22.601 | 75.798 | 53.837 |
+| Historically reported ProofShift runtime | 104.031 | 214.729 | 165.416 |
+| Runtime excluding fixtures AND Docker startup | 92.493 | 202.093 | 152.868 |
+| Total | 117.108 | 229.128 | 178.301 |
+| Workload peak working set (decimal MB) | 567.325 | 205.840 | 210.670 |
+
+The historical runtime formula subtracts Fixture stages but not Environment stages. Keep that original metric for comparison; the corrected startup-free metric above also subtracts the separately measured Docker stage. Inclusive parent stages, ledger-write timing, and secondary-index timing overlap their child stages and must not be added together. The cited 20.8-second journal and 15.2-second ingest values belong to other iterations; they are not measurements from the 117.108-second artifact and are not substituted here.
+
+## Measured Regression And Fixes
+
+Projected/external Verification grew by 108.175 seconds combined, explaining approximately 98% of the 110.698-second historical-runtime increase. Source/expected ingest grew by 58.670 seconds, actual-target ingest by 21.219 seconds, and journal validation by 10.285 seconds. Accounting/lineage, persisted ledger finalization/integrity work, and Recovery explain most of the remainder. Evidence persistence is approximately 24 milliseconds, not a material contributor. The measured ledger-write stage is nested: counting its 23 seconds again would double-count the regression.
+
+Two generic workspace changes were benchmarked independently. Prepared workspace command reuse reduced combined source ingest from 79.640 to 71.449 seconds and target ingest from 30.506 to 26.611 seconds. Building the wide secondary ordering-key index after ingest, rather than maintaining it on every insertion, further reduced ingest; the independently timed deferred build costs 3.632 seconds across six workspaces. Primary keys and integrity constraints remain enforced during ingest. Parameterization, WAL/NORMAL scratch settings, 128-operation bounded transactions, cancellation, and exact business assertions are preserved. No complete ledger is cached in RAM.
+
+The remaining difference from the WAL baseline is the price of persistent, graph-scoped ledger writes/integrity checks and typed normalized key staging. It is not justified merely by being slower: Medium must still complete and show no pathological scaling. High-volume ordered rule plans use primary-key indexed key joins and SQLite temporary B-trees for multi-key ordering; they contain no JSON extraction. The secondary index serves typed-value lookups. Disk-backed sorting remains explicit rather than claiming that every multi-key ORDER BY is fully index-covered.
+
+## Scratch And Workload Methodology
+
+`workload-samples.ndjson` samples the executing process every five seconds, including PID, timestamp, current/peak working set, managed heap, GC counters, active stage/counts, and disjoint workspace database, ledger database, WAL, evidence, and other scratch sizes. It never records artifact values. It begins after synthetic generation and Docker startup; in-process `PerformanceRecorder` measurements cover the whole run. A sampled maximum is not a guarantee that short-lived peaks were observed. Process peak working set captures unsampled RSS peaks; managed-heap peaks are sampled.
+
+Each workspace emits aggregate diagnostics before deletion: table row counts, commit count, batch size, database/WAL sizes, normalized input bytes, index names, and actual EXPLAIN QUERY PLAN output. This diagnostic read does not commit pending failed/cancelled writes. Fast workspaces contain approximately 128,000 ordering-key rows and 201 external / 335-336 projected bounded commits. Main databases are approximately 130 MB external / 151 MB projected; WAL at completion is approximately 21-25 MB. Internal logical input bytes include source, expected, and actual serialized records, approximately 31.5-31.6 MB per workspace; resulting main-database amplification is approximately 4.1-4.8 times that internal staging denominator. This is not a physical relational-source byte ratio, and journal/ledger/WAL add further storage.
+
+Optimized Fast sampled heap peaked at 55.1 MB. Exact assertions still report 149 defective / 0 corrected, zero unaccounted/unexplained corrected state, corrected QUALIFIED, and preserved false-Reverse/external Verification behavior. Medium and remote CI remain pending; do not mark PS-0.10A Accepted.
+
+Cross-run fingerprint attribution: corrected/defective graph hashes, projection fingerprints, and rule-set fingerprints match the pre-investigation run exactly. All nine relational/CSV source endpoint fingerprints match; only the two filesystem payload endpoint fingerprints differ. Filesystem source envelopes include `modifiedAt` and temporal recorded time, which change when physical fixture files are recreated. Consequently aggregate source, bound Evidence, Recovery, and dry-run fingerprints differ across independently recreated fixtures. This is an observation difference, not evidence of batch/index-dependent hashing; same-checkpoint repeat assertions and append-order-independent ledger fingerprint regressions remain the determinism checks. Do not claim blanket cross-fixture fingerprint equality.
+
+## Confirmed Medium Coverage Bottleneck
+
+The sampled Medium attempt was stopped at the user's request after 65.0 minutes, preserving its workspace, WAL, and samples. It had spent 2,018.6 seconds inside the first corrected external lineage-coverage query; it had not completed any assurance scenario or the full pipeline. Actual workload peak RSS was 1,063,407,616 bytes; ingest/coverage RSS stayed near 695-700 MB after fixture-loading allocation subsided. This is a partial memory observation, not a completed Medium gate.
+
+Using the same Microsoft.Data.Sqlite version against the preserved Medium database in read-only mode confirmed the defect. The correlated provenance query chose `expected_journal_binding_idx` with only `node_key=?`, repeatedly scanning a node's expected population for each observed target. Merely rewriting the inner JOIN as EXISTS did not change the bad plan. Directing that specific lookup to the existing `expected_identity_idx` produces `node_key=? AND identity_hash=?`, followed by the source graph-scope primary-key lookup. No schema, uniqueness, coverage, durability, or fingerprint semantics were weakened.
+
+`dotnet run --file scripts/inspect-verification-sqlite.cs -- <working-set.sqlite>` reproduces both plans and bounded original-query timings without modifying the database. On the preserved Medium data, the original 100-target sample took 148.2 ms; the indexed candidate took 1.55 ms. The candidate checked the complete observed-target population with zero uncovered targets in 8,725.7 ms. That last measurement is a predicate-count diagnostic, not a completed Verification or Medium pipeline; the original complete query was deliberately not rerun.
+
+The production query now explicitly selects the identity index. A regression checks missing source artifacts, wrong source-node scope, wrong target-node scope, bound duplicate observations, and the exact two-column indexed seek. Verification tests pass 8/8. The complete coverage-fixed Fast run passed: 168.180 seconds total, 155.436 seconds historically reported runtime, 210,669,568-byte peak working set, and exact 149 defective / 0 corrected / 0 unaccounted / 0 unexplained / corrected QUALIFIED. External lineage coverage across all three Fast passes fell from 7.085 seconds to 0.188 seconds. Artifacts are retained under `%TEMP%/ProofShift-PS010A-coverage-fixed-fast/integrated-assurance`.
+
+Medium must be rerun with this fix; neither the interrupted run nor the successful isolated query fulfills its end-to-end gate. Restore and solution build passed. The full local suite completed with 123 total, 121 passed, 0 failed, and 2 Windows symlink-capability skips. Medium has not been restarted, and no commit/push was made; approved publication remains conditional on completing local Fast/Medium gates. Remote Docker CI with no required skips remains required before acceptance.
+
+---
+
+# 42. Completed Local Gates - 2026-10-05
+
+This section supersedes earlier in-progress observations. PS-0.10A remains In Progress pending remote Docker CI. The corrected Medium full pipeline completed successfully, with 1 passed, 0 failed, 0 skipped, in 3h 55m 27.8s test-platform duration. Its scenario stopwatch measured 14,125.385 seconds total. Source/checkpoint, Projection, independent target observation, Verification, accounting/lineage, Evidence, Recovery, qualification, CLI reporting, and comparison all executed; this is not generator enumeration or an isolated query result.
+
+## Final Fast Comparison
+
+Final Fast artifacts: `%TEMP%/ProofShift-PS010A-acceptance-fast/integrated-assurance`. The final refresh includes the post-index scratch-peak telemetry correction. The completed Medium binary predates that telemetry-only correction; its actual file diagnostics and five-second samples provide the correct larger scratch measurements. Assurance logic is identical.
+
+| Stage / Metric | WAL Baseline | Pre-Investigation | Final Fast |
+| --- | ---: | ---: | ---: |
+| Docker startup (s) | 11.538 | 12.636 | 11.467 |
+| Source fixture load (s) | 1.187 | 1.213 | 1.209 |
+| External target fixture loads (s) | 11.512 | 12.824 | 9.992 |
+| Checkpoints (s) | 5.858 | 5.856 | 5.196 |
+| Projection, inclusive (s) | 15.493 | 15.868 | 13.989 |
+| Journal validation (s) | 13.298 | 23.583 | 18.770 |
+| Projection target readback (s) | 1.100 | 1.186 | 1.024 |
+| Source/expected ingest, six passes (s) | 20.970 | 79.640 | 38.813 |
+| Actual-target ingest, six passes (s) | 9.287 | 30.506 | 16.056 |
+| Deferred secondary-index build, nested in rules (s) | Unavailable | Unavailable | 3.029 |
+| Rule execution, six passes (s) | 7.344 | 7.709 | 8.730 |
+| Source accounting, six passes (s) | 1.278 | 3.392 | 2.547 |
+| Target lineage, six passes (s) | 1.262 | 7.257 | 5.913 |
+| External lineage coverage (s) | 0.299 | 7.252 | 0.156 |
+| Ledger writes, overlapping child timing (s) | Unavailable | 23.039 | 19.546 |
+| Evidence construction (s) | 0.035 | 0.040 | 0.031 |
+| Verification Evidence persistence (s) | 0.024 | 0.024 | 0.019 |
+| Recovery, inclusive (s) | 6.212 | 8.499 | 6.749 |
+| Recovery/report/CLI persistence and reporting (s) | 3.380 | 1.687 | 1.611 |
+| Historical runtime metric, includes startup (s) | 104.031 | 214.729 | 139.012 |
+| Runtime excluding fixtures AND startup (s) | 92.493 | 202.093 | 127.545 |
+| Total (s) | 117.108 | 229.128 | 150.529 |
+| Peak workload RSS, decimal MB | 567.325 | 205.840 | 209.797 |
+
+Nested stages must not be summed with their inclusive parents. The remaining approximately 35-second historical-runtime increase over the WAL baseline is concentrated in persisted Verification/key staging: combined inclusive Verification is 97.942 seconds versus 59.468 seconds at baseline. Persistence replaces the baseline's full in-memory ledger/coverage model. Prepared-command reuse, deferred secondary indexing, and the measured identity-index correction recover the material avoidable costs without restoring artifact-sized in-memory result collections. No arbitrary Fast SLA is asserted; timings are single-run observations on this host.
+
+## Completed Medium Results
+
+Artifacts: `%TEMP%/ProofShift-PS010A-coverage-fixed-medium/integrated-assurance`. Requested and executed scale are both 50 times Fast, without reduction: 411,000 generated source records; 424,750 checkpoint artifacts; 429,750 projected and corrected observed targets; 429,677 defective observed targets. One corrected source-plus-target population is 854,500 artifacts. Six Verification scenarios, three Projections and three Recovery assessments intentionally revisit these populations; stage denominators below reflect all matching passes.
+
+| Medium Stage | Seconds | Measured Throughput |
+| --- | ---: | --- |
+| Checkpoints, two captures | 149.816 | 849,500 / 149.816 = 5,670 artifacts/s |
+| Projection, three runs inclusive | 662.184 | 1,289,250 / 662.184 = 1,947 targets/s |
+| Projection target readback | 33.926 | 38,002 targets/s |
+| External source/expected ingest | 2,157.270 | 1,188 staged artifacts/s |
+| Projected source/expected ingest | 2,188.715 | 1,171 staged artifacts/s |
+| External actual-target ingest | 1,164.087 | 1,107 observed targets/s |
+| Projected actual-target ingest | 1,141.945 | 1,129 observed targets/s |
+| Journal validation | 3,028.730 | 851 entries/s |
+| Deferred secondary-index build | 211.878 | Included in rule stages |
+| Rules, external + projected | 696.871 | Finding counts are not records/s |
+| Source accounting, external + projected | 238.874 | Approximately 10,669 source dispositions/s |
+| Target lineage, external + projected | 1,034.279 | Approximately 2,493 lineages/s |
+| External lineage coverage | 23.319 | Approximately 8 seconds per pass |
+| Ledger writes, overlapping timing | 3,728.693 | 3,442 bounded write operations/s |
+| Verification Evidence persistence | 0.018 | 248 persisted records, 636,288 bytes |
+| Recovery, three runs inclusive | 402.838 | Aggregate coverage and isolated rehearsal |
+| Persisted reporting/comparison, stopwatch | 1.636 | Includes CLI and integrity-checked projections |
+| Historical runtime metric | 13,503.024 | Includes 12.525 seconds startup |
+| Runtime excluding fixtures AND startup | 13,490.498 | Approximately 3h 44m 50s |
+| Total scenario stopwatch | 14,125.385 | Approximately 3h 55m 25s |
+
+## Memory And Scratch
+
+Actual workload peak RSS: 1,076,113,408 bytes, separate from SQL Server/PostgreSQL container memory. Sampled managed-heap peak: 879,628,368 bytes; completion heap: 488,018,032 bytes. Five-second samples show fixture-loading peaks near 1.06 GB followed by generally 686-722 MB working sets during Verification/Recovery. Journal-validation samples remain between 709.5 and 718.5 MB across 606 samples. This supports stage-local plateaus rather than one retained ledger object per processed artifact. Peak RSS grew about 5.1 times for 50 times the artifacts; two tiers do not establish an asymptotic memory bound. Synthetic fixture arrays remain part of benchmark memory, and high-failure/fan-out workloads remain a limitation.
+
+The sampled maximum main workspace database is 7,637,086,208 bytes; individual completed workspace diagnostics report approximately 1.08 GB WAL, yielding approximately 8.72 GB database plus WAL for the largest projected workspace. All active SQLite WAL files together peaked at 1,720,334,904 sampled bytes. The legacy Medium `temporaryWorkspacePeakBytes=6,568,544,368` is a pre-secondary-index write-bound measurement and is not the true final scratch peak; the telemetry correction now samples immediately after deferred index construction. Final Fast's corrected workspace peak is 174,725,496 bytes.
+
+Six retained Verification ledgers total 13,262,045,184 bytes, versus 266,510,336 at Fast, approximately proportional to workload. Checkpoints total 1,001,466,746 bytes. Persisted Verification Evidence is 636,288 bytes; Recovery artifacts total 97,548 bytes. These are distinct persistent/temporary categories, not one per-run memory graph. Workspace diagnostics show 6,417,000 ordering-key rows per clean Medium workspace, 10,034 external / 16,749 projected bounded 128-operation transactions, and approximately 1.58 GB source/expected/actual normalized JSON staging. Main workspace amplification against that internal staging denominator is approximately 4.1-4.8 times, similar to Fast. A physical relational source-plus-target byte ratio was not measured and is not fabricated.
+
+## Remaining Performance Limits
+
+Projection and Recovery scale near the 50-times population increase, while inclusive Verification grows approximately 106-112 times against the same pre-telemetry Fast binary. Ledger-write time grows approximately 171 times and journal validation approximately 145 times. The dominant costs are indexed SQLite writes, typed field staging, ledger serialization/integrity work, and per-entry graph/journal validation against larger disk-backed stores. This is above-linear measured wall time, not a claim of perfect linear scaling. Captured coverage/journal plans use the required identity/ancestry indexes; rows, bounded transaction counts, and disk growth are approximately population-proportional. The earlier node-prefix coverage scan is eliminated. No new evidence of the same repeated full-node scan was observed in these captured paths, but disk I/O and transaction/index tuning remain performance limitations, not a promised throughput SLA.
+
+## Correctness, Consistency, And Validation
+
+Fast and Medium both assert exactly 149 defective discrepancies, 0 corrected discrepancies, 0 corrected unaccounted sources, 0 unexplained targets, and corrected QUALIFIED, including false-Reverse and external-target scenarios. SQL Server defaults to Observed; stronger consistency requires explicit isolation, permitted downgrade is reported, and no database-level settings are enabled automatically. PostgreSQL retains endpoint repeatable-read semantics, not global atomicity. Relational `ReadOptions.BatchSize` was removed rather than advertising an ignored fetch-size promise; provider streaming controls physical fetching.
+
+Final restore/build passed with 0 warnings and 0 errors. Full local tests: 123 total, 121 passed, 0 failed, 2 Windows symlink-capability skips. Same-checkpoint repeat and append-order regression tests remain the fingerprint checks; independently recreated physical-file fixtures retain the source-timestamp attribution documented above. Remote Docker CI is the remaining acceptance gate. The user approved scoped commit/push after these local gates. No connector/domain expansion, production migration/rollback, or PS-0.10B/C was started.

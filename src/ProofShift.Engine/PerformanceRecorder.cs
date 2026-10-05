@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Text.Json;
 using ProofShift.Domain;
 
 namespace ProofShift.Engine;
@@ -7,6 +8,8 @@ namespace ProofShift.Engine;
 public sealed class PerformanceRecorder
 {
     private readonly ConcurrentQueue<PerformanceStage> _stages = new();
+    private readonly ConcurrentDictionary<long, PerformanceStageScope> _activeStages = new();
+    private long _stageSequence;
     private readonly string _scenario;
     private readonly DateTimeOffset _startedAt;
     private readonly int[] _gcCounts = [GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2)];
@@ -68,6 +71,108 @@ public sealed class PerformanceRecorder
         }
     }
 
+    public IAsyncDisposable StartSampling(string outputDirectory, TimeSpan interval)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
+        if (interval < TimeSpan.FromSeconds(1))
+            throw new ArgumentOutOfRangeException(nameof(interval), "Sampling interval must be at least one second.");
+        return new WorkloadSampler(this, Path.GetFullPath(outputDirectory), interval);
+    }
+
+    private sealed class WorkloadSampler : IAsyncDisposable
+    {
+        private readonly PerformanceRecorder _owner;
+        private readonly string _directory;
+        private readonly StreamWriter _writer;
+        private readonly Timer _timer;
+        private readonly object _gate = new();
+        private Exception? _failure;
+        private int _disposed;
+
+        public WorkloadSampler(PerformanceRecorder owner, string directory, TimeSpan interval)
+        {
+            _owner = owner;
+            _directory = directory;
+            Directory.CreateDirectory(directory);
+            _writer = new StreamWriter(new FileStream(Path.Combine(directory, "workload-samples.ndjson"),
+                FileMode.CreateNew, FileAccess.Write, FileShare.Read));
+            Capture();
+            _timer = new Timer(_ =>
+            {
+                lock (_gate)
+                {
+                    if (_failure is not null) return;
+                    try { Capture(); }
+                    catch (Exception exception) { _failure = exception; }
+                }
+            }, null, interval, interval);
+        }
+
+        private void Capture()
+        {
+            using var process = Process.GetCurrentProcess();
+            _owner.SampleWorkingSet();
+            long workspaceBytes = 0, ledgerBytes = 0, walBytes = 0, evidenceBytes = 0, otherScratchBytes = 0;
+            var roots = Directory.EnumerateDirectories(_directory, "working-*")
+                .Append(Path.Combine(_directory, ".proofshift"));
+            foreach (var root in roots)
+            {
+                if (!Directory.Exists(root)) continue;
+                try
+                {
+                    foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+                    {
+                        var file = new FileInfo(path);
+                        if (!file.Exists) continue;
+                        if (file.Name.EndsWith("-wal", StringComparison.Ordinal)) walBytes += file.Length;
+                        else if (file.Name == "working-set.sqlite") workspaceBytes += file.Length;
+                        else if (file.Name == "ledger.sqlite") ledgerBytes += file.Length;
+                        else if (file.Name == "evidence.ndjson") evidenceBytes += file.Length;
+                        else otherScratchBytes += file.Length;
+                    }
+                }
+                catch (DirectoryNotFoundException) { }
+                catch (FileNotFoundException) { }
+            }
+            var sample = new
+            {
+                timestamp = DateTimeOffset.UtcNow,
+                processId = process.Id,
+                workingSetBytes = process.WorkingSet64,
+                peakWorkingSetBytes = process.PeakWorkingSet64,
+                managedHeapBytes = GC.GetTotalMemory(forceFullCollection: false),
+                generationZeroCollections = GC.CollectionCount(0),
+                generationOneCollections = GC.CollectionCount(1),
+                generationTwoCollections = GC.CollectionCount(2),
+                verificationWorkspaceBytes = workspaceBytes,
+                verificationLedgerBytes = ledgerBytes,
+                sqliteWalBytes = walBytes,
+                evidenceBytes,
+                otherScratchBytes,
+                activeStages = _owner._activeStages.Values.Select(stage => new
+                {
+                    name = stage.Name,
+                    nodeKey = stage.NodeKey,
+                    artifacts = stage.ArtifactCount,
+                    elapsedSeconds = stage.ElapsedSeconds
+                }).ToArray()
+            };
+            _writer.WriteLine(JsonSerializer.Serialize(sample));
+            _writer.Flush();
+            Console.WriteLine($"PERFORMANCE_PROGRESS pid={process.Id} rss={sample.workingSetBytes} heap={sample.managedHeapBytes} workspace={workspaceBytes} ledger={ledgerBytes} stages={string.Join(',', sample.activeStages.Select(stage => stage.name))}");
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            await _timer.DisposeAsync().ConfigureAwait(false);
+            if (_failure is null && Directory.Exists(_directory)) Capture();
+            await _writer.DisposeAsync().ConfigureAwait(false);
+            if (_failure is not null)
+                throw new IOException("Workload performance sampling failed.", _failure);
+        }
+    }
+
     internal void CompleteStage(PerformanceStageKind kind, string name, long startedTimestamp,
         long artifactCount, long byteCount, string? connectorId, string? nodeKey, string? edgeName,
         string? ruleId, IReadOnlyCollection<PerformanceMeasurement> measurements)
@@ -105,6 +210,12 @@ public sealed class PerformanceRecorder
         private long _artifactCount;
         private long _byteCount;
         private int _completed;
+        private readonly long _sequence;
+
+        internal string Name => _name;
+        internal string? NodeKey => _nodeKey;
+        internal long ArtifactCount => Interlocked.Read(ref _artifactCount);
+        internal double ElapsedSeconds => Stopwatch.GetElapsedTime(_startedTimestamp).TotalSeconds;
 
         internal PerformanceStageScope(PerformanceRecorder owner, PerformanceStageKind kind, string name,
             string? connectorId, string? nodeKey, string? edgeName, string? ruleId)
@@ -117,6 +228,8 @@ public sealed class PerformanceRecorder
             _nodeKey = nodeKey;
             _edgeName = edgeName;
             _ruleId = ruleId;
+            _sequence = Interlocked.Increment(ref owner._stageSequence);
+            owner._activeStages.TryAdd(_sequence, this);
         }
 
         public void AddArtifacts(long count = 1)
@@ -141,6 +254,7 @@ public sealed class PerformanceRecorder
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _completed, 1) != 0) return;
+            _owner._activeStages.TryRemove(_sequence, out _);
             _owner.CompleteStage(_kind, _name, _startedTimestamp, Interlocked.Read(ref _artifactCount),
                 Interlocked.Read(ref _byteCount), _connectorId, _nodeKey, _edgeName, _ruleId, _measurements.ToArray());
         }
