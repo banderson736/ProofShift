@@ -44,7 +44,7 @@ PS-0.6 checkpoint invariants: record per-endpoint consistency truthfully; do not
 
 Do not skip ahead to UI, SaaS, Kubernetes, AI, FHIR, Oracle, DB2, or enterprise infrastructure. PS-0.10A is complete; preserve its accepted behavior and leave PS-0.10B/C deferred until a new explicit assignment.
 
-PS-0.10B Configuration & Authoring UX is the new explicit assignment and is In Progress. Work on deterministic authoring, typed provider-owned rule schemas, explicit pack resolution, read-only physical discovery, scaffold/import, explain/strict validation, and committed configurable Pension demo semantics. The validated foundation is documented in docs/CONFIGURATION_AUTHORING.md and ADR-0018; it is not milestone acceptance. Preserve PS-0.10A, do not continue unrelated performance tuning, and do not begin PS-0.10C connector expansion, new packs, UI/AI authoring, or production execution/rollback.
+PS-0.10B Configuration & Authoring UX is Accepted after Docker-backed run 37353339103, job 111909408991 verified final implementation commit 625ca84 with 143 passed, 0 failed, 0 skipped. Preserve deterministic authoring, provider-owned typed schemas, explicit pack versions, read-only discovery/diff, review-state scaffold/import, named maps, effective explain/strict validation, and committed Pension configuration with exact 149/0/QUALIFIED semantics. The workflow and limitations are documented in docs/CONFIGURATION_AUTHORING.md, docs/AUTHORING_WALKTHROUGH.md and ADR-0018. Do not begin PS-0.10C, connector/domain expansion, UI/AI authoring, unrelated performance work, or production execution/rollback without a new explicit assignment.
 
 ## Implementation style
 

@@ -176,6 +176,10 @@ The graph should eventually support impact analysis. If a transformation changes
 
 ## Evidence Graph
 
+### Accepted PS-0.10B Authoring Boundary
+
+Existing source connectors optionally expose read-only physical discovery, with connector-neutral structural artifacts and timestamp-independent fingerprints. Provider-owned rule descriptors drive typed rule validation, generated schemas, rule metadata and effective explanations. Pack versions are explicitly selected. Scaffold/CSV import produces ordinary referenced configuration and explicit review state; validation, graph compilation, named-map resolution, Recovery and execution share the existing contracts. Physical names/types/key roles are not domain-semantic inference. The full Pension project's primary semantics are committed under `scenarios/pension-modernization/ps010b`; fixture provisioning remains synthetic code. See ADR-0018 and the authoring walkthrough for compatibility and limitations.
+
 Evidence is graph-addressable rather than a flat log of pass/fail strings.
 
 Material conclusions should be traceable to inputs such as:

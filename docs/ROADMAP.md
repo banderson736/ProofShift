@@ -204,13 +204,13 @@ Do not add production migration/rollback, SaaS, UI, AI, FHIR, Oracle, DB2, Kuber
 
 ### PS-0.10B Configuration & Authoring UX
 
-Status: In Progress under an explicit assignment. Preserve Accepted PS-0.10A; do not continue unrelated performance optimization or expand connectors/domain packs.
+Status: Accepted after Docker-backed [run 37353339103, job 111909408991](https://github.com/banderson736/ProofShift/actions/runs/37353339103/job/111909408991) verified final commit `625ca84` with 143 passed, 0 failed, 0 skipped. Preserve Accepted PS-0.10A; do not continue unrelated performance optimization or expand connectors/domain packs.
 
 The user-facing workflow is init, physical discovery, deterministic structural scaffold, review/approval, validation, effective explanation, then dry-run. Discovery must be read-only and connector-neutral, never inferred business semantics. Scaffold suggestions are not approval. Typed rule-document version 2 and provider-owned descriptors must drive validation, schemas, rule descriptions and explanations; legacy documents retain their established interpretation or an explicit migration path.
 
 Required gates: explicit pack/version resolution; generic/Pension init templates; actual SQL Server/PostgreSQL/CSV/filesystem discovery and versioned fingerprint/diff artifacts; deterministic scaffold with unresolved approvals; CSV mapping import through the normal compiler; project/rule/mapping explain and capabilities; strict validation and secret-safe source-located diagnostics; reusable code-map authoring; customer-like committed Pension configuration and workflow preserving exact 149/0/QUALIFIED; tutorials/editor schema support; full local and zero-required-skip Docker-backed remote CI. No PS-0.10C, new domain pack, AI authoring, IDE extension, or production migration/rollback is in scope.
 
-The first implementation slice adds immutable structured values and provider-owned rule descriptors without changing accepted execution/storage architecture. See ADR-0018. Do not mark this milestone Accepted until the complete authoring workflow and all integration gates pass.
+The implementation includes immutable structured rules/descriptors, exact pack versions, init, physical discovery/diff, review-state scaffold/CSV import, named maps through normal graph parsing, effective explain/config inspection, strict policies, and committed full Pension configuration. Docker discovery and the configured physical Pension regression passed with exact 149/0/QUALIFIED semantics. Full local tests: 143 total, 141 passed, 0 failed, 2 Windows capability skips; remote CI passed all 143 without failures/skips. See ADR-0018 and docs/CONFIGURATION_AUTHORING.md. PS-0.10B gates are complete; PS-0.10C/new connectors/packs and production migration/rollback require a new explicit assignment.
 
 ## Commercial validation gate after PS-0 / during PS-0
 

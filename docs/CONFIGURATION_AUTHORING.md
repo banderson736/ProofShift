@@ -1,6 +1,6 @@
-# Configuration Authoring (PS-0.10B In Progress)
+# Configuration Authoring (PS-0.10B Accepted)
 
-The complete remaining authoring workflow is implemented and locally validated; PS-0.10B remains In Progress pending remote Docker CI. See [the walkthrough](AUTHORING_WALKTHROUGH.md) and the completed workflow notes below.
+PS-0.10B is Accepted after Docker-backed [run 37353339103, job 111909408991](https://github.com/banderson736/ProofShift/actions/runs/37353339103/job/111909408991) verified final implementation commit `625ca84` with 143 passed, 0 failed, 0 skipped. See [the walkthrough](AUTHORING_WALKTHROUGH.md) and the completed workflow notes below.
 
 ## Working Commands
 
@@ -56,7 +56,7 @@ rules:
     tolerance: 0.01
 ```
 
-Sequences remain ordered sequences; decimals/booleans retain their types; nested mappings remain immutable objects. Provider-owned descriptors drive validation, JSON Schema, descriptions and declared defaults. Full generic aggregate/relationship vocabulary and all nested comparison implementations are still pending; a parser accepting nested values is not proof those rules execute.
+Sequences remain ordered sequences; decimals/booleans retain their types; nested mappings remain immutable objects. Provider-owned descriptors drive validation, JSON Schema, descriptions and declared defaults. The installed catalog is authoritative: parser/schema support for nested values is not permission to use an unregistered generic alias or silently activate a pack. Pension aggregate/relationship/timeline semantics use the installed provider's configured rules.
 
 ## Diagnostics And Strict Policy
 
@@ -95,7 +95,7 @@ Generation is deterministic for an installed descriptor set. The loader, descrip
 
 Omitted rule-document version remains legacy version 1 with its accepted scalar/sequence interpretation and fingerprint bytes. Version 2 uses a structured canonical marker; lists must be sequences and numeric/boolean values must match descriptors. Source-location metadata is not fingerprinted. Automatic configuration migration remains pending.
 
-Full local completion tests: 143 total, 141 passed, 0 failed, 2 Windows symlink-capability skips. Real Docker SQL Server/PostgreSQL discovery, CSV/filesystem discovery, discovery drift/integrity, scaffold determinism/ambiguity, CSV import diagnostics, named-map false-Reverse, effective explanations, and the committed physical Pension pipeline are covered. Later selector/draft corrections passed focused file-discovery and authored-command tests; restore/build pass. Remote Docker integration acceptance remains pending.
+Full local completion tests: 143 total, 141 passed, 0 failed, 2 Windows symlink-capability skips. Real Docker SQL Server/PostgreSQL discovery, CSV/filesystem discovery, discovery drift/integrity, scaffold determinism/ambiguity, CSV import diagnostics, named-map false-Reverse, effective explanations, and the committed physical Pension pipeline are covered. Later selector/draft/root corrections passed focused file-discovery and authored-command tests; restore/build pass. Remote Docker CI passed all 143 tests with 0 failures and 0 skips, with totals verified directly from the job log.
 
 ## Completed Discovery And Review Workflow
 
