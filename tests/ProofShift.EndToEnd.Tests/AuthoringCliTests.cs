@@ -29,6 +29,12 @@ public sealed class AuthoringCliTests
             var target = await File.ReadAllTextAsync(Path.Combine(root, "systems", "target.yaml"), TestContext.Current.CancellationToken);
             Assert.Contains("PROOFSHIFT_TARGET_CONNECTION", target, StringComparison.Ordinal);
             Assert.DoesNotContain("Password=", target, StringComparison.OrdinalIgnoreCase);
+            var discoveryPath = Path.Combine(root, "discovery", "source");
+            var discovered = await RunAsync("discover", path, "--system", "source", "--endpoint", "records", "--output", discoveryPath, "--json");
+            Assert.True(discovered.ExitCode == 0, discovered.Error);
+            using var physical = JsonDocument.Parse(discovered.Output);
+            Assert.Equal("csv", physical.RootElement.GetProperty("connectorId").GetString());
+            Assert.True(File.Exists(Path.Combine(discoveryPath, "manifest.json")));
             var second = await RunAsync("init", root);
             Assert.Equal(1, second.ExitCode);
             Assert.Contains("PSAUTHOR011", second.Error, StringComparison.Ordinal);

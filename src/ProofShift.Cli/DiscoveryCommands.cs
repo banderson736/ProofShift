@@ -51,6 +51,19 @@ internal static class DiscoveryCommands
             var contextNode = nodes.FirstOrDefault() ?? new MigrationNode(new MigrationNodeId(Guid.NewGuid()), "discovery",
                 MigrationNodeType.Source, "Physical.Uninterpreted", system.Id, endpoint.Id, new ArtifactSelector("discovery"));
             var context = new RuntimeConnectorContextFactory().Create(configuration, contextNode);
+            if (context.Configuration.TryGet("root", out var configuredRoot))
+            {
+                var rootValue = configuredRoot.UseValue(value => value);
+                if (!Path.IsPathRooted(rootValue))
+                {
+                    var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(args[1]))!;
+                    var relativeRoot = Path.GetFullPath(rootValue, projectDirectory);
+                    var settings = endpoint.Configuration.Select(pair => new KeyValuePair<string, RuntimeSetting>(pair.Key,
+                        pair.Key == "root" ? RuntimeSetting.FromRuntimeValue(relativeRoot, configuredRoot.IsSecret) : context.Configuration.GetRequired(pair.Key)));
+                    context = new ConnectorContext(context.SystemKey, context.EndpointKey, context.Connector, context.NodeKey,
+                        context.SemanticType, new RuntimeConfiguration(settings));
+                }
+            }
             IPhysicalDiscoveryConnector connector = endpoint.Connector.Value switch
             {
                 "sqlserver" => new SqlServerSourceConnector(), "postgres" => new PostgresSourceConnector(),
