@@ -158,7 +158,7 @@ Acceptance requires:
 - the clean pension fixture returns `QUALIFIED DRY RUN`; fault scenarios return `NOT QUALIFIED` with stable reasons;
 - full solution validation and remote Docker-backed CI pass with no required skips.
 
-PS-0.8 and PS-0.9 are accepted. PS-0.10A Scale Baseline & Hot-Path Hardening is assigned and In Progress. Do not begin PS-0.10B/C or connector/domain expansion.
+PS-0.8, PS-0.9, and PS-0.10A Scale Baseline & Hot-Path Hardening are accepted. Do not begin PS-0.10B/C or connector/domain expansion without a new explicit assignment.
 
 ### PS-0.9 Public Pension Assurance Vertical
 
@@ -181,7 +181,7 @@ PS-0.9 acceptance is complete. External target lineage remains graph-derived exp
 
 ### PS-0.10A Scale Baseline & Hot-Path Hardening
 
-Status: In Progress. Preserve the PS-0.9 semantics and exact 149-defect / corrected-zero result.
+Status: Accepted after Docker-backed [run 37284331965, job 111679522042](https://github.com/banderson736/ProofShift/actions/runs/37284331965/job/111679522042) passed 123 tests with 0 failures and 0 skips. PS-0.9 semantics and the exact 149-defect / corrected-zero result are preserved.
 
 Completed and locally validated slices:
 
@@ -198,7 +198,7 @@ Final Fast passed in 150.5 seconds total / 139.0 seconds historical runtime, wit
 
 Medium completed successfully in 3h 55m: 411,000 generated source records, 424,750 checkpoint artifacts, 429,750 corrected projected/observed targets, exact 149/0 discrepancies and corrected QUALIFIED. Workload RSS peaked at 1.076 GB with stage-local plateaus near 700-720 MB. Verification remains above-linear measured runtime at this tier; scratch rows and disk sizes grow approximately with population, and the known repeated node-prefix coverage scan is fixed. See the full stage/scratch/memory report in `docs/COPILOT_PS0_10A_SCALE_HARDENING.md`.
 
-Restore/build passed, and the final local suite completed with 121 passed, 0 failed, and 2 Windows symlink-capability skips. Remote Docker-backed GitHub Actions with zero required skips is the remaining acceptance gate. The separate generator-only large scale is not a substitute for this completed Medium full-pipeline run.
+Restore/build passed, and the final local suite completed with 121 passed, 0 failed, and 2 Windows symlink-capability skips. Remote Docker-backed GitHub Actions passed all 123 tests with 0 failures and 0 skips. All PS-0.10A acceptance gates are complete; measured Verification runtime/scratch costs remain explicit limitations, not a production SLA. The separate generator-only large scale is not a substitute for this completed Medium full-pipeline run.
 
 Do not add production migration/rollback, SaaS, UI, AI, FHIR, Oracle, DB2, Kubernetes, or unrelated platform features. Do not begin PS-0.10B/C until PS-0.10A is accepted.
 
