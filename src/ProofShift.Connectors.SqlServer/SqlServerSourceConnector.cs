@@ -86,6 +86,30 @@ public sealed class SqlServerSourceConnector : RelationalSourceConnectorBase
 
     protected override string DefaultSchema => "dbo";
 
+    protected override string DiscoveryColumnsSql => """
+        SELECT s.name,o.name,CASE WHEN o.type='V' THEN 'view' ELSE 'table' END,c.name,t.name,c.is_nullable,c.column_id
+        FROM sys.objects o JOIN sys.schemas s ON s.schema_id=o.schema_id
+        JOIN sys.columns c ON c.object_id=o.object_id JOIN sys.types t ON t.user_type_id=c.user_type_id
+        WHERE o.type IN ('U','V') AND o.is_ms_shipped=0 ORDER BY s.name,o.name,c.column_id
+        """;
+    protected override string DiscoveryKeysSql => """
+        SELECT s.name,o.name,i.name,i.is_primary_key,c.name
+        FROM sys.tables o JOIN sys.schemas s ON s.schema_id=o.schema_id
+        JOIN sys.indexes i ON i.object_id=o.object_id AND i.is_unique=1 AND i.is_disabled=0
+        JOIN sys.index_columns ic ON ic.object_id=i.object_id AND ic.index_id=i.index_id AND ic.key_ordinal>0
+        JOIN sys.columns c ON c.object_id=o.object_id AND c.column_id=ic.column_id
+        ORDER BY s.name,o.name,i.name,ic.key_ordinal
+        """;
+    protected override string DiscoveryRelationshipsSql => """
+        SELECT s.name,o.name,f.name,c.name,ts.name,t.name,tc.name
+        FROM sys.foreign_keys f JOIN sys.tables o ON o.object_id=f.parent_object_id
+        JOIN sys.schemas s ON s.schema_id=o.schema_id JOIN sys.tables t ON t.object_id=f.referenced_object_id
+        JOIN sys.schemas ts ON ts.schema_id=t.schema_id JOIN sys.foreign_key_columns fc ON fc.constraint_object_id=f.object_id
+        JOIN sys.columns c ON c.object_id=o.object_id AND c.column_id=fc.parent_column_id
+        JOIN sys.columns tc ON tc.object_id=t.object_id AND tc.column_id=fc.referenced_column_id
+        ORDER BY s.name,o.name,f.name,fc.constraint_column_id
+        """;
+
     protected override DbConnection CreateConnection(string connectionString) => new SqlConnection(connectionString);
 
     protected override string QuoteIdentifier(string identifier) => $"[{identifier.Replace("]", "]]", StringComparison.Ordinal)}]";

@@ -1,0 +1,21 @@
+"id": "legacy-pension"
+"name": "Synthetic Legacy Pension"
+"role": "source"
+"storage":
+  "pension-source-db":
+    "connector": "sqlserver"
+    "checkpoint":
+      "consistency": "transaction-consistent"
+      "isolation": "serializable"
+    "connection":
+      "secret": "PS09_CORPUS_SOURCE_CONNECTION"
+  "pension-source-csv":
+    "connector": "csv"
+    "delimiter": ";"
+    "root":
+      "secret": "PS09_CORPUS_CSV_ROOT"
+  "pension-source-files":
+    "connector": "files"
+    "root":
+      "secret": "PS09_CORPUS_SOURCE_FILES_ROOT"
+...

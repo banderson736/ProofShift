@@ -1,0 +1,19 @@
+"proofshift": 1
+"project":
+  "id": "pension-assurance"
+  "name": "Synthetic Configured Pension Assurance"
+"packs":
+- "id": "pension"
+  "version": "0.9.0"
+"systems":
+  "legacy-pension":
+    "file": "systems/legacy-pension.yaml"
+  "external-pension":
+    "file": "systems/external-pension.yaml"
+"migration":
+  "graph": "migration/graph-false-reverse.yaml"
+"verification":
+  "rules": "rules/pension.yaml"
+"recovery":
+  "policy": "recovery/policy.yaml"
+...

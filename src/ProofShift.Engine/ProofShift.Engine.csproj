@@ -4,6 +4,7 @@
     <AssemblyName>ProofShift.Engine</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="CsvHelper" />
     <ProjectReference Include="../ProofShift.Domain/ProofShift.Domain.csproj" />
     <ProjectReference Include="../ProofShift.Graph/ProofShift.Graph.csproj" />
     <ProjectReference Include="../ProofShift.Configuration/ProofShift.Configuration.csproj" />

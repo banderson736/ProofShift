@@ -8,11 +8,55 @@ using ProofShift.Domain;
 
 namespace ProofShift.Connectors.Csv;
 
-public sealed class CsvSourceConnector : ICheckpointSourceConnector
+public sealed class CsvSourceConnector : ICheckpointSourceConnector, IPhysicalDiscoveryConnector
 {
     public ConnectorId Id { get; } = new("csv");
     public string Version => "0.1.0";
     public SourceConsistencyGuarantee CheckpointConsistency => SourceConsistencyGuarantee.Observed;
+
+    public async Task<PhysicalDiscoveryArtifact> DiscoverAsync(ConnectorContext context,
+        IReadOnlyCollection<ArtifactSelector> selectors, CancellationToken cancellationToken)
+    {
+        var objects = new List<PhysicalObject>();
+        foreach (var selector in selectors.Distinct())
+        {
+            if (!TryResolveCsvPath(context, selector, out var root, out var relativePath) ||
+                !ConnectorPathUtilities.TryResolveContainedPath(root, relativePath, out var fullPath))
+                throw new ConnectorReadException(ConnectorIssueCodes.PathOutsideRoot, "Discovery CSV path is outside its endpoint root.");
+            using var text = CreateTextReaderSafe(fullPath);
+            using var csv = CreateCsvReaderSafe(text, GetDelimiter(context, selector));
+            var headers = await ReadHeaderAsync(csv, cancellationToken).ConfigureAwait(false)
+                ?? throw new ConnectorReadException(ConnectorIssueCodes.InvalidCsv, "Discovery CSV requires headers.");
+            if (headers.Distinct(StringComparer.Ordinal).Count() != headers.Length || headers.Any(string.IsNullOrWhiteSpace))
+                throw new ConnectorReadException(ConnectorIssueCodes.InvalidCsv, "Discovery CSV headers must be nonempty and unique.");
+            var kinds = Enumerable.Repeat("unknown", headers.Length).ToArray();
+            var empty = new long[headers.Length];
+            long rows = 0;
+            while (await csv.ReadAsync().ConfigureAwait(false))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                rows++;
+                for (var index = 0; index < headers.Length; index++)
+                {
+                    var value = csv.GetField(index) ?? string.Empty;
+                    if (string.IsNullOrEmpty(value)) { empty[index]++; continue; }
+                    var candidate = long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) ? "integer" :
+                        decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out _) ? "decimal" :
+                        bool.TryParse(value, out _) ? "boolean" :
+                        DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _) ? "date" : "string";
+                    kinds[index] = kinds[index] == "unknown" || kinds[index] == candidate ? candidate :
+                        (kinds[index] is "integer" or "decimal" && candidate is "integer" or "decimal") ? "decimal" : "string";
+                }
+            }
+            if (selector.IdentityFields.Any(field => !headers.Contains(field, StringComparer.Ordinal)))
+                throw new ConnectorReadException(ConnectorIssueCodes.IdentityFieldNotFound, "Declared discovery CSV identity field is absent.");
+            objects.Add(new("", ConnectorPathUtilities.NormalizeRelativePath(relativePath), "csv",
+                headers.Select((name, index) => new PhysicalField(name, kinds[index], empty[index] > 0, index + 1, true, empty[index])).ToArray(),
+                selector.IdentityFields.Count == 0 ? [] : [new PhysicalKey("configured-identity", true, selector.IdentityFields)], [], rows,
+                new FileInfo(fullPath).Length, new Dictionary<string, string> { ["path"] = relativePath, ["delimiter"] = GetDelimiter(context, selector) }));
+        }
+        return PhysicalDiscovery.Create(context, Id.Value, Version, objects);
+    }
 
     public async IAsyncEnumerable<RecordEnvelope> ReadForCheckpointAsync(
         ConnectorContext context,

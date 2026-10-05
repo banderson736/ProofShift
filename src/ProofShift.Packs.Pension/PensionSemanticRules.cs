@@ -10,9 +10,11 @@ public abstract class PensionRuleBase(VerificationRuleDefinition definition) : V
 {
     protected sealed record PensionRecordGroup(string Key, IReadOnlyList<VerificationArtifactRecord> Records);
 
-    public override IReadOnlyCollection<VerificationOrderingKey> RequiredOrderingKeys => Definition.Options
+    public override IReadOnlyCollection<VerificationOrderingKey> RequiredOrderingKeys => Definition.StructuredOptions
         .Where(pair => pair.Key.EndsWith("Field", StringComparison.Ordinal) || pair.Key is "groupBy" or "businessKey")
-        .SelectMany(pair => pair.Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .SelectMany(pair => (pair.Value is CollectionValue sequence
+            ? sequence.Values.Cast<StringValue>().Select(value => value.Value)
+            : pair.Value is StringValue text ? text.Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) : [])
             .Select(orderingField => new VerificationOrderingKey(Option("semanticType"), orderingField,
                 pair.Key is "groupBy" or "businessKey" ? VerificationOrderingRole.Grouping : VerificationOrderingRole.Ordering)))
         .Distinct().OrderBy(key => key.SemanticType, StringComparer.Ordinal).ThenBy(key => key.Field, StringComparer.Ordinal).ToArray();
@@ -408,7 +410,7 @@ public sealed class ContributionAccountingRule(VerificationRuleDefinition defini
         var target = TargetNode;
         var keyField = Option("transactionField", "transaction_id");
         var amountField = Option("amountField", "amount");
-        var comparisonFields = Fields(Option("compareFields"), [keyField, "member_id", "period", "category"]);
+        var comparisonFields = OptionList("compareFields", [keyField, "member_id", "period", "category"]);
         var tolerance = Tolerance();
         var expected = ReadRecordGroupsAsync(context, VerificationArtifactRole.ExpectedTarget, target, semantic, [keyField], cancellationToken);
         var actual = ReadRecordGroupsAsync(context, VerificationArtifactRole.ActualTarget, target, semantic, [keyField], cancellationToken);
@@ -471,7 +473,7 @@ public class ContributionTotalRule(VerificationRuleDefinition definition) : Pens
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         await foreach (var finding in CompareTotalsAsync(context, "Pension.Contribution", Option("amountField", "amount"),
-            Fields(Option("groupBy"), ["member_id", "period", "category"]), "ContributionPeriodTotalMismatch", Tolerance(),
+            OptionList("groupBy", ["member_id", "period", "category"]), "ContributionPeriodTotalMismatch", Tolerance(),
             compareCount: true, cancellationToken)
             .ConfigureAwait(false)) yield return finding;
     }
@@ -532,7 +534,7 @@ public sealed class ServiceCreditTotalRule(VerificationRuleDefinition definition
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         await foreach (var finding in CompareTotalsAsync(context, "Pension.ServiceCredit", Option("amountField", "credit"),
-            Fields(Option("groupBy"), ["member_id"]), "IncorrectServiceCreditTotal", Tolerance(), compareCount: false, cancellationToken)
+            OptionList("groupBy", ["member_id"]), "IncorrectServiceCreditTotal", Tolerance(), compareCount: false, cancellationToken)
             .ConfigureAwait(false)) yield return finding;
     }
 }
@@ -607,7 +609,7 @@ public sealed class RetirementElectionRule(VerificationRuleDefinition definition
     {
         var semantic = Option("semanticType", "Pension.RetirementElection");
         var keyField = Option("electionField", "election_id");
-        var compareFields = Fields(Option("compareFields"), ["member_id", "election_code", "effective_date"]);
+        var compareFields = OptionList("compareFields", ["member_id", "election_code", "effective_date"]);
         var expected = ReadRecordGroupsAsync(context, VerificationArtifactRole.ExpectedTarget, TargetNode, semantic, [keyField], cancellationToken);
         var actual = ReadRecordGroupsAsync(context, VerificationArtifactRole.ActualTarget, TargetNode, semantic, [keyField], cancellationToken);
         var errors = 0;
@@ -677,7 +679,7 @@ public sealed class BenefitPaymentRule(VerificationRuleDefinition definition) : 
                         FinancialValue(SafeKey(key), 1, expectedAmount ?? 0m, tolerance, (expectedAmount ?? 0m) - (actualAmount ?? 0m)),
                         FinancialValue(SafeKey(key), 1, actualAmount ?? 0m, tolerance, (expectedAmount ?? 0m) - (actualAmount ?? 0m)));
             }
-                    var compareFields = Fields(Option("compareFields"), [keyField, "participant_id", "payment_period", "paid_on"]);
+                    var compareFields = OptionList("compareFields", [keyField, "participant_id", "payment_period", "paid_on"]);
                     if (!SameFields(expectedRows[0], actualRows[0], compareFields))
                     {
                     errors++;
@@ -697,7 +699,7 @@ public sealed class BenefitPaymentTotalRule(VerificationRuleDefinition definitio
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         await foreach (var finding in CompareTotalsAsync(context, "Pension.BenefitPayment", Option("amountField", "amount"),
-            Fields(Option("groupBy"), ["member_id", "period"]), "BenefitPaymentTotalMismatch", Tolerance(),
+            OptionList("groupBy", ["member_id", "period"]), "BenefitPaymentTotalMismatch", Tolerance(),
             compareCount: true, cancellationToken)
             .ConfigureAwait(false)) yield return finding;
     }

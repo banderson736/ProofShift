@@ -44,6 +44,8 @@ PS-0.6 checkpoint invariants: record per-endpoint consistency truthfully; do not
 
 Do not skip ahead to UI, SaaS, Kubernetes, AI, FHIR, Oracle, DB2, or enterprise infrastructure. PS-0.10A is complete; preserve its accepted behavior and leave PS-0.10B/C deferred until a new explicit assignment.
 
+PS-0.10B Configuration & Authoring UX is the new explicit assignment and is In Progress. Work on deterministic authoring, typed provider-owned rule schemas, explicit pack resolution, read-only physical discovery, scaffold/import, explain/strict validation, and committed configurable Pension demo semantics. The validated foundation is documented in docs/CONFIGURATION_AUTHORING.md and ADR-0018; it is not milestone acceptance. Preserve PS-0.10A, do not continue unrelated performance tuning, and do not begin PS-0.10C connector expansion, new packs, UI/AI authoring, or production execution/rollback.
+
 ## Implementation style
 
 - Target .NET 10 / modern C#.

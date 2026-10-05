@@ -200,7 +200,17 @@ Medium completed successfully in 3h 55m: 411,000 generated source records, 424,7
 
 Restore/build passed, and the final local suite completed with 121 passed, 0 failed, and 2 Windows symlink-capability skips. Remote Docker-backed GitHub Actions passed all 123 tests with 0 failures and 0 skips. All PS-0.10A acceptance gates are complete; measured Verification runtime/scratch costs remain explicit limitations, not a production SLA. The separate generator-only large scale is not a substitute for this completed Medium full-pipeline run.
 
-Do not add production migration/rollback, SaaS, UI, AI, FHIR, Oracle, DB2, Kubernetes, or unrelated platform features. Do not begin PS-0.10B/C until PS-0.10A is accepted.
+Do not add production migration/rollback, SaaS, UI, AI, FHIR, Oracle, DB2, Kubernetes, or unrelated platform features. PS-0.10B is now explicitly assigned below; PS-0.10C remains deferred.
+
+### PS-0.10B Configuration & Authoring UX
+
+Status: In Progress under an explicit assignment. Preserve Accepted PS-0.10A; do not continue unrelated performance optimization or expand connectors/domain packs.
+
+The user-facing workflow is init, physical discovery, deterministic structural scaffold, review/approval, validation, effective explanation, then dry-run. Discovery must be read-only and connector-neutral, never inferred business semantics. Scaffold suggestions are not approval. Typed rule-document version 2 and provider-owned descriptors must drive validation, schemas, rule descriptions and explanations; legacy documents retain their established interpretation or an explicit migration path.
+
+Required gates: explicit pack/version resolution; generic/Pension init templates; actual SQL Server/PostgreSQL/CSV/filesystem discovery and versioned fingerprint/diff artifacts; deterministic scaffold with unresolved approvals; CSV mapping import through the normal compiler; project/rule/mapping explain and capabilities; strict validation and secret-safe source-located diagnostics; reusable code-map authoring; customer-like committed Pension configuration and workflow preserving exact 149/0/QUALIFIED; tutorials/editor schema support; full local and zero-required-skip Docker-backed remote CI. No PS-0.10C, new domain pack, AI authoring, IDE extension, or production migration/rollback is in scope.
+
+The first implementation slice adds immutable structured values and provider-owned rule descriptors without changing accepted execution/storage architecture. See ADR-0018. Do not mark this milestone Accepted until the complete authoring workflow and all integration gates pass.
 
 ## Commercial validation gate after PS-0 / during PS-0
 

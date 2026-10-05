@@ -9,7 +9,7 @@ using ProofShift.Domain;
 
 namespace ProofShift.Connectors.Abstractions;
 
-public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector, ISourceBinaryContentResolver
+public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector, ISourceBinaryContentResolver, IPhysicalDiscoveryConnector
 {
     private static readonly Regex IdentifierPattern = new("^[A-Za-z_][A-Za-z0-9_$]*$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
@@ -27,6 +27,62 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
     protected abstract string PrimaryKeySql { get; }
     protected abstract string ApproximateRowCountSql { get; }
     protected abstract string QuoteIdentifier(string identifier);
+    protected abstract string DiscoveryColumnsSql { get; }
+    protected abstract string DiscoveryKeysSql { get; }
+    protected abstract string DiscoveryRelationshipsSql { get; }
+
+    public async Task<PhysicalDiscoveryArtifact> DiscoverAsync(ConnectorContext context,
+        IReadOnlyCollection<ArtifactSelector> selectors, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        await using var connection = CreateConnection(GetConnectionString(context));
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        var objects = new Dictionary<(string Schema, string Name), (string Kind, List<PhysicalField> Fields)>();
+        var keys = new Dictionary<(string Schema, string Name, string Key, bool Primary), List<string>>();
+        var relations = new Dictionary<(string Schema, string Name, string Key, string TargetSchema, string Target), (List<string> Fields, List<string> Targets)>();
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = DiscoveryColumnsSql;
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var key = (reader.GetString(0), reader.GetString(1));
+                if (!objects.TryGetValue(key, out var item)) item = (reader.GetString(2), []);
+                item.Fields.Add(new(reader.GetString(3), reader.GetString(4), reader.GetBoolean(5), reader.GetInt32(6)));
+                objects[key] = item;
+            }
+        }
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = DiscoveryKeysSql;
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var key = (reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3));
+                if (!keys.TryGetValue(key, out var fields)) keys.Add(key, fields = []);
+                fields.Add(reader.GetString(4));
+            }
+        }
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = DiscoveryRelationshipsSql;
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var key = (reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(4), reader.GetString(5));
+                if (!relations.TryGetValue(key, out var fields)) relations.Add(key, fields = ([], []));
+                fields.Fields.Add(reader.GetString(3));
+                fields.Targets.Add(reader.GetString(6));
+            }
+        }
+        return PhysicalDiscovery.Create(context, Id.Value, Version, objects.Select(pair => new PhysicalObject(
+            pair.Key.Schema, pair.Key.Name, pair.Value.Kind, pair.Value.Fields,
+            keys.Where(key => key.Key.Schema == pair.Key.Schema && key.Key.Name == pair.Key.Name)
+                .Select(key => new PhysicalKey(key.Key.Key, key.Key.Primary, key.Value)).ToArray(),
+            relations.Where(relation => relation.Key.Schema == pair.Key.Schema && relation.Key.Name == pair.Key.Name)
+                .Select(relation => new PhysicalRelationship(relation.Key.Key, relation.Value.Fields,
+                    relation.Key.TargetSchema, relation.Key.Target, relation.Value.Targets)).ToArray())));
+    }
     protected virtual IsolationLevel? CheckpointIsolationLevel => null;
 
     public SourceConsistencyGuarantee CheckpointConsistency => CheckpointIsolationLevel is null

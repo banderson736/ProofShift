@@ -37,6 +37,27 @@ public sealed class PensionExternalCorpusVerificationTests
     private const string IntegratedRunDirectoryVariable = "PS09_INTEGRATED_RUN_DIRECTORY";
     private const string BenchmarkScaleVariable = "PS010A_BENCHMARK_SCALE";
     [Fact]
+    public async Task CommittedReviewedPensionConfigurationPreservesAcceptedGraphAndRuleMeaning()
+    {
+        var source = PensionSyntheticDatasetGenerator.Generate().ToArray();
+        var (sourceSystem, targetSystem, legacy) = CreateConfiguration();
+        var corrected = CreateScenario(source, sourceSystem.Id, targetSystem.Id, falseReverse: false);
+        var falseReverse = CreateScenario(source, sourceSystem.Id, targetSystem.Id, falseReverse: true);
+        var directory = Path.Combine(FindRepositoryRoot(AppContext.BaseDirectory), "scenarios", "pension-modernization", "ps010b");
+        if (Environment.GetEnvironmentVariable("PS010B_EXPORT_REVIEWED_CONFIG") == "true")
+            await ReviewedPensionExporter.WriteAsync(directory, legacy.Systems, corrected.Graph, falseReverse.Graph, CreateRules());
+        var loaded = await new ConfigurationLoader(requireEnvironmentValues: false).LoadAsync(Path.Combine(directory, "proofshift.yaml"), TestContext.Current.CancellationToken);
+        Assert.True(loaded.IsValid, string.Join(';', loaded.Issues.Select(issue => issue.Message)));
+        var compiled = MigrationGraphCompiler.Compile(loaded.Configuration!);
+        Assert.True(compiled.IsValid, string.Join(';', compiled.Issues.Select(issue => issue.Message)));
+        Assert.Equal(corrected.Graph.GraphHash, compiled.GraphHash);
+        var definitions = VerificationRuleConfigurationLoader.Load(loaded.Configuration!);
+        Assert.True(definitions.All(definition => definition.UsesStructuredOptions));
+        var registry = new ProofShift.Packs.Abstractions.PackRegistry([new PensionPack()]).Resolve(loaded.Configuration!.Root.Packs);
+        Assert.Equal(CreateRules().Length, registry.Resolve(definitions).Rules.Count);
+    }
+
+    [Fact]
     public async Task FastDefectiveAndCorrectedDatasetsRunThroughVerificationServiceWithExactBusinessCounts()
     {
         var totalStopwatch = Stopwatch.StartNew();
@@ -87,9 +108,19 @@ public sealed class PensionExternalCorpusVerificationTests
         var sourceLoadStage = performanceRecorder.StartStage(PerformanceStageKind.Fixture,
             "CSV/filesystem materialization and SQL Server bulk load");
         await MaterializeCsvAndFileSourcesAsync(sourceData, csvRoot, sourceFilesRoot);
-        var (sourceSystem, targetSystem, configuration) = CreateConfiguration();
-        var defectiveScenario = CreateScenario(sourceData, sourceSystem.Id, targetSystem.Id, falseReverse: true);
-        var correctedScenario = CreateScenario(sourceData, sourceSystem.Id, targetSystem.Id, falseReverse: false);
+        var reviewedRoot = Path.Combine(FindRepositoryRoot(AppContext.BaseDirectory), "scenarios", "pension-modernization", "ps010b");
+        var configured = await new ConfigurationLoader(requireEnvironmentValues: false).LoadAsync(
+            Path.Combine(reviewedRoot, "proofshift.yaml"), TestContext.Current.CancellationToken);
+        Assert.True(configured.IsValid, string.Join(';', configured.Issues.Select(issue => issue.Message)));
+        var configuration = configured.Configuration!;
+        var correctedGraph = MigrationGraphCompiler.Compile(configuration);
+        Assert.True(correctedGraph.IsValid, string.Join(';', correctedGraph.Issues.Select(issue => issue.Message)));
+        var falseReverseConfiguration = await new ConfigurationLoader(requireEnvironmentValues: false).LoadAsync(
+            Path.Combine(reviewedRoot, "proofshift-false-reverse.yaml"), TestContext.Current.CancellationToken);
+        var defectiveGraph = MigrationGraphCompiler.Compile(falseReverseConfiguration.Configuration!);
+        Assert.True(defectiveGraph.IsValid, string.Join(';', defectiveGraph.Issues.Select(issue => issue.Message)));
+        var correctedScenario = ReviewedScenario(correctedGraph.Graph!);
+        var defectiveScenario = ReviewedScenario(defectiveGraph.Graph!);
         var sourceConnectors = new ConnectorRegistry(
         [
             new ProofShift.Connectors.SqlServer.SqlServerSourceConnector(),
@@ -154,8 +185,8 @@ public sealed class PensionExternalCorpusVerificationTests
             }
             var expectedTargetArtifacts = checked(cleanTarget.LongLength + payloadArtifactCount + datasetScale.Members);
             var expectedProjectionSourceVisits = CountProjectionSourceVisits(correctedScenario, correctedCapture.Checkpoint!);
-            var registry = new VerificationRuleRegistry([new GenericVerificationRuleProvider(), new PensionPack()]);
-            var rules = registry.Resolve(CreateRules());
+            var registry = new ProofShift.Packs.Abstractions.PackRegistry([new PensionPack()]).Resolve(configuration.Root.Packs);
+            var rules = registry.Resolve(VerificationRuleConfigurationLoader.Load(configuration));
             var service = new VerificationService(checkpointStore);
 
             var externalVerificationStopwatch = Stopwatch.StartNew();
@@ -451,6 +482,19 @@ public sealed class PensionExternalCorpusVerificationTests
         for (var directory = new DirectoryInfo(startDirectory); directory is not null; directory = directory.Parent)
             if (File.Exists(Path.Combine(directory.FullName, "ProofShift.sln"))) return directory.FullName;
         throw new DirectoryNotFoundException("ProofShift repository root could not be located from the test output directory.");
+    }
+
+    private static ScenarioGraph ReviewedScenario(MigrationGraph graph)
+    {
+        var sourceNodes = Enum.GetValues<PensionRecordKind>().ToDictionary(kind => kind,
+            kind => graph.Nodes.Single(node => node.Name == SourceNode(kind)));
+        var targetNodes = graph.Nodes.Where(node => node.Type == MigrationNodeType.Target).ToDictionary(node => node.Name, StringComparer.Ordinal);
+        var fileKinds = new[] { PensionRecordKind.Document, PensionRecordKind.HistoricalExport };
+        var fileSources = fileKinds.ToDictionary(kind => kind, kind => graph.Nodes.Single(node =>
+            node.Name == (kind == PensionRecordKind.Document ? "source-document-files" : "source-historical-export-files")));
+        var fileTargets = fileKinds.ToDictionary(kind => kind, kind => graph.Nodes.Single(node =>
+            node.Name == (kind == PensionRecordKind.Document ? "target-document-files" : "target-historical-export-files")));
+        return new(graph, sourceNodes, targetNodes, fileSources, fileTargets);
     }
 
     private static async Task<CliResult> RunCliAsync(string workingDirectory, string cliAssembly, params string[] arguments)

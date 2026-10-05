@@ -1,5 +1,7 @@
 # ProofShift Configuration Contract
 
+PS-0.10B's in-progress typed-rule and CLI foundation is documented in [Configuration Authoring](CONFIGURATION_AUTHORING.md). Rule-document version 2 is opt-in; root format and accepted legacy interpretation remain supported.
+
 Configuration must be declarative, versioned, hashable, and suitable for source control.
 
 Avoid one monolithic YAML file for real projects. Use a root manifest plus referenced files.

@@ -1,8 +1,10 @@
 using System.Runtime.CompilerServices;
+using System.Globalization;
 using ProofShift.Configuration;
 using ProofShift.Domain;
 using ProofShift.Evidence;
 using ProofShift.Packs.Pension;
+using ProofShift.Packs.Abstractions;
 using ProofShift.Recovery;
 using ProofShift.Verification;
 using Xunit;
@@ -12,12 +14,48 @@ namespace ProofShift.EndToEnd.Tests;
 public sealed class PensionSemanticRuleTests
 {
     [Fact]
-    public async Task PensionRulesVerifyExternalTargetWithoutProjectionExecutionAndDetectExactDefectCorpus()
+    public void PackRegistryRequiresExplicitSelectionAndExactInstalledVersion()
+    {
+        var installed = new PackRegistry([new PensionPack()]);
+        var genericOnly = installed.Resolve([]);
+        Assert.DoesNotContain(genericOnly.Descriptors, descriptor => descriptor.Type.StartsWith("pension-", StringComparison.Ordinal));
+        var pension = installed.Resolve([new PackConfigurationDto("pension", "0.9.0")]);
+        Assert.Contains(pension.Descriptors, descriptor => descriptor.Type == "pension-contribution-total");
+        Assert.Equal("PSPACK002", Assert.Throws<VerificationRuleException>(() =>
+            installed.Resolve([new PackConfigurationDto("pension", "0.9.1")])).Code);
+        Assert.Equal("PSPACK001", Assert.Throws<VerificationRuleException>(() =>
+            installed.Resolve([new PackConfigurationDto("unavailable", "1")])).Code);
+        Assert.Equal("PSPACK003", Assert.Throws<VerificationRuleException>(() =>
+            installed.Resolve([new PackConfigurationDto("pension", "0.9.0"), new PackConfigurationDto("proofshift.pension", "0.9.0")])).Code);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PensionRulesVerifyExternalTargetWithoutProjectionExecutionAndDetectExactDefectCorpus(bool structured)
     {
         var source = PensionSyntheticDatasetGenerator.Generate().ToArray();
         var expected = PensionTargetDataModel.Transform(source).ToArray();
         var defective = PensionDefectInjector.InjectTargetDefects(expected).ToArray();
         var definitions = RuleDefinitions();
+        if (structured)
+        {
+            var descriptors = new PensionPack().RuleFactories.ToDictionary(factory => factory.Type, factory => factory.Descriptor);
+            definitions = definitions.Select(definition => new VerificationRuleDefinition(definition.Id, definition.Type,
+                definition.Version, definition.Severity, structuredOptions: definition.Options.Select(pair =>
+                {
+                    var kind = descriptors[definition.Type].Options.Single(option => option.Name == pair.Key).Kind;
+                    ValueNode value = kind switch
+                    {
+                        RuleOptionKind.Sequence => new CollectionValue(pair.Value.Split(',', StringSplitOptions.TrimEntries)
+                            .Select(item => (ValueNode)new StringValue(item))),
+                        RuleOptionKind.Number => new DecimalValue(decimal.Parse(pair.Value, CultureInfo.InvariantCulture)),
+                        RuleOptionKind.Logical => new BooleanValue(bool.Parse(pair.Value)),
+                        _ => new StringValue(pair.Value)
+                    };
+                    return new KeyValuePair<string, ValueNode>(pair.Key, value);
+                }))).ToArray();
+        }
 
         var cleanFindings = await EvaluateAsync(source, expected, expected, definitions);
         Assert.DoesNotContain(cleanFindings, finding => finding.Result == EvidenceResult.Fail);

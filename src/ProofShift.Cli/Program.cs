@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Globalization;
 using ProofShift.Configuration;
 using ProofShift.Connectors.Abstractions;
@@ -29,6 +30,16 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        if (args.Length > 0 && args[0] is "scaffold" or "mapping")
+            return await MappingAuthoringCommands.RunAsync(args).ConfigureAwait(false);
+        if (args.Length > 0 && args[0] is "explain" or "config")
+            return await EffectiveAuthoringCommands.RunAsync(args).ConfigureAwait(false);
+        if (args.Length > 0 && args[0] is "discover" or "discovery")
+            return await DiscoveryCommands.RunAsync(args).ConfigureAwait(false);
+        if (args.Length > 0 && args[0] == "init")
+            return await ProjectInitCommand.RunAsync(args).ConfigureAwait(false);
+        if (args.Length > 0 && args[0] is "rules" or "capabilities")
+            return RuleAuthoringCommands.Run(args);
         if (args.Length >= 2 && string.Equals(args[0], "demo", StringComparison.OrdinalIgnoreCase) &&
             string.Equals(args[1], "generate", StringComparison.OrdinalIgnoreCase))
             return await PensionDemoGenerator.GenerateAsync(args.Skip(2).ToArray()).ConfigureAwait(false);
@@ -58,6 +69,7 @@ internal static class Program
         }
 
         var jsonOutput = false;
+        var strict = false;
         string? checkpoint = null;
         string? projection = null;
         string? verificationRun = null;
@@ -68,6 +80,10 @@ internal static class Program
             if (string.Equals(args[index], "--json", StringComparison.OrdinalIgnoreCase))
             {
                 jsonOutput = true;
+            }
+            else if (args[index] == "--strict" && string.Equals(args[0], "validate", StringComparison.OrdinalIgnoreCase))
+            {
+                strict = true;
             }
             else if (string.Equals(args[index], "--checkpoint", StringComparison.OrdinalIgnoreCase) &&
                 index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
@@ -103,7 +119,7 @@ internal static class Program
 
         if (string.Equals(args[0], "validate", StringComparison.OrdinalIgnoreCase))
         {
-            return await ValidateConfigurationAsync(args[1], jsonOutput).ConfigureAwait(false);
+            return await ValidateConfigurationAsync(args[1], jsonOutput, strict).ConfigureAwait(false);
         }
 
         if (string.Equals(args[0], "plan", StringComparison.OrdinalIgnoreCase))
@@ -162,12 +178,17 @@ internal static class Program
         return 2;
     }
 
-    private static async Task<int> ValidateConfigurationAsync(string path, bool jsonOutput)
+    private static async Task<int> ValidateConfigurationAsync(string path, bool jsonOutput, bool strict = false)
     {
         ConfigurationLoadResult result;
         try
         {
-            result = await new ConfigurationLoader().LoadAsync(path).ConfigureAwait(false);
+            result = await new ConfigurationLoader(requireEnvironmentValues: false).LoadAsync(path).ConfigureAwait(false);
+            if (result.Configuration is { } candidate && !candidate.Root.UsesExplicitPackList &&
+                !(candidate.ReferencedFiles.FirstOrDefault(file => file.Kind == ConfigurationFileKind.VerificationRules)?.Document is
+                    ConfigurationMappingNode ruleDocument && ruleDocument.Values.TryGetValue("version", out var ruleVersion) &&
+                    ruleVersion is ConfigurationScalarNode { Value: "2" }))
+                result = await new ConfigurationLoader().LoadAsync(path).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -177,6 +198,55 @@ internal static class Program
         {
             Console.Error.WriteLine("Configuration validation could not be completed.");
             return 1;
+        }
+
+        if (result.Configuration is { } configuration)
+        {
+            try
+            {
+                var definitions = VerificationRuleConfigurationLoader.Load(configuration);
+                if (strict || configuration.Root.UsesExplicitPackList || definitions.Any(definition => definition.UsesStructuredOptions))
+                {
+                    var registry = CliComposition.RulesFor(configuration, definitions);
+                    _ = registry.Resolve(definitions);
+                    var graph = MigrationGraphCompiler.Compile(configuration);
+                    if (graph.Graph is { } compiled)
+                    {
+                        result = new ConfigurationLoadResult(configuration, result.Issues.Concat(
+                            RuleReferenceValidator.Validate(definitions, registry, compiled)));
+                        _ = RecoveryPolicyConfigurationLoader.Load(configuration);
+                        if (!strict)
+                            result = new ConfigurationLoadResult(configuration, result.Issues.Concat(
+                                StrictAuthoringValidation.UnapprovedMappings(configuration).Select(issue => new ConfigurationValidationIssue(
+                                    issue.Code, ValidationSeverity.Warning, issue.Message, issue.File, issue.Path, issue.Line, issue.Column))));
+                        if (strict)
+                        {
+                            var reverseIssues = compiled.Edges.Where(edge => edge.Recovery is { Mode: RecoveryMode.Reverse } &&
+                                    !TransformationLossAnalyzer.Analyze(edge).IsReversible)
+                                .Select(edge => new ConfigurationValidationIssue("PSAUTHOR003", ValidationSeverity.Error,
+                                    $"Mapping '{edge.Name}' declares Reverse for a transformation without a proven inverse.",
+                                    configuration.Root.MigrationGraphFile, $"edges.{edge.Name}.recovery"));
+                            result = new ConfigurationLoadResult(configuration, result.Issues.Concat(reverseIssues)
+                                .Concat(StrictAuthoringValidation.UnapprovedMappings(configuration)));
+                        }
+                    }
+                    else
+                        result = new ConfigurationLoadResult(configuration, result.Issues.Concat(graph.Issues.Select(issue =>
+                            new ConfigurationValidationIssue(issue.Code, ValidationSeverity.Error, issue.Message, issue.File, issue.Path))));
+                }
+            }
+            catch (VerificationRuleException exception)
+            {
+                result = new ConfigurationLoadResult(configuration, result.Issues.Append(new ConfigurationValidationIssue(
+                    exception.Code, ValidationSeverity.Error, exception.Message,
+                    exception.Location?.File ?? configuration.ReferencedFiles.FirstOrDefault(file => file.Kind == ConfigurationFileKind.VerificationRules)?.RelativePath,
+                    exception.Location?.Path, exception.Location?.Line, exception.Location?.Column)));
+            }
+                    catch (RecoveryException exception)
+                    {
+                    result = new ConfigurationLoadResult(configuration, result.Issues.Append(new ConfigurationValidationIssue(
+                        exception.Code, ValidationSeverity.Error, exception.Message, configuration.Root.RecoveryPolicyFile, "recovery")));
+                    }
         }
 
         if (jsonOutput)
@@ -571,7 +641,7 @@ internal static class Program
                     return new VerificationTargetRuntime(node.Name, connector,
                         new ShadowTargetContext(contextFactory.Create(loaded.Configuration, node), projection.RunId, system.Role));
                 }).ToArray();
-            var registry = new VerificationRuleRegistry([new GenericVerificationRuleProvider(), new PensionPack()]);
+            var registry = CliComposition.RulesFor(loaded.Configuration, VerificationRuleConfigurationLoader.Load(loaded.Configuration));
             var ruleSet = registry.Resolve(VerificationRuleConfigurationLoader.Load(loaded.Configuration));
             var snapshotStore = new FileSystemSnapshotStore(Path.Combine(projectDirectory, ".proofshift", "checkpoints"));
             var verificationService = new VerificationService(snapshotStore);
@@ -661,7 +731,7 @@ internal static class Program
                 new RecoveryCompensatorRegistry([new ShadowBaselineRestoreCompensator()]));
             var orchestrator = new DryRunOrchestrator(sourceConnectors, shadowConnectors, snapshotStore,
                 verificationService, recoveryService);
-            var ruleRegistry = new VerificationRuleRegistry([new GenericVerificationRuleProvider(), new PensionPack()]);
+            var ruleRegistry = CliComposition.RulesFor(loaded.Configuration, VerificationRuleConfigurationLoader.Load(loaded.Configuration));
             var rules = ruleRegistry.Resolve(VerificationRuleConfigurationLoader.Load(loaded.Configuration));
             var policy = RecoveryPolicyConfigurationLoader.Load(loaded.Configuration);
             var evidenceStore = new FileSystemEvidenceStore(Path.Combine(projectDirectory, ".proofshift", "verifications"));
@@ -1233,7 +1303,9 @@ internal static class Program
             issue.Severity.ToString().ToLowerInvariant(),
             issue.File,
             issue.Path,
-            issue.Message));
+            issue.Message,
+            issue.Line,
+            issue.Column));
         var output = new ValidationOutput(
             result.IsValid,
             result.ConfigurationVersion,
@@ -1276,7 +1348,7 @@ internal static class Program
             Console.WriteLine($"{severity} {issue.Code}");
             if (issue.File is not null)
             {
-                Console.WriteLine(issue.File);
+                Console.WriteLine(issue.Line is { } line ? $"{issue.File}:{line}:{issue.Column ?? 1}" : issue.File);
             }
 
             if (issue.Path is not null)
@@ -1413,7 +1485,9 @@ internal static class Program
         string Severity,
         string? File,
         string? Path,
-        string Message);
+        string Message,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Line = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? Column = null);
 
     private sealed record SourceCoverageOutput(int Accounted, int Total);
 

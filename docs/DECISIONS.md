@@ -2,6 +2,8 @@
 
 This file is a quick index. Detailed decisions may be added as ADRs under `docs/adr/`.
 
+PS-0.10B authoring contracts: see [ADR-0018](adr/0018-structured-rule-authoring-contract.md). Rule-document v2 preserves typed nested values; legacy documents retain their interpretation/fingerprints. Provider-owned descriptors validate exact rule versions and configured types. This is an explicitly assigned authoring slice, not PS-0.10B acceptance.
+
 ## Accepted decisions
 
 ### D-001 — ProofShift is migration assurance, not generic DB diff

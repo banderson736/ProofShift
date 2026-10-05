@@ -8,8 +8,32 @@ using ProofShift.Domain;
 
 namespace ProofShift.Connectors.Files;
 
-public sealed class FilesystemSourceConnector : ICheckpointSourceConnector, ISourceBinaryContentResolver
+public sealed class FilesystemSourceConnector : ICheckpointSourceConnector, ISourceBinaryContentResolver, IPhysicalDiscoveryConnector
 {
+    public Task<PhysicalDiscoveryArtifact> DiscoverAsync(ConnectorContext context,
+        IReadOnlyCollection<ArtifactSelector> selectors, CancellationToken cancellationToken)
+    {
+        var root = ConnectorPathUtilities.ResolveRoot(context);
+        var groups = new Dictionary<string, (long Count, long Bytes)>(StringComparer.Ordinal);
+        foreach (var path in Directory.EnumerateFiles(root, "*", new EnumerationOptions
+        {
+            RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint
+        }))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var relative = Path.GetRelativePath(root, path);
+            if (!ConnectorPathUtilities.TryResolveContainedPath(root, relative, out var contained))
+                throw new ConnectorReadException(ConnectorIssueCodes.PathOutsideRoot, "Filesystem discovery encountered a root escape.");
+            var extension = Path.GetExtension(contained).ToLowerInvariant();
+            var prior = groups.GetValueOrDefault(extension);
+            groups[extension] = (prior.Count + 1, prior.Bytes + new FileInfo(contained).Length);
+        }
+        return Task.FromResult(PhysicalDiscovery.Create(context, Id.Value, Version,
+            groups.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => new PhysicalObject("",
+                string.IsNullOrEmpty(pair.Key) ? "**/extensionless" : "**/*" + pair.Key, "file-pattern",
+                [], [], [], pair.Value.Count, pair.Value.Bytes))));
+    }
+
     public ConnectorId Id { get; } = new("files");
     public string Version => "0.1.0";
     public SourceConsistencyGuarantee CheckpointConsistency => SourceConsistencyGuarantee.Observed;

@@ -30,9 +30,13 @@ public sealed class ConfigurationLoader
 {
     private const int SupportedVersion = 1;
     private readonly IEnvironmentVariableProvider _environment;
+    private readonly bool _requireEnvironmentValues;
 
-    public ConfigurationLoader(IEnvironmentVariableProvider? environment = null) =>
+    public ConfigurationLoader(IEnvironmentVariableProvider? environment = null, bool requireEnvironmentValues = true)
+    {
         _environment = environment ?? new ProcessEnvironmentVariableProvider();
+        _requireEnvironmentValues = requireEnvironmentValues;
+    }
 
     public async Task<ConfigurationLoadResult> LoadAsync(
         string path,
@@ -332,6 +336,31 @@ public sealed class ConfigurationLoader
             ValidateIdentifier(pack.Id, file, "pack.id", issues);
         }
 
+        var packs = new List<PackConfigurationDto>();
+        if (Find(node, "packs") is { } packsNode)
+        {
+            if (pack is not null || packsNode is not YamlSequenceNode)
+                AddIssue(issues, ConfigurationIssueCodes.MissingRequiredProperty,
+                    "Use a packs sequence or the legacy pack declaration, not both.", file, "packs");
+            else
+            {
+                foreach (var entry in ((YamlSequenceNode)packsNode).Children)
+                {
+                    if (entry is not YamlMappingNode declared)
+                    {
+                        AddIssue(issues, ConfigurationIssueCodes.MissingRequiredProperty, "Each pack declaration must be a mapping.", file, "packs");
+                        continue;
+                    }
+                    var selected = new PackConfigurationDto(RequiredScalar(declared, "id", file, "packs.id", issues),
+                        RequiredScalar(declared, "version", file, "packs.version", issues));
+                    ValidateIdentifier(selected.Id, file, "packs.id", issues);
+                    packs.Add(selected);
+                }
+                if (packs.Select(selected => selected.Id).Distinct(StringComparer.Ordinal).Count() != packs.Count)
+                    AddIssue(issues, ConfigurationIssueCodes.DuplicateMappingKey, "Pack declarations must be unique.", file, "packs");
+            }
+        }
+
         var systemReferences = new List<SystemFileReference>();
         var systemsNode = RequiredMapping(node, "systems", file, issues);
         if (systemsNode is not null)
@@ -384,7 +413,8 @@ public sealed class ConfigurationLoader
         var systemFiles = systemReferences.Select(reference =>
             new KeyValuePair<string, string>(reference.Name, reference.Path));
         return new ParsedRoot(
-            new RootConfigurationDto(version, project, pack, systemFiles, migrationFile, verificationFile, recoveryFile),
+            new RootConfigurationDto(version, project, pack, systemFiles, migrationFile, verificationFile, recoveryFile,
+                Find(node, "packs") is null ? null : packs),
             systemReferences,
             migrationFile,
             verificationFile,
@@ -692,7 +722,7 @@ public sealed class ConfigurationLoader
                         AddIssue(issues, ConfigurationIssueCodes.MissingRequiredProperty,
                             "Environment reference name is missing or invalid.", file, currentPath);
                     }
-                    else if (string.IsNullOrWhiteSpace(_environment.GetValue(name!)))
+                    else if (_requireEnvironmentValues && string.IsNullOrWhiteSpace(_environment.GetValue(name!)))
                     {
                         AddIssue(issues, ConfigurationIssueCodes.MissingEnvironmentVariable,
                             "Required environment variable is unavailable.", file, currentPath);
@@ -899,8 +929,10 @@ public sealed class ConfigurationLoader
     private static IEnumerable<KeyValuePair<YamlNode, YamlNode>> MappingEntries(YamlMappingNode mapping) =>
         mapping.Children.OrderBy(pair => Scalar(pair.Key) ?? string.Empty, StringComparer.Ordinal);
 
-    private static ConfigurationDocumentNode ToConfigurationDocumentNode(YamlNode node) => node switch
+    private static ConfigurationDocumentNode ToConfigurationDocumentNode(YamlNode node)
     {
+        ConfigurationDocumentNode document = node switch
+        {
         YamlMappingNode mapping => new ConfigurationMappingNode(MappingEntries(mapping).Select(pair =>
             new KeyValuePair<string, ConfigurationDocumentNode>(
                 Scalar(pair.Key) ?? CanonicalYamlSerializer.Serialize(pair.Key),
@@ -908,7 +940,9 @@ public sealed class ConfigurationLoader
         YamlSequenceNode sequence => new ConfigurationSequenceNode(sequence.Children.Select(ToConfigurationDocumentNode)),
         YamlScalarNode scalar => ToConfigurationScalarNode(scalar),
         _ => throw new InvalidDataException("Unsupported YAML node type.")
-    };
+        };
+        return document with { Line = checked((int)node.Start.Line), Column = checked((int)node.Start.Column) };
+    }
 
     private static ConfigurationScalarNode ToConfigurationScalarNode(YamlScalarNode scalar)
     {

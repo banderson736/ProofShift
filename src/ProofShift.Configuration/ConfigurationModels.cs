@@ -15,19 +15,25 @@ public sealed record ConfigurationValidationIssue
     public string Message { get; }
     public string? File { get; }
     public string? Path { get; }
+    public int? Line { get; }
+    public int? Column { get; }
 
     public ConfigurationValidationIssue(
         string code,
         ValidationSeverity severity,
         string message,
         string? file = null,
-        string? path = null)
+        string? path = null,
+        int? line = null,
+        int? column = null)
     {
         Code = Required(code, nameof(code));
         Severity = severity;
         Message = Required(message, nameof(message));
         File = NormalizeOptional(file);
         Path = NormalizeOptional(path);
+        Line = line;
+        Column = column;
     }
 
     private static string Required(string? value, string parameterName) =>
@@ -86,6 +92,8 @@ public sealed record RootConfigurationDto
     public int? Version { get; }
     public ProjectConfigurationDto? Project { get; }
     public PackConfigurationDto? Pack { get; }
+    public DomainList<PackConfigurationDto> Packs { get; }
+    public bool UsesExplicitPackList { get; }
     public DomainDictionary<string> SystemFiles { get; }
     public string? MigrationGraphFile { get; }
     public string? VerificationRulesFile { get; }
@@ -98,11 +106,14 @@ public sealed record RootConfigurationDto
         IEnumerable<KeyValuePair<string, string>> systemFiles,
         string? migrationGraphFile,
         string? verificationRulesFile,
-        string? recoveryPolicyFile)
+        string? recoveryPolicyFile,
+        IEnumerable<PackConfigurationDto>? packs = null)
     {
         Version = version;
         Project = project;
         Pack = pack;
+        Packs = new DomainList<PackConfigurationDto>(packs ?? (pack is null ? [] : [pack]));
+        UsesExplicitPackList = packs is not null;
         SystemFiles = new DomainDictionary<string>(systemFiles);
         MigrationGraphFile = migrationGraphFile;
         VerificationRulesFile = verificationRulesFile;
@@ -186,7 +197,11 @@ public enum ConfigurationScalarKind
     Null
 }
 
-public abstract record ConfigurationDocumentNode;
+public abstract record ConfigurationDocumentNode
+{
+    public int? Line { get; init; }
+    public int? Column { get; init; }
+}
 
 public sealed record ConfigurationMappingNode : ConfigurationDocumentNode
 {

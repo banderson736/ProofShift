@@ -1,0 +1,1 @@
+CREATE TABLE public.records (id integer NOT NULL PRIMARY KEY, value text NULL);

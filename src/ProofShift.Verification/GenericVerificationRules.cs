@@ -9,12 +9,21 @@ public sealed class GenericVerificationRuleProvider : IVerificationRuleProvider
     public string Version => "1";
     public IReadOnlyCollection<VerificationRuleFactory> RuleFactories { get; } =
     [
-        new("source-artifact-accounting", definition => new SourceDispositionRule(definition)),
-        new("target-lineage", definition => new TargetLineageRule(definition)),
-        new("target-presence", definition => new TargetPresenceRule(definition)),
-        new("unexpected-target", definition => new UnexpectedTargetRule(definition)),
-        new("attribute-comparison", definition => new AttributeComparisonRule(definition)),
-        new("entity-uniqueness", definition => new EntityUniquenessRule(definition))
+        new("source-artifact-accounting", definition => new SourceDispositionRule(definition),
+            new("source-artifact-accounting", "1", "Account for every checkpoint source through explicit graph dispositions.", VerificationScope.Accounting)),
+        new("target-lineage", definition => new TargetLineageRule(definition),
+            new("target-lineage", "1", "Require graph-scoped provenance for every observed target.", VerificationScope.Accounting)),
+        new("target-presence", definition => new TargetPresenceRule(definition),
+            new("target-presence", "1", "Compare graph-derived expected and observed target presence.", VerificationScope.Entity)),
+        new("unexpected-target", definition => new UnexpectedTargetRule(definition),
+            new("unexpected-target", "1", "Reject observed targets not explained by the migration graph.", VerificationScope.Entity)),
+        new("attribute-comparison", definition => new AttributeComparisonRule(definition),
+            new("attribute-comparison", "1", "Compare configured mapped attribute values against independent target observations.", VerificationScope.Attribute,
+                [new("attribute", RuleOptionKind.FieldReference, "Mapped target field; omitted means all mapped attributes."),
+                 new("targetNode", RuleOptionKind.Text, "Target graph node."), new("semanticType", RuleOptionKind.SemanticTypeReference, "Semantic type scope.")])),
+        new("entity-uniqueness", definition => new EntityUniquenessRule(definition),
+            new("entity-uniqueness", "1", "Require unique target identities in the configured graph scope.", VerificationScope.Entity,
+                [new("targetNode", RuleOptionKind.Text, "Target graph node."), new("semanticType", RuleOptionKind.SemanticTypeReference, "Semantic type scope.")]))
     ];
 }
 
@@ -46,8 +55,28 @@ public abstract class VerificationRuleBase : IVerificationRule
         return references;
     }
 
-    protected string Option(string name, string? defaultValue = null) =>
-        Definition.Options.TryGetValue(name, out var value) ? value : defaultValue ?? string.Empty;
+    protected string Option(string name, string? defaultValue = null)
+    {
+        if (!Definition.StructuredOptions.TryGetValue(name, out var value)) return defaultValue ?? string.Empty;
+        return value switch
+        {
+            StringValue text => text.Value,
+            BooleanValue boolean => boolean.Value ? "true" : "false",
+            IntegerValue integer => integer.Value.ToString(CultureInfo.InvariantCulture),
+            DecimalValue number => number.Value.ToString("G29", CultureInfo.InvariantCulture),
+            _ => throw new VerificationRuleException("PSRULE003", $"Rule option '{name}' must be scalar.")
+        };
+    }
+
+    protected string[] OptionList(string name, string[] defaults)
+    {
+        if (!Definition.StructuredOptions.TryGetValue(name, out var value)) return defaults;
+        if (value is CollectionValue sequence) return sequence.Values.Cast<StringValue>().Select(item => item.Value).ToArray();
+        if (!Definition.UsesStructuredOptions && value is StringValue text)
+            return string.IsNullOrWhiteSpace(text.Value) ? defaults :
+                text.Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        throw new VerificationRuleException("PSRULE003", $"Rule option '{name}' must be a list of field references.");
+    }
 
     protected static EvidenceValue HashValue(string fingerprint) => new(new StringValue($"sha256:{fingerprint}"));
 

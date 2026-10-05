@@ -1,0 +1,141 @@
+"version": 2
+"rules":
+  "member-presence":
+    "type": "pension-member-presence"
+    "version": "1"
+    "severity": "critical"
+    "businessKey": "member_id"
+    "targetNode": "target-member"
+  "member-uniqueness":
+    "type": "pension-member-uniqueness"
+    "version": "1"
+    "severity": "critical"
+    "businessKey": "member_id"
+    "targetNode": "target-member"
+  "member-status":
+    "type": "pension-member-status"
+    "version": "1"
+    "severity": "critical"
+    "attribute": "status"
+    "businessKey": "member_id"
+    "semanticType": "Pension.MemberStatus"
+    "targetNode": "target-member-status"
+  "employment-timeline":
+    "type": "pension-employment-timeline"
+    "version": "1"
+    "severity": "critical"
+    "sourceEndField": "PERIOD_TO"
+    "sourceMemberField": "MEMBER_ID"
+    "sourceNode": "source-employment"
+    "sourceStartField": "PERIOD_FROM"
+    "sourceStatusField": "EMPLOYMENT_STATUS"
+    "targetDateField": "event_date"
+    "targetEventField": "event_code"
+    "targetMemberField": "participant_id"
+    "targetNode": "target-employment"
+  "contribution-accounting":
+    "type": "pension-contribution-accounting"
+    "version": "1"
+    "severity": "critical"
+    "amountField": "contribution_amount"
+    "compareFields":
+    - "contribution_id"
+    - "participant_id"
+    - "payroll_period"
+    - "contribution_kind"
+    "targetNode": "target-contribution"
+    "tolerance": 0.01
+    "transactionField": "contribution_id"
+  "contribution-total":
+    "type": "pension-contribution-total"
+    "version": "1"
+    "severity": "critical"
+    "amountField": "contribution_amount"
+    "groupBy":
+    - "participant_id"
+    - "payroll_period"
+    - "contribution_kind"
+    "targetNode": "target-contribution"
+    "tolerance": 0.01
+  "service-credit-total":
+    "type": "pension-service-credit-total"
+    "version": "1"
+    "severity": "critical"
+    "amountField": "service_credit"
+    "groupBy":
+    - "participant_id"
+    "semanticType": "Pension.ServiceCredit"
+    "targetNode": "target-servicecredit"
+    "tolerance": 0.01
+  "beneficiary-relationship":
+    "type": "pension-beneficiary-relationship"
+    "version": "1"
+    "severity": "critical"
+    "allocationField": "allocation_pct"
+    "allocationTolerance": 0.01
+    "beneficiaryField": "beneficiary_id"
+    "memberBusinessKey": "member_id"
+    "memberField": "participant_id"
+    "memberNode": "target-member"
+    "relationshipField": "relationship_type"
+    "targetNode": "target-beneficiary"
+  "retirement-election":
+    "type": "pension-retirement-election"
+    "version": "1"
+    "severity": "critical"
+    "compareFields":
+    - "participant_id"
+    - "option_code"
+    - "effective_date"
+    "electionField": "election_id"
+    "targetNode": "target-retirementelection"
+  "benefit-payment":
+    "type": "pension-benefit-payment"
+    "version": "1"
+    "severity": "critical"
+    "amountField": "paid_amount"
+    "paymentField": "payment_id"
+    "targetNode": "target-benefitpayment"
+    "tolerance": 0.01
+  "benefit-payment-total":
+    "type": "pension-benefit-payment-total"
+    "version": "1"
+    "severity": "critical"
+    "amountField": "paid_amount"
+    "groupBy":
+    - "participant_id"
+    - "payment_period"
+    "targetNode": "target-benefitpayment"
+    "tolerance": 0.01
+  "document-accounting":
+    "type": "pension-document-accounting"
+    "version": "1"
+    "severity": "critical"
+    "contentHashField": "content_hash"
+    "documentField": "document_id"
+    "targetNode": "target-document"
+  "document-relationship":
+    "type": "pension-document-relationship"
+    "version": "1"
+    "severity": "critical"
+    "documentField": "document_id"
+    "memberField": "participant_id"
+    "targetNode": "target-document"
+  "historical-export-accounting":
+    "type": "pension-document-accounting"
+    "version": "1"
+    "severity": "critical"
+    "contentHashField": "content_hash"
+    "documentField": "export_id"
+    "missingCode": "MissingHistoricalExport"
+    "semanticType": "Pension.HistoricalExport"
+    "targetNode": "target-historicalexport"
+  "code-transformations":
+    "type": "pension-code-transformation"
+    "version": "1"
+    "severity": "critical"
+    "attribute": "credit_code"
+    "businessKey": "service_period_id"
+    "semanticType": "Pension.ServiceCredit"
+    "targetNode": "target-servicecredit"
+...

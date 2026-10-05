@@ -1,0 +1,590 @@
+"version": 1
+"codeMaps":
+  "member-status-code-map-pass-through-status-0":
+    "values":
+      "A": "ACTIVE"
+      "I": "INACTIVE"
+      "R": "RETIRED"
+    "unmapped": "pass-through"
+    "default": null
+  "target-employment-conversion-event_code-0":
+    "values":
+      "0": "JOINED"
+      "1": "TERMINATED"
+      "2": "REINSTATED"
+    "unmapped": "fail"
+    "default": null
+  "target-retirementelection-conversion-option_code-0":
+    "values":
+      "J50": "JOINT_SURVIVOR_50"
+      "SINGLE": "SINGLE_LIFE"
+    "unmapped": "fail"
+    "default": null
+"nodes":
+  "source-beneficiary":
+    "type": "source"
+    "system": "legacy-pension"
+    "storage": "pension-source-db"
+    "semanticType": "Pension.Beneficiary"
+    "selector":
+      "kind": "table"
+      "properties":
+        "schema": "dbo"
+        "table": "BENEFICIARY"
+      "identity":
+      - "BENEFICIARY_ID"
+  "source-benefitpayment":
+    "type": "source"
+    "system": "legacy-pension"
+    "storage": "pension-source-db"
+    "semanticType": "Pension.BenefitPayment"
+    "selector":
+      "kind": "table"
+      "properties":
+        "schema": "dbo"
+        "table": "BENEFIT_PAYMENT"
+      "identity":
+      - "PAYMENT_ID"
+  "source-contribution":
+    "type": "source"
+    "system": "legacy-pension"
+    "storage": "pension-source-db"
+    "semanticType": "Pension.Contribution"
+    "selector":
+      "kind": "table"
+      "properties":
+        "schema": "dbo"
+        "table": "CONTRIBUTION"
+      "identity":
+      - "TRANSACTION_ID"
+  "source-document":
+    "type": "source"
+    "system": "legacy-pension"
+    "storage": "pension-source-csv"
+    "semanticType": "Pension.Document"
+    "selector":
+      "kind": "csv"
+      "properties":
+        "delimiter": ";"
+        "path": "documents.csv"
+      "identity":
+      - "DOCUMENT_ID"
+  "source-document-files":
+    "type": "source"
+    "system": "legacy-pension"
+    "storage": "pension-source-files"
+    "semanticType": "Pension.DocumentPayload"
+    "selector":
+      "kind": "file-pattern"
+      "properties":
+        "pattern": "member/**/*.bin"
+      "identity":
+      - "relativePath"
+  "source-employment":
+    "type": "source"
+    "system": "legacy-pension"
+    "storage": "pension-source-db"
+    "semanticType": "Pension.Employment"
+    "selector":
+      "kind": "table"
+      "properties":
+        "schema": "dbo"
+        "table": "EMPLOYMENT_HISTORY"
+      "identity":
+      - "EMPLOYMENT_ID"
+  "source-historical-export-files":
+    "type": "source"
+    "system": "legacy-pension"
+    "storage": "pension-source-files"
+    "semanticType": "Pension.HistoricalExportPayload"
+    "selector":
+      "kind": "file-pattern"
+      "properties":
+        "pattern": "history/**/*.csv"
+      "identity":
+      - "relativePath"
+  "source-historicalexport":
+    "type": "source"
+    "system": "legacy-pension"
+    "storage": "pension-source-csv"
+    "semanticType": "Pension.HistoricalExport"
+    "selector":
+      "kind": "csv"
+      "properties":
+        "delimiter": ";"
+        "path": "historical-exports.csv"
+      "identity":
+      - "EXPORT_ID"
+  "source-member":
+    "type": "source"
+    "system": "legacy-pension"
+    "storage": "pension-source-db"
+    "semanticType": "Pension.Member"
+    "selector":
+      "kind": "table"
+      "properties":
+        "schema": "dbo"
+        "table": "MEMBER"
+      "identity":
+      - "MEMBER_ID"
+  "source-retirementelection":
+    "type": "source"
+    "system": "legacy-pension"
+    "storage": "pension-source-db"
+    "semanticType": "Pension.RetirementElection"
+    "selector":
+      "kind": "table"
+      "properties":
+        "schema": "dbo"
+        "table": "RETIREMENT_ELECTION"
+      "identity":
+      - "ELECTION_ID"
+  "source-servicecredit":
+    "type": "source"
+    "system": "legacy-pension"
+    "storage": "pension-source-db"
+    "semanticType": "Pension.ServiceCredit"
+    "selector":
+      "kind": "table"
+      "properties":
+        "schema": "dbo"
+        "table": "SERVICE_CREDIT"
+      "identity":
+      - "SERVICE_ID"
+  "target-beneficiary":
+    "type": "target"
+    "system": "external-pension"
+    "storage": "external-target"
+    "semanticType": "Pension.Beneficiary"
+    "selector":
+      "kind": "table"
+      "properties":
+        "name": "public.beneficiary_relationship"
+      "identity":
+      - "beneficiary_id"
+  "target-benefitpayment":
+    "type": "target"
+    "system": "external-pension"
+    "storage": "external-target"
+    "semanticType": "Pension.BenefitPayment"
+    "selector":
+      "kind": "table"
+      "properties":
+        "name": "public.benefit_payment"
+      "identity":
+      - "payment_id"
+  "target-contribution":
+    "type": "target"
+    "system": "external-pension"
+    "storage": "external-target"
+    "semanticType": "Pension.Contribution"
+    "selector":
+      "kind": "table"
+      "properties":
+        "name": "public.contribution_transaction"
+      "identity":
+      - "contribution_id"
+  "target-document":
+    "type": "target"
+    "system": "external-pension"
+    "storage": "external-target"
+    "semanticType": "Pension.Document"
+    "selector":
+      "kind": "table"
+      "properties":
+        "name": "public.document_object_index"
+      "identity":
+      - "document_id"
+  "target-document-files":
+    "type": "archive"
+    "system": "external-pension"
+    "storage": "external-files"
+    "semanticType": "Pension.DocumentPayload"
+    "selector":
+      "kind": "file-pattern"
+      "properties":
+        "pathField": "relativePath"
+      "identity":
+      - "relativePath"
+  "target-employment":
+    "type": "target"
+    "system": "external-pension"
+    "storage": "external-target"
+    "semanticType": "Pension.Employment"
+    "selector":
+      "kind": "table"
+      "properties":
+        "name": "public.employment_event"
+      "identity":
+      - "source_employment_ref"
+  "target-historical-export-files":
+    "type": "archive"
+    "system": "external-pension"
+    "storage": "external-files"
+    "semanticType": "Pension.HistoricalExportPayload"
+    "selector":
+      "kind": "file-pattern"
+      "properties":
+        "pathField": "relativePath"
+      "identity":
+      - "relativePath"
+  "target-historicalexport":
+    "type": "target"
+    "system": "external-pension"
+    "storage": "external-target"
+    "semanticType": "Pension.HistoricalExport"
+    "selector":
+      "kind": "table"
+      "properties":
+        "name": "public.historical_export"
+      "identity":
+      - "export_id"
+  "target-member":
+    "type": "target"
+    "system": "external-pension"
+    "storage": "external-target"
+    "semanticType": "Pension.Member"
+    "selector":
+      "kind": "table"
+      "properties":
+        "name": "public.participant"
+      "identity":
+      - "member_id"
+  "target-member-status":
+    "type": "target"
+    "system": "external-pension"
+    "storage": "external-target"
+    "semanticType": "Pension.MemberStatus"
+    "selector":
+      "kind": "table"
+      "properties":
+        "name": "public.member_status"
+      "identity":
+      - "member_id"
+  "target-retirementelection":
+    "type": "target"
+    "system": "external-pension"
+    "storage": "external-target"
+    "semanticType": "Pension.RetirementElection"
+    "selector":
+      "kind": "table"
+      "properties":
+        "name": "public.retirement_election"
+      "identity":
+      - "election_id"
+  "target-servicecredit":
+    "type": "target"
+    "system": "external-pension"
+    "storage": "external-target"
+    "semanticType": "Pension.ServiceCredit"
+    "selector":
+      "kind": "table"
+      "properties":
+        "name": "public.service_period"
+      "identity":
+      - "service_period_id"
+"edges":
+  "member-name-normalization":
+    "from":
+    - "source-member"
+    "to":
+    - "target-member"
+    "operation":
+      "type": "transform"
+      "version": "1"
+      "parameters": {}
+      "fields":
+        "member_id":
+          "source": "MEMBER_ID"
+          "pipeline": []
+        "display_name":
+          "source": "FIRST_NM"
+          "pipeline":
+          - "type": "Trim"
+            "version": "1"
+            "parameters": {}
+          - "type": "NormalizeString"
+            "version": "1"
+            "parameters": {}
+        "birth_date":
+          "source": "BIRTH_DT"
+          "pipeline": []
+        "joined_date":
+          "source": "ENROLL_DT"
+          "pipeline": []
+    "recovery":
+      "mode": "reverse"
+      "requiresSnapshot": false
+  "member-status-code-map-pass-through":
+    "from":
+    - "source-member"
+    "to":
+    - "target-member-status"
+    "operation":
+      "type": "transform"
+      "version": "1"
+      "parameters": {}
+      "fields":
+        "member_id":
+          "source": "MEMBER_ID"
+          "pipeline": []
+        "status":
+          "source": "STATUS_CD"
+          "pipeline":
+          - "type": "code-map"
+            "version": "1"
+            "map": "member-status-code-map-pass-through-status-0"
+    "recovery":
+      "mode": "reverse"
+      "requiresSnapshot": false
+  "target-employment-conversion":
+    "from":
+    - "source-employment"
+    "to":
+    - "target-employment"
+    "operation":
+      "type": "transform"
+      "version": "1"
+      "parameters": {}
+      "fields":
+        "source_employment_ref":
+          "source": "EMPLOYMENT_ID"
+          "pipeline": []
+        "participant_id":
+          "source": "MEMBER_ID"
+          "pipeline": []
+        "event_date":
+          "source": "PERIOD_FROM"
+          "pipeline": []
+        "event_code":
+          "source": "PERIOD_INDEX"
+          "pipeline":
+          - "type": "code-map"
+            "version": "1"
+            "map": "target-employment-conversion-event_code-0"
+        "source_state":
+          "source": "EMPLOYMENT_STATUS"
+          "pipeline": []
+    "recovery":
+      "mode": "restore"
+      "requiresSnapshot": true
+  "target-contribution-conversion":
+    "from":
+    - "source-contribution"
+    "to":
+    - "target-contribution"
+    "operation":
+      "type": "transform"
+      "version": "1"
+      "parameters": {}
+      "fields":
+        "contribution_id":
+          "source": "TRANSACTION_ID"
+          "pipeline": []
+        "participant_id":
+          "source": "MEMBER_ID"
+          "pipeline": []
+        "payroll_period":
+          "source": "PAY_PERIOD"
+          "pipeline": []
+        "contribution_kind":
+          "source": "CONTRIBUTION_CATEGORY"
+          "pipeline": []
+        "contribution_amount":
+          "source": "CONTRIBUTION_AMT"
+          "pipeline": []
+    "recovery":
+      "mode": "restore"
+      "requiresSnapshot": true
+  "target-servicecredit-conversion":
+    "from":
+    - "source-servicecredit"
+    "to":
+    - "target-servicecredit"
+    "operation":
+      "type": "transform"
+      "version": "1"
+      "parameters": {}
+      "fields":
+        "service_period_id":
+          "source": "SERVICE_ID"
+          "pipeline": []
+        "participant_id":
+          "source": "MEMBER_ID"
+          "pipeline": []
+        "service_from":
+          "source": "SERVICE_FROM"
+          "pipeline": []
+        "service_to":
+          "source": "SERVICE_TO"
+          "pipeline": []
+        "service_credit":
+          "source": "CREDIT_AMT"
+          "pipeline": []
+        "credit_code":
+          "source": "CREDIT_TYPE"
+          "pipeline": []
+    "recovery":
+      "mode": "restore"
+      "requiresSnapshot": true
+  "target-beneficiary-conversion":
+    "from":
+    - "source-beneficiary"
+    "to":
+    - "target-beneficiary"
+    "operation":
+      "type": "transform"
+      "version": "1"
+      "parameters": {}
+      "fields":
+        "beneficiary_id":
+          "source": "BENEFICIARY_ID"
+          "pipeline": []
+        "participant_id":
+          "source": "MEMBER_ID"
+          "pipeline": []
+        "relationship_type":
+          "source": "RELATIONSHIP_CD"
+          "pipeline": []
+        "allocation_pct":
+          "source": "ALLOCATION_PCT"
+          "pipeline": []
+    "recovery":
+      "mode": "restore"
+      "requiresSnapshot": true
+  "target-retirementelection-conversion":
+    "from":
+    - "source-retirementelection"
+    "to":
+    - "target-retirementelection"
+    "operation":
+      "type": "transform"
+      "version": "1"
+      "parameters": {}
+      "fields":
+        "election_id":
+          "source": "ELECTION_ID"
+          "pipeline": []
+        "participant_id":
+          "source": "MEMBER_ID"
+          "pipeline": []
+        "option_code":
+          "source": "OPTION_CD"
+          "pipeline":
+          - "type": "code-map"
+            "version": "1"
+            "map": "target-retirementelection-conversion-option_code-0"
+        "effective_date":
+          "source": "EFFECTIVE_DT"
+          "pipeline": []
+    "recovery":
+      "mode": "restore"
+      "requiresSnapshot": true
+  "target-benefitpayment-conversion":
+    "from":
+    - "source-benefitpayment"
+    "to":
+    - "target-benefitpayment"
+    "operation":
+      "type": "transform"
+      "version": "1"
+      "parameters": {}
+      "fields":
+        "payment_id":
+          "source": "PAYMENT_ID"
+          "pipeline": []
+        "participant_id":
+          "source": "MEMBER_ID"
+          "pipeline": []
+        "payment_period":
+          "source": "PAYMENT_PERIOD"
+          "pipeline": []
+        "paid_on":
+          "source": "PAYMENT_DT"
+          "pipeline": []
+        "paid_amount":
+          "source": "GROSS_AMT"
+          "pipeline": []
+    "recovery":
+      "mode": "restore"
+      "requiresSnapshot": true
+  "target-document-conversion":
+    "from":
+    - "source-document"
+    "to":
+    - "target-document"
+    "operation":
+      "type": "transform"
+      "version": "1"
+      "parameters": {}
+      "fields":
+        "document_id":
+          "source": "DOCUMENT_ID"
+          "pipeline": []
+        "participant_id":
+          "source": "MEMBER_ID"
+          "pipeline": []
+        "document_type":
+          "source": "DOCUMENT_CATEGORY"
+          "pipeline": []
+        "object_key":
+          "source": "RELATIVE_PATH"
+          "pipeline": []
+        "content_hash":
+          "source": "CONTENT_SHA256"
+          "pipeline": []
+    "recovery":
+      "mode": "restore"
+      "requiresSnapshot": true
+  "target-historicalexport-conversion":
+    "from":
+    - "source-historicalexport"
+    "to":
+    - "target-historicalexport"
+    "operation":
+      "type": "transform"
+      "version": "1"
+      "parameters": {}
+      "fields":
+        "export_id":
+          "source": "EXPORT_ID"
+          "pipeline": []
+        "participant_id":
+          "source": "MEMBER_ID"
+          "pipeline": []
+        "object_key":
+          "source": "RELATIVE_PATH"
+          "pipeline": []
+        "content_hash":
+          "source": "CONTENT_SHA256"
+          "pipeline": []
+    "recovery":
+      "mode": "restore"
+      "requiresSnapshot": true
+  "source-document-binary-archive":
+    "from":
+    - "source-document-files"
+    "to":
+    - "target-document-files"
+    "operation":
+      "type": "archive"
+      "version": "1"
+      "parameters": {}
+      "fields": {}
+    "recovery":
+      "mode": "restore"
+      "requiresSnapshot": true
+  "source-historicalexport-binary-archive":
+    "from":
+    - "source-historical-export-files"
+    "to":
+    - "target-historical-export-files"
+    "operation":
+      "type": "archive"
+      "version": "1"
+      "parameters": {}
+      "fields": {}
+    "recovery":
+      "mode": "restore"
+      "requiresSnapshot": true
+...

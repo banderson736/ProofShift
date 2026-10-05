@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using ProofShift.Domain;
+using ProofShift.Engine;
 
 namespace ProofShift.Verification;
 
@@ -9,15 +10,23 @@ public sealed class VerificationRuleFactory
 {
     private readonly Func<VerificationRuleDefinition, IVerificationRule> _create;
     public string Type { get; }
+    public RuleDescriptor Descriptor { get; }
 
-    public VerificationRuleFactory(string type, Func<VerificationRuleDefinition, IVerificationRule> create)
+    public VerificationRuleFactory(string type, Func<VerificationRuleDefinition, IVerificationRule> create,
+        RuleDescriptor? descriptor = null)
     {
         Type = Required(type, nameof(type));
         _create = create ?? throw new ArgumentNullException(nameof(create));
+        Descriptor = descriptor ?? new RuleDescriptor(Type, "1", $"Verification rule {Type}.", VerificationScope.Entity);
     }
 
     public IVerificationRule Create(VerificationRuleDefinition definition)
     {
+        try { Descriptor.Validate(definition); }
+        catch (VerificationRuleException exception)
+        {
+            throw new VerificationRuleException(exception.Code, exception.Message, definition.SourceLocation);
+        }
         var rule = _create(definition) ?? throw new VerificationRuleException(VerificationIssueCodes.UnknownRuleType,
             "Rule factory returned no implementation.");
         if (rule.Id != definition.Id || rule.Version != definition.Version)
@@ -63,6 +72,8 @@ public sealed class VerificationRuleRegistry
 {
     private readonly System.Collections.ObjectModel.ReadOnlyDictionary<string, VerificationRuleFactory> _factories;
     private readonly System.Collections.ObjectModel.ReadOnlyDictionary<string, string> _providerVersions;
+    public IReadOnlyCollection<RuleDescriptor> Descriptors => _factories.Values.Select(factory => factory.Descriptor)
+        .OrderBy(descriptor => descriptor.Type, StringComparer.Ordinal).ToArray();
 
     public VerificationRuleRegistry(IEnumerable<IVerificationRuleProvider> providers)
     {
@@ -98,7 +109,7 @@ public sealed class VerificationRuleRegistry
         {
             if (!_factories.TryGetValue(definition.Type, out var factory))
                 throw new VerificationRuleException(VerificationIssueCodes.UnknownRuleType,
-                    $"Verification rule type '{definition.Type}' is not registered.");
+                    $"Verification rule type '{definition.Type}' is not registered.", definition.SourceLocation);
             rules.Add(factory.Create(definition));
         }
 
@@ -121,6 +132,15 @@ public sealed class VerificationRuleRegistry
             Append(canonical, definition.Type);
             Append(canonical, definition.Version);
             Append(canonical, definition.Severity.ToString());
+            if (definition.UsesStructuredOptions)
+            {
+                Append(canonical, "structured-options-v2");
+                foreach (var option in definition.StructuredOptions.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+                {
+                    Append(canonical, option.Key);
+                    Append(canonical, GraphTargetIdentity.CanonicalValue(option.Value));
+                }
+            }
             foreach (var option in definition.Options.OrderBy(pair => pair.Key, StringComparer.Ordinal))
             {
                 Append(canonical, option.Key);
@@ -134,8 +154,9 @@ public sealed class VerificationRuleRegistry
         builder.Append(Encoding.UTF8.GetByteCount(value).ToString(CultureInfo.InvariantCulture)).Append(':').Append(value).Append(';');
 }
 
-public sealed class VerificationRuleException(string code, string message) : Exception(message)
+public sealed class VerificationRuleException(string code, string message, RuleSourceLocation? location = null) : Exception(message)
 {
     public string Code { get; } = code;
+    public RuleSourceLocation? Location { get; } = location;
 }
 

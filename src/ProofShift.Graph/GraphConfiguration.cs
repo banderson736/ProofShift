@@ -238,6 +238,13 @@ public static class MigrationGraphConfigurationParser
             return CreateResult(null, issues);
         }
 
+        try { root = ReusableCodeMaps.Resolve(root); }
+        catch (InvalidDataException exception)
+        {
+            AddIssue(issues, "PSMAP001", exception.Message, file.RelativePath, "codeMaps");
+            return CreateResult(null, issues);
+        }
+
         var versionNode = Find(root, "version");
         var version = ReadInteger(versionNode);
         var nodes = ParseNodes(Find(root, "nodes"), file.RelativePath, issues);

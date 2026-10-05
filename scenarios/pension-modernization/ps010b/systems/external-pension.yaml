@@ -1,0 +1,13 @@
+"id": "external-pension"
+"name": "Synthetic External Pension Target"
+"role": "shadow-target"
+"storage":
+  "external-target":
+    "connector": "postgres"
+    "connection":
+      "secret": "PS09_CORPUS_TARGET_CONNECTION"
+  "external-files":
+    "connector": "files"
+    "root":
+      "secret": "PS09_CORPUS_TARGET_FILES_ROOT"
+...

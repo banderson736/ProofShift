@@ -175,20 +175,31 @@ public sealed record VerificationRuleDefinition
     public string Version { get; }
     public EvidenceSeverity Severity { get; }
     public DomainDictionary<string> Options { get; }
+    public DomainDictionary<ValueNode> StructuredOptions { get; }
+    public bool UsesStructuredOptions { get; }
+    public RuleSourceLocation? SourceLocation { get; init; }
 
     public VerificationRuleDefinition(RuleId id, string type, string version, EvidenceSeverity severity,
-        IEnumerable<KeyValuePair<string, string>>? options = null)
+        IEnumerable<KeyValuePair<string, string>>? options = null,
+        IEnumerable<KeyValuePair<string, ValueNode>>? structuredOptions = null)
     {
         Id = id;
         Type = Required(type, nameof(type));
         Version = Required(version, nameof(version));
         Severity = severity;
         Options = new DomainDictionary<string>(options ?? []);
+        StructuredOptions = new DomainDictionary<ValueNode>(structuredOptions ??
+            Options.Select(pair => new KeyValuePair<string, ValueNode>(pair.Key, new StringValue(pair.Value))));
+        UsesStructuredOptions = structuredOptions is not null;
+        if (UsesStructuredOptions && Options.Count > 0)
+            throw new ArgumentException("Use either legacy or structured rule options, not both.", nameof(structuredOptions));
     }
 
     private static string Required(string value, string parameterName) =>
         string.IsNullOrWhiteSpace(value) ? throw new ArgumentException("Value must not be empty.", parameterName) : value.Trim();
 }
+
+public sealed record RuleSourceLocation(string File, string Path, int? Line, int? Column);
 
 public sealed record VerificationFinding
 {

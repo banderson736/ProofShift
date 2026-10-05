@@ -1,0 +1,3 @@
+Source Entity,Source Field,Target Entity,Target Field,Transformation,Required,Notes,Review Status
+dbo.records,id,public.records,id,copy,true,Reviewed identity mapping,confirmed
+dbo.records,value,public.records,value,copy,true,Reviewed value mapping,confirmed
