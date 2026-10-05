@@ -72,6 +72,10 @@ public sealed class VerificationService
         ValidateCheckpoint(checkpoint.Manifest, configuration, graph, binding);
 
         var verificationRunId = new RunId(Guid.NewGuid());
+        await using var ledgerStore = await SqliteVerificationLedgerStore.CreateAsync(projectDirectory,
+            verificationRunId, cancellationToken, performanceRecorder).ConfigureAwait(false);
+        foreach (var node in graph.Nodes.OrderBy(node => node.Name, StringComparer.Ordinal))
+            await ledgerStore.RegisterGraphNodeAsync(node.Name, node.Id, cancellationToken).ConfigureAwait(false);
         SqliteVerificationWorkspace workspace;
         using (var workspaceCreateStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
             "verification workspace create"))
@@ -94,6 +98,7 @@ public sealed class VerificationService
                 cancellationToken.ThrowIfCancellationRequested();
                 ValidateRecordForNode(source, sourceNode);
                 await workspace.AddSourceArtifactAsync(sourceNode.Name, source, cancellationToken).ConfigureAwait(false);
+                await ledgerStore.RegisterSourceAsync(sourceNode.Name, sourceNode.Id, source.Artifact, cancellationToken).ConfigureAwait(false);
                 sourceRecordCount++;
 
                 foreach (var edge in graph.Edges.Where(edge => edge.Sources.Contains(sourceNode.Id))
@@ -119,7 +124,6 @@ public sealed class VerificationService
 
         ValidateSourceRecordCoverage(checkpoint.Manifest, workspace.SourceArtifactCount);
         long producedEntries = 0;
-        var terminalJournalEntries = new List<VerificationJournalEntry>();
         using (var journalStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
             "projection journal validation"))
         {
@@ -144,9 +148,11 @@ public sealed class VerificationService
 
                 if (journalEntry.Result == "pending")
                 {
-                    await workspace.AddJournalEntryAsync(new VerificationJournalEntry(journalEntry.Result,
+                    var pendingEntry = new VerificationJournalEntry(journalEntry.Result,
                         journalEntry.TargetNode, journalEntry.Target, scopedSources, journalEntry.EdgeId,
-                        journalEntry.EdgeName, journalEntry.EdgeVersion, journalEntry.FailureCode), cancellationToken).ConfigureAwait(false);
+                        journalEntry.EdgeName, journalEntry.EdgeVersion, journalEntry.FailureCode);
+                    await workspace.AddJournalEntryAsync(pendingEntry, cancellationToken).ConfigureAwait(false);
+                    await ledgerStore.AppendJournalEntryAsync(pendingEntry, cancellationToken).ConfigureAwait(false);
                     validatedJournalEntries++;
                     continue;
                 }
@@ -181,7 +187,7 @@ public sealed class VerificationService
                     journalEntry.TargetNode, journalEntry.Target, scopedSources, journalEntry.EdgeId,
                     journalEntry.EdgeName, journalEntry.EdgeVersion, journalEntry.FailureCode);
                 await workspace.AddJournalEntryAsync(verifiedJournalEntry, cancellationToken).ConfigureAwait(false);
-                terminalJournalEntries.Add(verifiedJournalEntry);
+                await ledgerStore.AppendJournalEntryAsync(verifiedJournalEntry, cancellationToken).ConfigureAwait(false);
                 validatedJournalEntries++;
             }
             journalStage?.AddArtifacts(validatedJournalEntries);
@@ -220,6 +226,7 @@ public sealed class VerificationService
                     throw ContextMismatch("Shadow target connector returned an artifact identity inconsistent with its selector.");
                 targetFingerprint.Add(node.Name, actual);
                 await workspace.AddTargetObservationAsync(node.Name, actual, cancellationToken).ConfigureAwait(false);
+                await ledgerStore.RegisterTargetAsync(node.Name, node.Id, actual.Artifact, cancellationToken).ConfigureAwait(false);
                 observedCount++;
             }
             readStage?.AddArtifacts(observedCount);
@@ -273,25 +280,39 @@ public sealed class VerificationService
             }
         }
 
-        var lineage = new List<LineageRecord>();
-        Dictionary<(string NodeKey, string ArtifactId), List<LineageRecord>> lineageBySource;
+        long lineageCount = 0;
         using (var lineageStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification, "lineage analysis"))
         {
             await foreach (var item in workspace.ReadLineageAsync(graph.GraphHash, nodeIds, cancellationToken)
-                .WithCancellation(cancellationToken).ConfigureAwait(false)) lineage.Add(item);
-            lineageBySource = BuildLineageBySource(lineage, graph.Nodes.ToDictionary(node => node.Id, node => node.Name));
-            lineageStage?.AddArtifacts(lineage.Count);
+                .WithCancellation(cancellationToken).ConfigureAwait(false))
+            {
+                await ledgerStore.AppendLineageAsync(item, cancellationToken).ConfigureAwait(false);
+                lineageCount++;
+            }
+            lineageStage?.AddArtifacts(lineageCount);
         }
-        var dispositions = new List<ArtifactDispositionRecord>();
+        long dispositionCount = 0;
         using (var dispositionStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification, "source disposition analysis"))
         {
+            await using var lineageTargets = ledgerStore.ReadLineageTargetsBySourceAsync(cancellationToken)
+                .GetAsyncEnumerator(cancellationToken);
+            var hasLineageTargets = await lineageTargets.MoveNextAsync().ConfigureAwait(false);
             await foreach (var source in workspace.ReadSourceFactsAsync(cancellationToken)
                 .WithCancellation(cancellationToken).ConfigureAwait(false))
             {
-                var targetsForSource = lineageBySource.GetValueOrDefault((source.NodeKey, source.Artifact.Id.Value), []);
-                targetsForSource = targetsForSource.DistinctBy(item => (item.TargetNodeId, item.Target.Id)).ToList();
-                var targetArtifacts = targetsForSource.Select(item => item.Target).ToArray();
-                var targetNodeIds = targetsForSource.Select(item => item.TargetNodeId!.Value).ToArray();
+                while (hasLineageTargets && CompareSourceKey(lineageTargets.Current.SourceNodeKey,
+                    lineageTargets.Current.SourceId.Value, source.NodeKey, source.Artifact.Id.Value) < 0)
+                    hasLineageTargets = await lineageTargets.MoveNextAsync().ConfigureAwait(false);
+                var mappedTargets = new SortedDictionary<(Guid NodeId, string ArtifactId), VerificationLineageTarget>();
+                while (hasLineageTargets && CompareSourceKey(lineageTargets.Current.SourceNodeKey,
+                    lineageTargets.Current.SourceId.Value, source.NodeKey, source.Artifact.Id.Value) == 0)
+                {
+                    foreach (var target in lineageTargets.Current.Targets)
+                        mappedTargets.TryAdd((target.TargetNodeId.Value, target.Target.Id.Value), target);
+                    hasLineageTargets = await lineageTargets.MoveNextAsync().ConfigureAwait(false);
+                }
+                var targetArtifacts = mappedTargets.Values.Select(item => item.Target).ToArray();
+                var targetNodeIds = mappedTargets.Values.Select(item => item.TargetNodeId).ToArray();
                 var disposition = source.FailedEntries > 0 || source.ProducedEntries == 0 && source.ExcludedEntries == 0 ||
                     source.ProducedEntries > 0 && (source.ExcludedEntries > 0 || targetArtifacts.Length == 0)
                     ? ArtifactDisposition.Unaccounted
@@ -302,51 +323,67 @@ public sealed class VerificationService
                     ArtifactDisposition.Unaccounted => "Projection journal does not establish one complete, successful graph disposition.",
                     _ => null
                 };
-                dispositions.Add(new ArtifactDispositionRecord(source.Artifact, disposition, targetArtifacts, reason,
-                    nodeIds[source.NodeKey], targetNodeIds));
+                var dispositionRecord = new ArtifactDispositionRecord(source.Artifact, disposition, targetArtifacts, reason,
+                    nodeIds[source.NodeKey], targetNodeIds);
+                await ledgerStore.AppendDispositionAsync(dispositionRecord, cancellationToken).ConfigureAwait(false);
+                dispositionCount++;
             }
-            dispositionStage?.AddArtifacts(dispositions.Count);
+            dispositionStage?.AddArtifacts(dispositionCount);
         }
 
-        var sourceReferences = new List<GraphArtifactReference>();
-        DomainList<ArtifactAccountingIssue> dispositionIssues;
+        var ledgerCoverage = await ledgerStore.ValidateCoverageAsync(cancellationToken).ConfigureAwait(false);
         using (var coverageStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification, "source disposition coverage"))
         {
-            await foreach (var source in workspace.ReadSourceFactsAsync(cancellationToken)
-                .WithCancellation(cancellationToken).ConfigureAwait(false))
-                sourceReferences.Add(new GraphArtifactReference(nodeIds[source.NodeKey], source.Artifact));
-            dispositionIssues = new ArtifactDispositionLedger(dispositions).ValidateScopedCoverage(sourceReferences);
-            coverageStage?.AddArtifacts(dispositionIssues.Count);
+            if (ledgerCoverage.MissingDispositions > 0 || ledgerCoverage.UnaccountedDispositions > 0)
+            {
+                await foreach (var source in workspace.ReadSourceFactsAsync(cancellationToken)
+                    .WithCancellation(cancellationToken).ConfigureAwait(false))
+                {
+                    var disposition = await ledgerStore.FindDispositionAsync(nodeIds[source.NodeKey], source.Artifact.Id,
+                        cancellationToken).ConfigureAwait(false);
+                    if (disposition is null || disposition.Disposition is ArtifactDisposition.Unaccounted or ArtifactDisposition.Failed)
+                    {
+                        var code = disposition?.Disposition == ArtifactDisposition.Failed
+                            ? ArtifactAccountingIssueCode.UnaccountedArtifact
+                            : disposition is null ? ArtifactAccountingIssueCode.MissingDisposition : ArtifactAccountingIssueCode.UnaccountedArtifact;
+                        findings.Add(new VerificationFinding(EvidenceType.Accounting, EvidenceResult.Fail, EvidenceSeverity.Error,
+                            code.ToString(), disposition?.Reason ?? "Graph-scoped source artifact has no complete successful disposition.",
+                            $"disposition-coverage:{nodeIds[source.NodeKey]}:{source.Artifact.Id.Value}",
+                            [new EvidenceReference(checkpointId: binding.CheckpointId),
+                             new EvidenceReference(artifactId: source.Artifact.Id, graphNodeId: nodeIds[source.NodeKey])]));
+                    }
+                }
+            }
+            coverageStage?.AddArtifacts(ledgerCoverage.MissingDispositions + ledgerCoverage.UnexpectedDispositions +
+                ledgerCoverage.UnaccountedDispositions);
         }
-        foreach (var issue in dispositionIssues)
-        {
-            var source = sourceReferences.SingleOrDefault(item => item.Artifact.Id == issue.ArtifactId && item.NodeId == issue.NodeId);
+        if (ledgerCoverage.UnexpectedDispositions > 0)
             findings.Add(new VerificationFinding(EvidenceType.Accounting, EvidenceResult.Fail, EvidenceSeverity.Error,
-                issue.Code.ToString(), issue.Message, $"disposition-coverage:{issue.NodeId}:{issue.ArtifactId.Value}",
-                source is null ? [new EvidenceReference(checkpointId: binding.CheckpointId)] :
-                    [new EvidenceReference(checkpointId: binding.CheckpointId), new EvidenceReference(artifactId: source.Artifact.Id, graphNodeId: source.NodeId)]));
-        }
+                ArtifactAccountingIssueCode.UnexpectedDisposition.ToString(),
+                $"Persisted ledger contains {ledgerCoverage.UnexpectedDispositions.ToString(CultureInfo.InvariantCulture)} dispositions outside the checkpoint source set.",
+                "disposition-coverage:unexpected", [new EvidenceReference(checkpointId: binding.CheckpointId)]));
 
         using (var lineageCoverageStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification, "target lineage coverage"))
         {
-            var observedTargets = new List<GraphArtifactReference>();
-            await foreach (var target in workspace.ReadActualTargetsAsync(cancellationToken)
+            await foreach (var target in workspace.ReadTargetsWithoutLineageAsync(cancellationToken)
                 .WithCancellation(cancellationToken).ConfigureAwait(false))
-                for (var count = 0; count < target.ActualCount; count++)
-                    observedTargets.Add(new GraphArtifactReference(nodeIds[target.NodeKey], target.Artifact));
-            var lineageIssues = new LineageLedger(lineage).ValidateScopedCoverage(observedTargets);
-            foreach (var issue in lineageIssues)
             {
-                var nodeId = issue.NodeId;
                 findings.Add(new VerificationFinding(EvidenceType.Accounting, EvidenceResult.Fail, EvidenceSeverity.Error,
-                    issue.Code.ToString(), issue.Message, $"lineage-coverage:{nodeId}:{issue.ArtifactId.Value}",
-                    nodeId is null
-                        ? [new EvidenceReference(checkpointId: binding.CheckpointId), new EvidenceReference(projectionRunId: binding.ProjectionRunId)]
-                        : [new EvidenceReference(checkpointId: binding.CheckpointId), new EvidenceReference(projectionRunId: binding.ProjectionRunId),
-                           new EvidenceReference(artifactId: issue.ArtifactId, graphNodeId: nodeId.Value)]));
+                    LineageCoverageIssueCode.MissingLineage.ToString(), "Observed target artifact has no projected lineage.",
+                    $"lineage-coverage:{nodeIds[target.NodeKey]}:{target.Artifact.Id.Value}",
+                    [new EvidenceReference(checkpointId: binding.CheckpointId), new EvidenceReference(projectionRunId: binding.ProjectionRunId),
+                     new EvidenceReference(artifactId: target.Artifact.Id, graphNodeId: nodeIds[target.NodeKey])]));
             }
-            lineageCoverageStage?.AddArtifacts(lineageIssues.Count);
+            lineageCoverageStage?.AddArtifacts(ledgerCoverage.MissingLineage + ledgerCoverage.UnexpectedLineage + ledgerCoverage.UnboundLineageSources);
         }
+
+        if (ledgerCoverage.UnexpectedLineage > 0 || ledgerCoverage.UnboundLineageSources > 0)
+            findings.Add(new VerificationFinding(EvidenceType.Accounting, EvidenceResult.Fail, EvidenceSeverity.Error,
+                LineageCoverageIssueCode.UnexpectedLineage.ToString(),
+                $"Persisted ledger contains {ledgerCoverage.UnexpectedLineage.ToString(CultureInfo.InvariantCulture)} unexpected lineages and {ledgerCoverage.UnboundLineageSources.ToString(CultureInfo.InvariantCulture)} unbound lineage sources.",
+                "lineage-coverage:unexpected", [new EvidenceReference(checkpointId: binding.CheckpointId),
+                    new EvidenceReference(projectionRunId: binding.ProjectionRunId)]));
+        await ledgerStore.CompleteAsync(cancellationToken).ConfigureAwait(false);
 
         var failedRuleIds = findings.Where(finding => finding.Result == EvidenceResult.Fail &&
                 finding.Severity is EvidenceSeverity.Critical or EvidenceSeverity.Error)
@@ -364,14 +401,23 @@ public sealed class VerificationService
             var records = findings.Select(finding => ToEvidenceRecord(verificationRunId, finding)).ToList();
             var summaryRule = new RuleId(SystemRuleId);
             var summaryId = StableEvidenceId(verificationRunId, summaryRule, "verification-summary");
+            var summaryInputs = context.BindingReferences
+                .Append(new EvidenceReference(ruleId: summaryRule))
+                .Concat(ruleSet.Rules.Select(rule => new EvidenceReference(ruleId: rule.Id)))
+                .Distinct().ToArray();
             records.Add(new EvidenceRecord(summaryId, verificationRunId, EvidenceType.Decision, summaryRule, "1",
                 outcome == VerificationOutcome.Failed ? EvidenceResult.Fail : outcome == VerificationOutcome.PassedWithWarnings
                     ? EvidenceResult.Warning : EvidenceResult.Pass,
-                records.Select(record => new EvidenceReference(evidenceId: record.Id)),
+                summaryInputs,
                 $"Verification completed with outcome {outcome}; {findings.Count.ToString(CultureInfo.InvariantCulture)} findings were evaluated.",
                 DateTimeOffset.UtcNow, new EvidenceValue(new StringValue("all-configured-rules-evaluated")),
                 new EvidenceValue(new StringValue(outcome.ToString())), EvidenceSeverity.Error, "VerificationSummary"));
-            evidenceGraph = new EvidenceGraph(verificationRunId, records);
+            evidenceGraph = new EvidenceGraph(verificationRunId, records,
+                new EvidenceVerificationContext(configuration.ConfigurationHash, graph.GraphHash,
+                    binding.CheckpointId.Value.ToString("D", CultureInfo.InvariantCulture), binding.CheckpointManifestHash,
+                    binding.SourceFingerprint, ruleSet.Fingerprint,
+                    binding.ProjectionRunId.Value.ToString("D", CultureInfo.InvariantCulture), binding.ProjectionFingerprint,
+                    VerificationLedgerFingerprint: ledgerStore.Receipt.Fingerprint));
             evidenceStage?.AddArtifacts(records.Count);
         }
         var runtime = new VerificationRuntimeFingerprint(proofShiftVersion, binding, ruleSet.ProviderVersions,
@@ -382,7 +428,7 @@ public sealed class VerificationService
             ruleSet.Rules.Count + 1,
             Math.Max(0, ruleSet.Rules.Count + 1 - failureCount - warningCount),
             failureCount, warningCount, 0);
-        return new VerificationResult(run, evidenceGraph, dispositions, lineage, findings, terminalJournalEntries);
+        return new VerificationResult(run, evidenceGraph, findings, ledgerStore.Receipt);
     }
 
     public Task<ExternalVerificationResult> VerifyExternalTargetAsync(
@@ -425,6 +471,10 @@ public sealed class VerificationService
         ValidateExternalCheckpoint(checkpoint.Manifest, configuration, graph, observation);
 
         var runId = new RunId(Guid.NewGuid());
+        await using var ledgerStore = await SqliteVerificationLedgerStore.CreateAsync(temporaryDirectory,
+            runId, cancellationToken, performanceRecorder).ConfigureAwait(false);
+        foreach (var node in graph.Nodes.OrderBy(node => node.Name, StringComparer.Ordinal))
+            await ledgerStore.RegisterGraphNodeAsync(node.Name, node.Id, cancellationToken).ConfigureAwait(false);
         SqliteVerificationWorkspace workspace;
         using (var workspaceCreateStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
             "external verification workspace create"))
@@ -446,6 +496,7 @@ public sealed class VerificationService
                 cancellationToken.ThrowIfCancellationRequested();
                 ValidateRecordForNode(source, sourceNode);
                 await workspace.AddSourceArtifactAsync(sourceNode.Name, source, cancellationToken).ConfigureAwait(false);
+                await ledgerStore.RegisterSourceAsync(sourceNode.Name, sourceNode.Id, source.Artifact, cancellationToken).ConfigureAwait(false);
                 sourceCount++;
                 foreach (var edge in graph.Edges.Where(edge => edge.Sources.Contains(sourceNode.Id))
                     .OrderBy(edge => edge.Id.Value))
@@ -487,6 +538,7 @@ public sealed class VerificationService
                     throw ContextMismatch("Externally populated target connector returned an identity inconsistent with its configured selector.");
                 targetFingerprint.Add(node.Name, actual);
                 await workspace.AddTargetObservationAsync(node.Name, actual, cancellationToken).ConfigureAwait(false);
+                await ledgerStore.RegisterTargetAsync(node.Name, node.Id, actual.Artifact, cancellationToken).ConfigureAwait(false);
                 observedCount++;
             }
             targetReadStage?.AddArtifacts(observedCount);
@@ -533,68 +585,100 @@ public sealed class VerificationService
         }
 
         var nodeIds = graph.Nodes.ToDictionary(node => node.Name, node => node.Id, StringComparer.Ordinal);
-        var lineage = new List<LineageRecord>();
-        Dictionary<(string NodeKey, string ArtifactId), List<LineageRecord>> lineageBySource;
+        long externalLineageCount = 0;
         using (var lineageStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
             "external target lineage analysis"))
         {
             await foreach (var item in workspace.ReadGraphDerivedLineageAsync(graph.GraphHash, nodeIds, cancellationToken)
-                .WithCancellation(cancellationToken).ConfigureAwait(false)) lineage.Add(item);
-            lineageBySource = BuildLineageBySource(lineage, graph.Nodes.ToDictionary(node => node.Id, node => node.Name));
-            lineageStage?.AddArtifacts(lineage.Count);
+                .WithCancellation(cancellationToken).ConfigureAwait(false))
+            {
+                await ledgerStore.AppendLineageAsync(item, cancellationToken).ConfigureAwait(false);
+                externalLineageCount++;
+            }
+            lineageStage?.AddArtifacts(externalLineageCount);
         }
         var edgeMap = graph.Edges.ToDictionary(edge => edge.Id);
         var sourceFacts = workspace.ReadGraphDerivedSourceFactsAsync(cancellationToken);
-        var dispositions = new List<ArtifactDispositionRecord>();
-        var sourceReferences = new List<GraphArtifactReference>();
+        long externalDispositionCount = 0;
         using (var dispositionStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
             "external source disposition analysis"))
         {
+            await using var lineageTargets = ledgerStore.ReadLineageTargetsBySourceAsync(cancellationToken)
+                .GetAsyncEnumerator(cancellationToken);
+            var hasLineageTargets = await lineageTargets.MoveNextAsync().ConfigureAwait(false);
             await foreach (var source in sourceFacts.WithCancellation(cancellationToken).ConfigureAwait(false))
             {
                 var sourceNodeId = nodeIds[source.NodeKey];
-                sourceReferences.Add(new GraphArtifactReference(sourceNodeId, source.Artifact));
-                var mapped = lineageBySource.GetValueOrDefault((source.NodeKey, source.Artifact.Id.Value), [])
-                    .DistinctBy(item => (item.TargetNodeId, item.Target.Id)).ToArray();
+                while (hasLineageTargets && CompareSourceKey(lineageTargets.Current.SourceNodeKey,
+                    lineageTargets.Current.SourceId.Value, source.NodeKey, source.Artifact.Id.Value) < 0)
+                    hasLineageTargets = await lineageTargets.MoveNextAsync().ConfigureAwait(false);
+                var mappedTargets = new SortedDictionary<(Guid NodeId, string ArtifactId), VerificationLineageTarget>();
+                while (hasLineageTargets && CompareSourceKey(lineageTargets.Current.SourceNodeKey,
+                    lineageTargets.Current.SourceId.Value, source.NodeKey, source.Artifact.Id.Value) == 0)
+                {
+                    foreach (var target in lineageTargets.Current.Targets)
+                        mappedTargets.TryAdd((target.TargetNodeId.Value, target.Target.Id.Value), target);
+                    hasLineageTargets = await lineageTargets.MoveNextAsync().ConfigureAwait(false);
+                }
+                var mapped = mappedTargets.Values.ToArray();
                 var disposition = source.ProducedEntries == 0 || mapped.Length == 0
                     ? ArtifactDisposition.Unaccounted
                     : ResolveDisposition(source.EdgeIds, edgeMap);
                 var reason = disposition == ArtifactDisposition.Unaccounted
                     ? "Checkpoint and migration graph do not establish an expected target mapping."
                     : null;
-                dispositions.Add(new ArtifactDispositionRecord(source.Artifact, disposition,
+                var dispositionRecord = new ArtifactDispositionRecord(source.Artifact, disposition,
                     mapped.Select(item => item.Target).ToArray(), reason, sourceNodeId,
-                    mapped.Select(item => item.TargetNodeId!.Value).ToArray()));
+                    mapped.Select(item => item.TargetNodeId).ToArray());
+                await ledgerStore.AppendDispositionAsync(dispositionRecord, cancellationToken).ConfigureAwait(false);
+                externalDispositionCount++;
             }
-            dispositionStage?.AddArtifacts(dispositions.Count);
+            dispositionStage?.AddArtifacts(externalDispositionCount);
         }
-        foreach (var issue in new ArtifactDispositionLedger(dispositions).ValidateScopedCoverage(sourceReferences))
+        var externalLedgerCoverage = await ledgerStore.ValidateCoverageAsync(cancellationToken).ConfigureAwait(false);
+        if (externalLedgerCoverage.MissingDispositions > 0 || externalLedgerCoverage.UnaccountedDispositions > 0)
         {
-            var scopedSource = sourceReferences.SingleOrDefault(item => item.Artifact.Id == issue.ArtifactId && item.NodeId == issue.NodeId);
-            findings.Add(new VerificationFinding(EvidenceType.Accounting, EvidenceResult.Fail, EvidenceSeverity.Error,
-                issue.Code.ToString(), issue.Message, $"external-disposition:{issue.NodeId}:{issue.ArtifactId.Value}",
-                scopedSource is null ? context.BindingReferences : [.. context.BindingReferences,
-                    new EvidenceReference(artifactId: scopedSource.Artifact.Id, graphNodeId: scopedSource.NodeId)]));
+            await foreach (var source in workspace.ReadGraphDerivedSourceFactsAsync(cancellationToken)
+                .WithCancellation(cancellationToken).ConfigureAwait(false))
+            {
+                var disposition = await ledgerStore.FindDispositionAsync(nodeIds[source.NodeKey], source.Artifact.Id,
+                    cancellationToken).ConfigureAwait(false);
+                if (disposition is null || disposition.Disposition == ArtifactDisposition.Unaccounted)
+                    findings.Add(new VerificationFinding(EvidenceType.Accounting, EvidenceResult.Fail, EvidenceSeverity.Error,
+                        disposition is null ? ArtifactAccountingIssueCode.MissingDisposition.ToString() : ArtifactAccountingIssueCode.UnaccountedArtifact.ToString(),
+                        disposition?.Reason ?? "Checkpoint and migration graph do not establish an expected target mapping.",
+                        $"external-disposition:{nodeIds[source.NodeKey]}:{source.Artifact.Id.Value}",
+                        [.. context.BindingReferences, new EvidenceReference(artifactId: source.Artifact.Id, graphNodeId: nodeIds[source.NodeKey])]));
+            }
         }
 
         using (var lineageCoverageStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
             "external target lineage coverage"))
         {
-            var observedTargets = new List<GraphArtifactReference>();
-            await foreach (var target in workspace.ReadActualTargetsAsync(cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
-                for (var count = 0; count < target.ActualCount; count++)
-                    observedTargets.Add(new GraphArtifactReference(nodeIds[target.NodeKey], target.Artifact));
-            var lineageIssues = new LineageLedger(lineage).ValidateScopedCoverage(observedTargets);
-            foreach (var issue in lineageIssues)
+            await foreach (var target in workspace.ReadTargetsWithoutGraphDerivedLineageAsync(cancellationToken)
+                .WithCancellation(cancellationToken).ConfigureAwait(false))
             {
-                var inputs = issue.NodeId is { } nodeId
-                    ? context.BindingReferences.Append(new EvidenceReference(artifactId: issue.ArtifactId, graphNodeId: nodeId)).ToArray()
-                    : context.BindingReferences.ToArray();
                 findings.Add(new VerificationFinding(EvidenceType.Accounting, EvidenceResult.Fail, EvidenceSeverity.Error,
-                    issue.Code.ToString(), issue.Message, $"external-lineage:{issue.NodeId}:{issue.ArtifactId.Value}", inputs));
+                    LineageCoverageIssueCode.MissingLineage.ToString(), "Observed external target has no graph-derived provenance.",
+                    $"external-lineage:{nodeIds[target.NodeKey]}:{target.Artifact.Id.Value}",
+                    context.BindingReferences.Append(new EvidenceReference(artifactId: target.Artifact.Id,
+                        graphNodeId: nodeIds[target.NodeKey]))));
             }
-            lineageCoverageStage?.AddArtifacts(lineageIssues.Count);
+            lineageCoverageStage?.AddArtifacts(externalLedgerCoverage.MissingLineage + externalLedgerCoverage.UnexpectedLineage +
+                externalLedgerCoverage.UnboundLineageSources);
         }
+
+        if (externalLedgerCoverage.UnexpectedDispositions > 0)
+            findings.Add(new VerificationFinding(EvidenceType.Accounting, EvidenceResult.Fail, EvidenceSeverity.Error,
+                ArtifactAccountingIssueCode.UnexpectedDisposition.ToString(),
+                $"External ledger contains {externalLedgerCoverage.UnexpectedDispositions.ToString(CultureInfo.InvariantCulture)} dispositions outside the checkpoint source set.",
+                "external-disposition:unexpected", context.BindingReferences));
+        if (externalLedgerCoverage.UnexpectedLineage > 0 || externalLedgerCoverage.UnboundLineageSources > 0)
+            findings.Add(new VerificationFinding(EvidenceType.Accounting, EvidenceResult.Fail, EvidenceSeverity.Error,
+                LineageCoverageIssueCode.UnexpectedLineage.ToString(),
+                $"External ledger contains {externalLedgerCoverage.UnexpectedLineage.ToString(CultureInfo.InvariantCulture)} unexpected lineages and {externalLedgerCoverage.UnboundLineageSources.ToString(CultureInfo.InvariantCulture)} unbound lineage sources.",
+                "external-lineage:unexpected", context.BindingReferences));
+        await ledgerStore.CompleteAsync(cancellationToken).ConfigureAwait(false);
 
         var failedRuleIds = findings.Where(finding => finding.Result == EvidenceResult.Fail &&
                 finding.Severity is EvidenceSeverity.Critical or EvidenceSeverity.Error)
@@ -610,14 +694,25 @@ public sealed class VerificationService
         {
             var records = findings.Select(finding => ToEvidenceRecord(runId, finding)).ToList();
             var summaryRule = new RuleId(SystemRuleId);
+            var summaryInputs = context.BindingReferences
+                .Append(new EvidenceReference(ruleId: summaryRule))
+                .Concat(ruleSet.Rules.Select(rule => new EvidenceReference(ruleId: rule.Id)))
+                .Distinct().ToArray();
             records.Add(new EvidenceRecord(StableEvidenceId(runId, summaryRule, "external-verification-summary"), runId,
                 EvidenceType.Decision, summaryRule, "1", outcome == VerificationOutcome.Failed ? EvidenceResult.Fail :
                     outcome == VerificationOutcome.PassedWithWarnings ? EvidenceResult.Warning : EvidenceResult.Pass,
-                records.Select(record => new EvidenceReference(evidenceId: record.Id)),
+                summaryInputs,
                 $"External target verification completed with outcome {outcome}; ProofShift execution was not observed.",
                 DateTimeOffset.UtcNow, new EvidenceValue(new StringValue("all-configured-rules-evaluated")),
                 new EvidenceValue(new StringValue(outcome.ToString())), EvidenceSeverity.Error, "ExternalVerificationSummary"));
-            evidenceGraph = new EvidenceGraph(runId, records);
+            evidenceGraph = new EvidenceGraph(runId, records,
+                new EvidenceVerificationContext(configuration.ConfigurationHash, graph.GraphHash,
+                    observation.CheckpointId.Value.ToString("D", CultureInfo.InvariantCulture), observation.CheckpointManifestHash,
+                    observation.SourceFingerprint, ruleSet.Fingerprint,
+                    ObservationId: observation.ObservationId,
+                    ObservationRunId: observation.ObservationRunId.Value.ToString("D", CultureInfo.InvariantCulture),
+                    TargetFingerprint: observedTarget.Fingerprint,
+                    VerificationLedgerFingerprint: ledgerStore.Receipt.Fingerprint));
             evidenceStage?.AddArtifacts(records.Count);
         }
         var runtimeFingerprint = ExternalRuntimeFingerprint(configuration, graph, observation, ruleSet, proofShiftVersion);
@@ -626,7 +721,7 @@ public sealed class VerificationService
             observation.SourceFingerprint, observedTarget.Fingerprint, workspace.SourceArtifactCount,
             observedTarget.RecordCount, ruleSet.Fingerprint, runtimeFingerprint, evidenceGraph.Fingerprint, outcome,
             ruleSet.Rules.Count + 1, failedRuleIds.Count, warningRuleIds.Count, startedAt, DateTimeOffset.UtcNow);
-        return new ExternalVerificationResult(run, evidenceGraph, dispositions, lineage, findings);
+        return new ExternalVerificationResult(run, evidenceGraph, findings, ledgerStore.Receipt);
     }
 
     private static void ValidateExternalObservation(LoadedProjectConfiguration configuration, MigrationGraph graph,
@@ -920,6 +1015,12 @@ public sealed class VerificationService
     };
 
     private static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+    private static int CompareSourceKey(string leftNodeKey, string leftArtifactId, string rightNodeKey, string rightArtifactId)
+    {
+        var nodeComparison = string.Compare(leftNodeKey, rightNodeKey, StringComparison.Ordinal);
+        return nodeComparison != 0 ? nodeComparison : string.Compare(leftArtifactId, rightArtifactId, StringComparison.Ordinal);
+    }
 
     private static VerificationRuleException ContextMismatch(string message) =>
         new(VerificationIssueCodes.ContextMismatch, message);

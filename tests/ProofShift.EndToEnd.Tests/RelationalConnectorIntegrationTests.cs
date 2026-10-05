@@ -24,6 +24,40 @@ public sealed class RelationalConnectorIntegrationTests
     private static readonly string[] CompositeSqlServerKey = ["MemberId", "Period"];
 
     [Fact]
+    public void SqlServerCheckpointConsistencyIsObservedByDefaultAndExplicitlyConfigured()
+    {
+        var connector = new SqlServerSourceConnector();
+        var observed = connector.ResolveCheckpointConsistency(SqlServerContext());
+        Assert.Equal("observed", observed.RequestedStrategy);
+        Assert.Equal("observed", observed.EffectiveStrategy);
+        Assert.Equal(SourceConsistencyGuarantee.Observed, observed.Guarantee);
+        Assert.Null(observed.IsolationLevel);
+
+        var missingIsolation = Assert.Throws<ConnectorConfigurationException>(() =>
+            connector.ResolveCheckpointConsistency(SqlServerContext(("checkpoint.consistency", "transaction-consistent"))));
+        Assert.Equal(ConnectorIssueCodes.MissingConfiguration, missingIsolation.Code);
+
+        var snapshot = connector.ResolveCheckpointConsistency(SqlServerContext(
+            ("checkpoint.consistency", "transaction-consistent"), ("checkpoint.isolation", "snapshot")));
+        Assert.Equal("snapshot", snapshot.EffectiveStrategy);
+        Assert.Equal(SourceConsistencyGuarantee.Consistent, snapshot.Guarantee);
+        Assert.Equal(System.Data.IsolationLevel.Snapshot, snapshot.IsolationLevel);
+
+        var serializable = connector.ResolveCheckpointConsistency(SqlServerContext(
+            ("checkpoint.consistency", "transaction-consistent"), ("checkpoint.isolation", "serializable")));
+        Assert.Equal(System.Data.IsolationLevel.Serializable, serializable.IsolationLevel);
+
+        Assert.Throws<ConnectorConfigurationException>(() => connector.ResolveCheckpointConsistency(SqlServerContext(
+            ("checkpoint.consistency", "transaction-consistent"), ("checkpoint.isolation", "read-committed"))));
+        var downgrade = connector.ResolveCheckpointConsistency(SqlServerContext(
+            ("checkpoint.consistency", "transaction-consistent"), ("checkpoint.isolation", "read-committed"),
+            ("checkpoint.allowDowngrade", "true")));
+        Assert.Equal("read-committed", downgrade.EffectiveStrategy);
+        Assert.Equal(SourceConsistencyGuarantee.Observed, downgrade.Guarantee);
+        Assert.NotNull(downgrade.Downgrade);
+    }
+
+    [Fact]
     public async Task PostgreSqlShadowConnectorIsolatesWritesAndReadsMaterializedValuesBack()
     {
         var container = await StartPostgresContainerAsync();
@@ -209,7 +243,7 @@ public sealed class RelationalConnectorIntegrationTests
         var selector = TableSelector("assurance.member_rows", CompositePostgresKey);
         var context = RelationalContext("postgres", "pg-source", "member-store", container.GetConnectionString());
         var inspection = await connector.InspectAsync(context, selector, TestContext.Current.CancellationToken);
-        var rows = await ReadAllAsync(connector.ReadAsync(context, selector, new ReadOptions(batchSize: 17), TestContext.Current.CancellationToken));
+        var rows = await ReadAllAsync(connector.ReadAsync(context, selector, new ReadOptions(), TestContext.Current.CancellationToken));
 
         Assert.Equal(SourceInspectionStatus.Valid, inspection.Status);
         Assert.Equal(CompositePostgresKey, inspection.PrimaryKeyFields);
@@ -313,7 +347,7 @@ public sealed class RelationalConnectorIntegrationTests
         var selector = TableSelector("dbo.MemberRows", CompositeSqlServerKey);
         var context = RelationalContext("sqlserver", "sql-source", "member-store", connectionStringBuilder.ConnectionString);
         var inspection = await connector.InspectAsync(context, selector, TestContext.Current.CancellationToken);
-        var rows = await ReadAllAsync(connector.ReadAsync(context, selector, new ReadOptions(batchSize: 13), TestContext.Current.CancellationToken));
+        var rows = await ReadAllAsync(connector.ReadAsync(context, selector, new ReadOptions(), TestContext.Current.CancellationToken));
 
         Assert.Equal(SourceInspectionStatus.Valid, inspection.Status);
         Assert.Equal(CompositeSqlServerKey, inspection.PrimaryKeyFields);
@@ -365,6 +399,14 @@ public sealed class RelationalConnectorIntegrationTests
 
     private static ArtifactSelector TableSelector(string name, IEnumerable<string> identity) =>
         new("table", [new KeyValuePair<string, string>("name", name)], identity);
+
+    private static ConnectorContext SqlServerContext(params (string Key, string Value)[] settings) =>
+        new("sql-source", "source-db", new ConnectorId("sqlserver"), "member-node", "Generic.Member",
+            new RuntimeConfiguration(new[]
+            {
+                new KeyValuePair<string, RuntimeSetting>("connection", RuntimeSetting.FromRuntimeValue("synthetic", isSecret: true))
+            }.Concat(settings.Select(setting => new KeyValuePair<string, RuntimeSetting>(setting.Key,
+                RuntimeSetting.FromRuntimeValue(setting.Value))))));
 
     private static async Task<PostgreSqlContainer> StartPostgresContainerAsync()
     {

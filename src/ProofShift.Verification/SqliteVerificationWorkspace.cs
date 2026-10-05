@@ -55,6 +55,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         try
         {
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+            connection.CreateCollation("DECIMAL_ORDER", CompareDecimalStrings);
             await using var command = connection.CreateCommand();
             command.CommandText = """
                 PRAGMA journal_mode=WAL;
@@ -144,6 +145,24 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
                     value_hash TEXT NOT NULL,
                     PRIMARY KEY(target_seq, field)
                 );
+                CREATE TABLE artifact_order_keys (
+                    role TEXT NOT NULL,
+                    node_key TEXT NOT NULL,
+                    semantic_type TEXT NOT NULL,
+                    artifact_id TEXT NOT NULL,
+                    record_seq INTEGER NOT NULL,
+                    field TEXT NOT NULL,
+                    key_kind INTEGER NOT NULL,
+                    text_value TEXT,
+                    integer_value INTEGER,
+                    decimal_value TEXT COLLATE DECIMAL_ORDER,
+                    temporal_value TEXT,
+                    boolean_value INTEGER,
+                    PRIMARY KEY(role,node_key,artifact_id,record_seq,field)
+                );
+                CREATE INDEX artifact_order_key_idx ON artifact_order_keys(
+                    role,node_key,semantic_type,field,key_kind,text_value,integer_value,
+                    decimal_value COLLATE DECIMAL_ORDER,temporal_value,boolean_value,artifact_id,record_seq);
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             return new SqliteVerificationWorkspace(directory, path, connection, performanceRecorder);
@@ -168,7 +187,11 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         command.Parameters.AddWithValue("$record", SnapshotFingerprints.RecordFingerprint(record));
         command.Parameters.AddWithValue("$recordJson", VerificationArtifactRecordCodec.Encode(record));
         var changed = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        if (changed > 0) SourceArtifactCount++;
+        if (changed > 0)
+        {
+            SourceArtifactCount++;
+            await AddOrderingKeysAsync(transaction, VerificationArtifactRole.Source, nodeKey, record, 0, cancellationToken).ConfigureAwait(false);
+        }
         await CompleteWriteOperationAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -184,6 +207,47 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         command.Parameters.AddWithValue("$endpoint", artifact.EndpointId.Value);
         command.Parameters.AddWithValue("$type", artifact.ArtifactType);
         command.Parameters.AddWithValue("$identity", IdentityHash(artifact.Identity));
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null;
+    }
+
+    public async Task<bool> ContainsFieldValueAsync(VerificationArtifactRole role, string nodeKey, string semanticType,
+        string field, ValueNode value, CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
+        var normalized = NormalizeOrderingValue(value);
+        var valueColumn = normalized.Kind switch
+        {
+            0 => null,
+            1 or 9 or 10 or 11 => "text_value",
+            2 => "integer_value",
+            3 => "decimal_value",
+            4 or 5 or 6 or 7 => "temporal_value",
+            8 => "boolean_value",
+            _ => throw new ArgumentOutOfRangeException(nameof(value))
+        };
+        await using var command = _connection.CreateCommand();
+        command.CommandText = valueColumn is null
+            ? "SELECT 1 FROM artifact_order_keys WHERE role=$role AND node_key=$node AND semantic_type=$semantic AND field=$field AND key_kind=0 LIMIT 1"
+            : $"SELECT 1 FROM artifact_order_keys WHERE role=$role AND node_key=$node AND semantic_type=$semantic AND field=$field AND key_kind=$kind AND {valueColumn}=$value LIMIT 1";
+        command.Parameters.AddWithValue("$role", role.ToString());
+        command.Parameters.AddWithValue("$node", nodeKey);
+        command.Parameters.AddWithValue("$semantic", semanticType);
+        command.Parameters.AddWithValue("$field", field);
+        if (valueColumn is not null)
+        {
+            command.Parameters.AddWithValue("$kind", normalized.Kind);
+            object? normalizedValue = valueColumn switch
+            {
+                "text_value" => normalized.Text,
+                "integer_value" => normalized.Integer,
+                "decimal_value" => normalized.Decimal,
+                "temporal_value" => normalized.Temporal,
+                "boolean_value" => normalized.Boolean,
+                _ => null
+            };
+            command.Parameters.AddWithValue("$value", normalizedValue ?? (object)DBNull.Value);
+        }
         return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null;
     }
 
@@ -205,6 +269,8 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         targetCommand.Parameters.AddWithValue("$recordJson", VerificationArtifactRecordCodec.Encode(expected));
         await targetCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         var expectedSequence = await ReadLastInsertRowIdAsync(transaction, cancellationToken).ConfigureAwait(false);
+        await AddOrderingKeysAsync(transaction, VerificationArtifactRole.ExpectedTarget, nodeKey, expected, expectedSequence,
+            cancellationToken).ConfigureAwait(false);
         foreach (var pair in expected.Values.OrderBy(pair => pair.Key, StringComparer.Ordinal))
         {
             await using var valueCommand = _connection.CreateCommand();
@@ -338,6 +404,8 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         targetCommand.Parameters.AddWithValue("$recordJson", VerificationArtifactRecordCodec.Encode(record));
         await targetCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         var sequence = await ReadLastInsertRowIdAsync(transaction, cancellationToken).ConfigureAwait(false);
+        await AddOrderingKeysAsync(transaction, VerificationArtifactRole.ActualTarget, nodeKey, record, sequence,
+            cancellationToken).ConfigureAwait(false);
         foreach (var pair in record.Values.OrderBy(pair => pair.Key, StringComparer.Ordinal))
         {
             await using var valueCommand = _connection.CreateCommand();
@@ -419,10 +487,19 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
     public IAsyncEnumerable<VerificationTargetFact> ReadMissingGraphDerivedTargetFactsAsync(CancellationToken cancellationToken) =>
         ReadGraphDerivedTargetFactsAsync(requiredActualCount: 0, cancellationToken);
 
-    public async IAsyncEnumerable<VerificationArtifactRecord> ReadArtifactRecordsAsync(VerificationArtifactRole role,
+    public IAsyncEnumerable<VerificationArtifactRecord> ReadArtifactRecordsAsync(VerificationArtifactRole role,
         string? nodeKey, string? semanticType,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken,
+        CancellationToken cancellationToken,
         IReadOnlyCollection<string>? orderByFields = null)
+    {
+        var keys = (orderByFields ?? []).Select(field => new VerificationOrderingKey(
+            semanticType ?? string.Empty, field, VerificationOrderingRole.Ordering)).ToArray();
+        return ReadArtifactRecordsByKeysAsync(role, nodeKey, semanticType, keys, cancellationToken);
+    }
+
+    public async IAsyncEnumerable<VerificationArtifactRecord> ReadArtifactRecordsByKeysAsync(VerificationArtifactRole role,
+        string? nodeKey, string? semanticType, IReadOnlyCollection<VerificationOrderingKey> orderByKeys,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
         await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
@@ -435,6 +512,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         };
         var filters = new List<string>();
         var ordering = new List<string> { "t.node_key" };
+        var joins = new List<string>();
         await using var command = _connection.CreateCommand();
         if (!string.IsNullOrWhiteSpace(nodeKey))
         {
@@ -446,18 +524,28 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
             filters.Add("t.semantic_type=$semantic");
             command.Parameters.AddWithValue("$semantic", semanticType.Trim());
         }
+        command.Parameters.AddWithValue("$role", role.ToString());
         var orderIndex = 0;
-        foreach (var field in orderByFields ?? [])
+        foreach (var key in orderByKeys)
         {
-            if (string.IsNullOrWhiteSpace(field)) throw new ArgumentException("Ordering fields must not be empty.", nameof(orderByFields));
+            if (string.IsNullOrWhiteSpace(key.Field)) throw new ArgumentException("Ordering key fields must not be empty.", nameof(orderByKeys));
             var parameter = $"$orderField{orderIndex}";
-            command.Parameters.AddWithValue(parameter, field.Trim());
-            ordering.Add($"(SELECT COALESCE(json_extract(value, '$.value.text'), CAST(json_extract(value, '$.value.integer') AS TEXT), CASE json_extract(value, '$.value.boolean') WHEN 1 THEN 'true' WHEN 0 THEN 'false' ELSE '' END, '') FROM json_each(t.record_json, '$.values') WHERE json_extract(value, '$.name')={parameter} LIMIT 1)");
+            var alias = $"order_key{orderIndex}";
+            command.Parameters.AddWithValue(parameter, key.Field.Trim());
+            var sequenceMatch = role == VerificationArtifactRole.Source ? $"{alias}.record_seq=0" : $"{alias}.record_seq=t.{sequenceColumn}";
+            joins.Add($"LEFT JOIN artifact_order_keys AS {alias} ON {alias}.role=$role AND {alias}.node_key=t.node_key AND {alias}.semantic_type=t.semantic_type AND {alias}.artifact_id=t.{idColumn} AND {sequenceMatch} AND {alias}.field={parameter}");
+            var direction = key.Descending ? " DESC" : " ASC";
+            ordering.Add($"{alias}.key_kind{direction}");
+            ordering.Add($"{alias}.text_value{direction}");
+            ordering.Add($"{alias}.integer_value{direction}");
+            ordering.Add($"{alias}.decimal_value COLLATE DECIMAL_ORDER{direction}");
+            ordering.Add($"{alias}.temporal_value{direction}");
+            ordering.Add($"{alias}.boolean_value{direction}");
             orderIndex++;
         }
         ordering.Add($"t.identity_hash");
         ordering.Add($"t.{idColumn}");
-        command.CommandText = $"SELECT t.node_key,t.semantic_type,t.record_json FROM {table} AS t{(filters.Count == 0 ? string.Empty : " WHERE " + string.Join(" AND ", filters))} ORDER BY {string.Join(',', ordering)}";
+        command.CommandText = $"SELECT t.node_key,t.semantic_type,t.record_json FROM {table} AS t {string.Join(' ', joins)}{(filters.Count == 0 ? string.Empty : " WHERE " + string.Join(" AND ", filters))} ORDER BY {string.Join(',', ordering)}";
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -789,6 +877,66 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         }
     }
 
+    private async Task AddOrderingKeysAsync(SqliteTransaction transaction, VerificationArtifactRole role,
+        string nodeKey, RecordEnvelope record, long recordSequence, CancellationToken cancellationToken)
+    {
+        await using var command = _connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "INSERT INTO artifact_order_keys(role,node_key,semantic_type,artifact_id,record_seq,field,key_kind,text_value,integer_value,decimal_value,temporal_value,boolean_value) VALUES($role,$node,$semantic,$id,$seq,$field,$kind,$text,$integer,$decimal,$temporal,$boolean)";
+        command.Parameters.AddWithValue("$role", role.ToString());
+        command.Parameters.AddWithValue("$node", nodeKey);
+        command.Parameters.AddWithValue("$semantic", record.SemanticType);
+        command.Parameters.AddWithValue("$id", record.Artifact.Id.Value);
+        command.Parameters.AddWithValue("$seq", recordSequence);
+        command.Parameters.AddWithValue("$field", string.Empty);
+        command.Parameters.AddWithValue("$kind", 0);
+        command.Parameters.AddWithValue("$text", DBNull.Value);
+        command.Parameters.AddWithValue("$integer", DBNull.Value);
+        command.Parameters.AddWithValue("$decimal", DBNull.Value);
+        command.Parameters.AddWithValue("$temporal", DBNull.Value);
+        command.Parameters.AddWithValue("$boolean", DBNull.Value);
+        foreach (var pair in record.Values.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var value = NormalizeOrderingValue(pair.Value);
+            command.Parameters["$field"].Value = pair.Key;
+            command.Parameters["$kind"].Value = value.Kind;
+            command.Parameters["$text"].Value = (object?)value.Text ?? DBNull.Value;
+            command.Parameters["$integer"].Value = (object?)value.Integer ?? DBNull.Value;
+            command.Parameters["$decimal"].Value = (object?)value.Decimal ?? DBNull.Value;
+            command.Parameters["$temporal"].Value = (object?)value.Temporal ?? DBNull.Value;
+            command.Parameters["$boolean"].Value = (object?)value.Boolean ?? DBNull.Value;
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static NormalizedOrderingValue NormalizeOrderingValue(ValueNode value) => value switch
+    {
+        NullValue => new(0),
+        StringValue item => new(1, Text: item.Value),
+        IntegerValue item => new(2, Integer: item.Value),
+        DecimalValue item => new(3, Decimal: item.Value.ToString("G29", CultureInfo.InvariantCulture)),
+        DateValue item => new(4, Temporal: item.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
+        InstantValue item => new(5, Temporal: item.Value.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)),
+        OffsetDateTimeValue item => new(6, Temporal: item.Value.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)),
+        LocalDateTimeValue item => new(7, Temporal: item.Value.ToString("O", CultureInfo.InvariantCulture)),
+        BooleanValue item => new(8, Boolean: item.Value ? 1 : 0),
+        BinaryReferenceValue item => new(9, Text: item.Sha256),
+        CollectionValue => new(10, Text: string.Empty),
+        ObjectValue => new(11, Text: string.Empty),
+        _ => throw new ArgumentOutOfRangeException(nameof(value), "Unsupported normalized ordering-key value.")
+    };
+
+    private static int CompareDecimalStrings(string? left, string? right)
+    {
+        if (left is null) return right is null ? 0 : -1;
+        if (right is null) return 1;
+        if (decimal.TryParse(left, NumberStyles.Number, CultureInfo.InvariantCulture, out var leftValue) &&
+            decimal.TryParse(right, NumberStyles.Number, CultureInfo.InvariantCulture, out var rightValue))
+            return leftValue.CompareTo(rightValue);
+        return string.Compare(left, right, StringComparison.Ordinal);
+    }
+
     private static void AddArtifactParameters(SqliteCommand command, ArtifactReference artifact, string nodeKey, string prefix = "$source")
     {
         command.Parameters.AddWithValue(prefix == "$source" ? "$node" : "$node", nodeKey);
@@ -855,6 +1003,9 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
     private static long DirectorySize(string directory) =>
         Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
             .Sum(path => new FileInfo(path).Length);
+
+    private readonly record struct NormalizedOrderingValue(int Kind, string? Text = null, long? Integer = null,
+        string? Decimal = null, string? Temporal = null, int? Boolean = null);
 
     private static void TryDeleteDirectory(string directory)
     {

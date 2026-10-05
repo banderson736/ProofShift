@@ -24,6 +24,7 @@ public abstract class VerificationRuleBase : IVerificationRule
     public RuleId Id => Definition.Id;
     public string Version => Definition.Version;
     public abstract VerificationScope Scope { get; }
+    public virtual IReadOnlyCollection<VerificationOrderingKey> RequiredOrderingKeys => [];
     public abstract IAsyncEnumerable<VerificationFinding> EvaluateAsync(
         VerificationExecutionContext context,
         CancellationToken cancellationToken);
@@ -66,6 +67,9 @@ public sealed class SourceDispositionRule(VerificationRuleDefinition definition)
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         long count = 0;
+        long migrated = 0;
+        long excluded = 0;
+        long failures = 0;
         var sourceFacts = context.ExternalObservation is null
             ? context.Workspace.ReadSourceFactsAsync(cancellationToken)
             : context.Workspace.ReadGraphDerivedSourceFactsAsync(cancellationToken);
@@ -79,18 +83,19 @@ public sealed class SourceDispositionRule(VerificationRuleDefinition definition)
             var passed = !mixed && (hasProduced ^ hasExcluded) && source.FailedEntries == 0;
             var code = mixed ? "DuplicateDisposition" : passed ? "SourceDisposition" : "UnaccountedSource";
             var disposition = hasProduced ? "materialized" : hasExcluded ? "excluded" : "unaccounted";
-                yield return Finding(context, EvidenceType.Accounting,
-                passed ? EvidenceResult.Pass : EvidenceResult.Fail,
-                code,
+            if (passed)
+            {
+                if (hasProduced) migrated++;
+                else excluded++;
+                continue;
+            }
+
+            failures++;
+            yield return Finding(context, EvidenceType.Accounting, EvidenceResult.Fail, code,
                 $"{Id.Value}:{source.NodeKey}:{source.Artifact.Id.Value}",
-                passed
-                    ? context.ExternalObservation is null
-                        ? $"Source artifact has one final {disposition} disposition through {source.ProducedEntries} materialized journal entry/entries."
-                        : $"Source artifact has one graph-derived expected {disposition} disposition to {source.ProducedEntries} target artifact(s); external execution was not observed."
-                    : mixed
-                        ? "Source artifact has conflicting or failed projection journal dispositions."
-                        : "Source artifact has no successful materialized or explicit excluded disposition.",
-                    [ArtifactInput(context, source.NodeKey, source.Artifact), .. source.EdgeIds.Select(edge => new EvidenceReference(migrationEdgeId: edge))],
+                mixed ? "Source artifact has conflicting or failed projection journal dispositions."
+                    : "Source artifact has no successful materialized or explicit excluded disposition.",
+                [ArtifactInput(context, source.NodeKey, source.Artifact), .. source.EdgeIds.Select(edge => new EvidenceReference(migrationEdgeId: edge))],
                 new EvidenceValue(new StringValue("exactly-one-final-disposition")),
                 new EvidenceValue(new StringValue(disposition)));
         }
@@ -98,6 +103,15 @@ public sealed class SourceDispositionRule(VerificationRuleDefinition definition)
         if (count == 0)
             yield return Finding(context, EvidenceType.Accounting, EvidenceResult.Fail, "UnaccountedSource",
                 $"{Id.Value}:empty-source-set", "The checkpoint contains no source artifacts relevant to verification.");
+        else if (failures == 0)
+            yield return Finding(context, EvidenceType.Accounting, EvidenceResult.Pass, "SourceDisposition",
+                $"{Id.Value}:population-complete",
+                $"All {count.ToString(CultureInfo.InvariantCulture)} source artifacts have exactly one explainable disposition ({migrated.ToString(CultureInfo.InvariantCulture)} materialized, {excluded.ToString(CultureInfo.InvariantCulture)} explicitly excluded).",
+                context.BindingReferences,
+                new EvidenceValue(new IntegerValue(count)),
+                new EvidenceValue(new ObjectValue([
+                    new KeyValuePair<string, ValueNode>("materialized", new IntegerValue(migrated)),
+                    new KeyValuePair<string, ValueNode>("excluded", new IntegerValue(excluded))])));
     }
 }
 
@@ -231,6 +245,7 @@ public sealed class AttributeComparisonRule(VerificationRuleDefinition definitio
     {
         var compared = 0;
         var failures = 0;
+        long matching = 0;
         var field = Option("attribute");
         var nodeKey = Option("targetNode");
         var semanticType = Option("semanticType");
@@ -240,14 +255,16 @@ public sealed class AttributeComparisonRule(VerificationRuleDefinition definitio
             if (field.Length > 0 && comparison.Field != field || nodeKey.Length > 0 && comparison.NodeKey != nodeKey ||
                 semanticType.Length > 0 && comparison.SemanticType != semanticType) continue;
             compared++;
-            if (!comparison.Matches) failures++;
-            yield return Finding(context, EvidenceType.Comparison,
-                comparison.Matches ? EvidenceResult.Pass : EvidenceResult.Fail,
-                comparison.Matches ? "AttributeComparison" : "AttributeMismatch",
+            if (comparison.Matches)
+            {
+                matching++;
+                continue;
+            }
+
+            failures++;
+            yield return Finding(context, EvidenceType.Comparison, EvidenceResult.Fail, "AttributeMismatch",
                 $"{Id.Value}:{comparison.NodeKey}:{comparison.Source.Id.Value}:{comparison.Field}",
-                comparison.Matches
-                    ? $"Target attribute '{comparison.Field}' matches the graph-derived transformed source value."
-                    : $"Target attribute '{comparison.Field}' differs from the graph-derived transformed source value; raw values are redacted.",
+                $"Target attribute '{comparison.Field}' differs from the graph-derived transformed source value; raw values are redacted.",
                         [ArtifactInput(context, comparison.SourceNodeKey, comparison.Source),
                          ArtifactInput(context, comparison.NodeKey, comparison.ExpectedTarget),
                          ArtifactInput(context, comparison.NodeKey, comparison.ActualTarget),
@@ -258,6 +275,11 @@ public sealed class AttributeComparisonRule(VerificationRuleDefinition definitio
         if (compared == 0)
             yield return Finding(context, EvidenceType.Comparison, EvidenceResult.NotApplicable, "AttributeNotApplicable",
                 $"{Id.Value}:no-comparisons", "No expected/actual attributes matched the configured rule scope.");
+        else if (matching > 0)
+            yield return Finding(context, EvidenceType.Comparison, EvidenceResult.Pass, "AttributeComparison",
+                $"{Id.Value}:population", $"{matching.ToString(CultureInfo.InvariantCulture)} of {compared.ToString(CultureInfo.InvariantCulture)} configured attribute comparisons matched.",
+                context.BindingReferences, new EvidenceValue(new IntegerValue(compared)),
+                new EvidenceValue(new IntegerValue(matching)));
     }
 }
 
@@ -271,28 +293,34 @@ public sealed class MemberAccountingRule(VerificationRuleDefinition definition) 
         var semanticType = Option("semanticType", "Pension.Member");
         var memberSources = 0;
         var unaccounted = 0;
+        var accountedCount = 0;
         await foreach (var source in context.Workspace.ReadSourceFactsAsync(cancellationToken).ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (source.SemanticType != semanticType) continue;
             memberSources++;
-            var accounted = source.FailedEntries == 0 &&
+            var isAccounted = source.FailedEntries == 0 &&
                 ((source.ProducedEntries > 0) ^ (source.ExcludedEntries > 0));
-            if (!accounted) unaccounted++;
-            yield return Finding(context, EvidenceType.Accounting, accounted ? EvidenceResult.Pass : EvidenceResult.Fail,
-                accounted ? "MemberAccounted" : "UnaccountedSource",
+            if (isAccounted)
+            {
+                accountedCount++;
+                continue;
+            }
+            unaccounted++;
+            yield return Finding(context, EvidenceType.Accounting, EvidenceResult.Fail, "UnaccountedSource",
                 $"{Id.Value}:{source.NodeKey}:{source.Artifact.Id.Value}",
-                accounted ? "Pension member source has exactly one final graph disposition."
-                    : "Pension member source is unaccounted or has conflicting dispositions.",
+                "Pension member source is unaccounted or has conflicting dispositions.",
                 [ArtifactInput(context, source.NodeKey, source.Artifact)]);
         }
 
         if (memberSources == 0)
             yield return Finding(context, EvidenceType.Accounting, EvidenceResult.NotApplicable, "MemberAccountingNotApplicable",
                 $"{Id.Value}:none", "No source artifacts match the configured pension member semantic type.");
-        else if (unaccounted == 0)
+        else if (accountedCount > 0)
             yield return Finding(context, EvidenceType.Accounting, EvidenceResult.Pass, "MemberAccounting",
-                $"{Id.Value}:complete", $"All {memberSources.ToString(CultureInfo.InvariantCulture)} pension member source artifacts are accounted for.");
+            $"{Id.Value}:population", $"{accountedCount.ToString(CultureInfo.InvariantCulture)} of {memberSources.ToString(CultureInfo.InvariantCulture)} pension member source artifacts are accounted for.",
+            context.BindingReferences, new EvidenceValue(new IntegerValue(memberSources)),
+            new EvidenceValue(new IntegerValue(accountedCount)));
     }
 }
 

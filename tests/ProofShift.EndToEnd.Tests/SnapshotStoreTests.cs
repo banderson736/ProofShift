@@ -125,11 +125,41 @@ public sealed class SnapshotStoreTests
         }
     }
 
+    [Fact]
+    public async Task CheckpointManifestPreservesConsistencyStrategyAndDowngradeDetails()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var sourceRecord = CreateRecord(Convert.ToHexString(SHA256.HashData([])).ToLowerInvariant(), 0);
+            var selector = new ArtifactSelector("table", [new KeyValuePair<string, string>("name", "member")], ["member_id"]);
+            var (store, checkpointId, _) = await CreateCheckpointAsync(directory, sourceRecord, selector,
+                (_, _) => ValueTask.FromResult<Stream>(new MemoryStream()),
+                SourceConsistencyGuarantee.Observed, "transaction-consistent", "read-committed",
+                "Requested transaction consistency was explicitly downgraded to observed.");
+
+            await using var loaded = await store.OpenCompleteAsync(checkpointId.Value.ToString("N"), TestContext.Current.CancellationToken);
+            var endpoint = Assert.Single(loaded.Manifest.Endpoints);
+            Assert.Equal("transaction-consistent", endpoint.RequestedConsistencyStrategy);
+            Assert.Equal("read-committed", endpoint.EffectiveConsistencyStrategy);
+            Assert.Equal(SourceConsistencyGuarantee.Observed, endpoint.SourceConsistency);
+            Assert.Contains("downgraded", endpoint.ConsistencyDowngrade, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static async Task<(FileSystemSnapshotStore Store, CheckpointId Id, SourceCheckpoint Checkpoint)> CreateCheckpointAsync(
         string root,
         RecordEnvelope record,
         ArtifactSelector selector,
-        Func<string, CancellationToken, ValueTask<Stream>>? openBinary)
+        Func<string, CancellationToken, ValueTask<Stream>>? openBinary,
+        SourceConsistencyGuarantee sourceConsistency = SourceConsistencyGuarantee.Observed,
+        string requestedConsistencyStrategy = "observed",
+        string effectiveConsistencyStrategy = "observed",
+        string? consistencyDowngrade = null)
     {
         var store = new FileSystemSnapshotStore(root);
         var id = new CheckpointId(Guid.NewGuid());
@@ -146,8 +176,9 @@ public sealed class SnapshotStoreTests
         var endpoint = new CheckpointEndpoint(
             "members", new SystemId("source"), new StorageEndpointId("source-db"), new ConnectorId("synthetic"), "1.0",
             SnapshotFingerprints.SelectorHash(selector), ["member_id"], start, end,
-            SourceConsistencyGuarantee.Observed, CheckpointGuarantee.Materialized, true, 1, byteCount,
-            SnapshotFingerprints.EndpointFingerprint("members", 1, sum), segment.Reference, segment.Sha256, segment.Length);
+            sourceConsistency, CheckpointGuarantee.Materialized, true, 1, byteCount,
+            SnapshotFingerprints.EndpointFingerprint("members", 1, sum), segment.Reference, segment.Sha256, segment.Length,
+            requestedConsistencyStrategy, effectiveConsistencyStrategy, consistencyDowngrade);
         var graphHash = new string('b', 64);
         var sourceFingerprint = SnapshotFingerprints.AggregateSourceFingerprint(graphHash, [endpoint]);
         var draft = new SourceCheckpoint(id, CheckpointStatus.Complete, "test-project", new string('c', 64), graphHash,

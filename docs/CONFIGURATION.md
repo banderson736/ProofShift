@@ -60,6 +60,8 @@ storage:
     connector: sqlserver
     connection:
       secret: PROOFSHIFT_LEGACY_DB
+    checkpoint:
+      consistency: observed
 
   member-documents:
     connector: files
@@ -74,6 +76,22 @@ storage:
 ```
 
 No secret values should be stored directly in committed configuration.
+
+### Checkpoint consistency
+
+Relational checkpoint policy is configured per source endpoint under `checkpoint`. The default is `observed`; ProofShift does not silently start a transaction or choose a stronger locking strategy.
+
+SQL Server may explicitly request transaction consistency with a provider strategy:
+
+```yaml
+checkpoint:
+  consistency: transaction-consistent
+  isolation: snapshot
+```
+
+Supported SQL Server isolation values are `snapshot`, `serializable`, and `read-committed`. `snapshot` and `serializable` can satisfy the transaction-consistent request. `read-committed` is classified as `observed`; it is rejected for a transaction-consistent request unless `allowDowngrade: true` is also configured, in which case the checkpoint records the downgrade. Snapshot database options are never changed automatically. If the requested provider mode cannot be started, capture fails rather than silently changing isolation.
+
+PostgreSQL checkpoints retain provider repeatable-read semantics. Endpoint transaction consistency is not a claim of cross-system atomicity. Checkpoint manifests record the requested strategy, effective strategy, guarantee, and any downgrade without recording connection details.
 
 ## Target system
 

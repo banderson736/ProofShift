@@ -47,6 +47,9 @@ public sealed class RecoveryService
         var dryRunId = new DryRunId(Guid.NewGuid());
         var binding = new RecoveryExecutionBinding(verification.Run);
         ValidateBinding(configuration, graph, projectionBinding, verification);
+        await using var ledger = await SqliteVerificationLedgerStore.OpenAsync(projectDirectory, verification.Ledger,
+            cancellationToken).ConfigureAwait(false);
+        var ledgerSummary = await ledger.ReadSummaryAsync(cancellationToken).ConfigureAwait(false);
 
         var manifest = await ProjectionRunManifestStore.ReadAsync(projectDirectory, projectionBinding.ProjectionRunId,
             cancellationToken).ConfigureAwait(false);
@@ -93,12 +96,14 @@ public sealed class RecoveryService
             issues.Add(new RecoveryAssessmentIssue(RecoveryIssueCodes.ContextMismatch,
                 "Recovery requires a completed passing verification and its matching immutable Evidence Graph."));
 
-        if (verification.Dispositions.Count != sourceCheckpoint.Manifest.ArtifactCount ||
-            verification.Dispositions.Any(disposition => disposition.Disposition is ArtifactDisposition.Unaccounted or ArtifactDisposition.Failed))
+        var ledgerCoverage = await ledger.ValidateCoverageAsync(cancellationToken).ConfigureAwait(false);
+        if (ledgerSummary.SourceCount != sourceCheckpoint.Manifest.ArtifactCount ||
+            ledgerSummary.DispositionCount != sourceCheckpoint.Manifest.ArtifactCount ||
+            ledgerSummary.UnaccountedDispositionCount > 0 || !ledgerCoverage.IsValid)
             issues.Add(new RecoveryAssessmentIssue(QualificationIssueCodes.SourceAccountingFailed,
                 "Verified source disposition coverage is incomplete or contains a failed/unaccounted artifact."));
-        if (verification.Lineage.Count != projectionBinding.ProjectionTargetCount ||
-            verification.Lineage.Any(lineage => lineage.TargetNodeId is null || lineage.SourceNodeIds.Count != lineage.Sources.Count))
+        if (ledgerSummary.TargetCount != projectionBinding.ProjectionTargetCount ||
+            ledgerSummary.LineageCount != projectionBinding.ProjectionTargetCount || !ledgerCoverage.IsValid)
             issues.Add(new RecoveryAssessmentIssue(QualificationIssueCodes.TargetLineageFailed,
                 "Verified target lineage does not cover every projected graph-scoped target."));
 
@@ -116,9 +121,18 @@ public sealed class RecoveryService
             issues.Add(new RecoveryAssessmentIssue(QualificationIssueCodes.StaleTarget,
                 "Physical shadow target state changed after verification; re-verification is required before recovery qualification."));
 
-        var needRecoveryCheckpoints = policy.RequireRecoveryRehearsal ||
-            graph.Edges.Any(edge => edge.Recovery?.Mode == RecoveryMode.Restore &&
-                verification.JournalEntries.Any(entry => entry.EdgeId == edge.Id && entry.Result == "produced"));
+        var needRecoveryCheckpoints = policy.RequireRecoveryRehearsal;
+        if (!needRecoveryCheckpoints)
+        {
+            foreach (var edge in graph.Edges.Where(edge => edge.Recovery?.Mode == RecoveryMode.Restore))
+            {
+                if (await ledger.HasJournalEntryForEdgeAsync(edge.Id, "produced", cancellationToken).ConfigureAwait(false))
+                {
+                    needRecoveryCheckpoints = true;
+                    break;
+                }
+            }
+        }
         var checkpointBindings = new List<RecoveryShadowCheckpointBinding>();
         var groupIssues = new Dictionary<string, RecoveryAssessmentIssue>(StringComparer.Ordinal);
         var rehearsalStart = DateTimeOffset.UtcNow;
@@ -193,12 +207,14 @@ public sealed class RecoveryService
                 if (mutatedArtifacts == 0 && targetState.RecordCount > 0)
                     throw new RecoveryException(RecoveryIssueCodes.RehearsalFailed, "Shadow recovery rehearsal did not mutate any material target artifact.");
 
-                await RestoreShadowBaselineAsync(checkpointBindings, verification.JournalEntries, graphEdges,
+                await RestoreShadowBaselineAsync(checkpointBindings, ledger, graphEdges,
                     cancellationToken).ConfigureAwait(false);
                 var restoredState = await ReadTargetStateMeasuredAsync("recovery restored target read-back", cancellationToken).ConfigureAwait(false);
                 restoredFingerprint = restoredState.Fingerprint;
-                var compensatingEdges = graph.Edges.Where(edge => edge.Recovery?.Mode == RecoveryMode.Compensate &&
-                    verification.JournalEntries.Any(entry => entry.EdgeId == edge.Id && entry.Result == "produced")).ToArray();
+                var compensatingEdges = new List<MigrationEdge>();
+                foreach (var edge in graph.Edges.Where(edge => edge.Recovery?.Mode == RecoveryMode.Compensate))
+                    if (await ledger.HasJournalEntryForEdgeAsync(edge.Id, "produced", cancellationToken).ConfigureAwait(false))
+                        compensatingEdges.Add(edge);
                 foreach (var edge in compensatingEdges)
                 {
                     var compensator = _compensators.Resolve(edge.Recovery!.Strategy!);
@@ -212,7 +228,7 @@ public sealed class RecoveryService
 
                 if (restoredFingerprint != targetState.Fingerprint || restoredState.RecordCount != targetState.RecordCount)
                 {
-                    if (compensatingEdges.Length == 0 || compensatingEdges.Any(edge =>
+                    if (compensatingEdges.Count == 0 || compensatingEdges.Any(edge =>
                         _compensators.Resolve(edge.Recovery!.Strategy!).ValidationMode != RecoveryValidationMode.SemanticCompensation))
                         throw new RecoveryException(RecoveryIssueCodes.RehearsalFailed, "Exact shadow restoration fingerprint does not match its pre-mutation baseline.");
                     await RestoreRecoveryCheckpointsAsync(checkpointBindings, cancellationToken).ConfigureAwait(false);
@@ -266,37 +282,40 @@ public sealed class RecoveryService
                 rehearsalFailure ?? "Shadow recovery rehearsal was cancelled."));
 
         List<RecoveryEdgeAssessment> edgeAssessments;
-        using (var edgeAnalysisStage = performanceRecorder?.StartStage(PerformanceStageKind.Recovery, "recovery edge analysis"))
+        using (var edgeAnalysisStage = performanceRecorder?.StartStage(PerformanceStageKind.Recovery, "recovery ledger edge analysis"))
         {
-            edgeAssessments = AssessEdges(graph, verification, policy, targetGroups, groupIssues, graphNodeIds);
+            edgeAssessments = await AssessEdgesAsync(graph, ledger, policy, targetGroups, groupIssues,
+                cancellationToken).ConfigureAwait(false);
             edgeAnalysisStage?.AddArtifacts(edgeAssessments.Count);
         }
         foreach (var edgeAssessment in edgeAssessments)
             issues.AddRange(edgeAssessment.Issues);
 
-        List<RecoveryArtifactCoverage> artifactCoverage;
-        using (var coverageStage = performanceRecorder?.StartStage(PerformanceStageKind.Recovery, "recovery artifact coverage"))
+        RecoveryCoverageSummary artifactCoverage;
+        using (var coverageStage = performanceRecorder?.StartStage(PerformanceStageKind.Recovery, "recovery ledger artifact coverage"))
         {
-            artifactCoverage = AssessArtifactCoverage(graph, verification, edgeAssessments);
-            coverageStage?.AddArtifacts(artifactCoverage.Count);
+            artifactCoverage = await AssessArtifactCoverageAsync(graph, ledger, edgeAssessments, cancellationToken).ConfigureAwait(false);
+            coverageStage?.AddArtifacts(artifactCoverage.AffectedArtifacts);
         }
-        foreach (var item in artifactCoverage.Where(item => !item.Covered ||
-            item.Modes.Contains(RecoveryMode.Irreversible) && !item.ApprovedIrreversible))
-            issues.Add(new RecoveryAssessmentIssue(RecoveryIssueCodes.MissingCapability, item.Reason,
-                artifactId: item.Target.Artifact.Id, graphNodeId: item.Target.NodeId));
+        if (artifactCoverage.UnknownArtifacts > 0)
+            issues.Add(new RecoveryAssessmentIssue(RecoveryIssueCodes.MissingCapability,
+                $"{artifactCoverage.UnknownArtifacts.ToString(CultureInfo.InvariantCulture)} target lineage paths lack validated recovery coverage."));
+        if (artifactCoverage.UnapprovedIrreversibleArtifacts > 0)
+            issues.Add(new RecoveryAssessmentIssue(RecoveryIssueCodes.IrreversibleProhibited,
+                $"{artifactCoverage.UnapprovedIrreversibleArtifacts.ToString(CultureInfo.InvariantCulture)} target artifacts use irreversible recovery without approval."));
 
         var outcome = rehearsalOutcome == RecoveryRehearsalOutcome.Cancelled
             ? RecoveryAssessmentOutcome.Cancelled
             : issues.Count == 0 && edgeAssessments.All(edge => edge.Result != RecoveryCheckResult.Fail) &&
-                artifactCoverage.All(artifact => artifact.Covered &&
-                    (!artifact.Modes.Contains(RecoveryMode.Irreversible) || artifact.ApprovedIrreversible)) &&
+                artifactCoverage.UnknownArtifacts == 0 && artifactCoverage.UnapprovedIrreversibleArtifacts == 0 &&
                 rehearsalOutcome is RecoveryRehearsalOutcome.Passed or RecoveryRehearsalOutcome.NotRequired
                 ? RecoveryAssessmentOutcome.Passed
                 : RecoveryAssessmentOutcome.Failed;
         RecoveryPlan plan;
         using (var planStage = performanceRecorder?.StartStage(PerformanceStageKind.Recovery, "recovery plan construction"))
         {
-            plan = BuildRecoveryPlan(graph, verification, edgeAssessments, policy, graphNodesById, checkpointBindings);
+            plan = await BuildRecoveryPlanAsync(graph, verification, ledger, edgeAssessments, policy, graphNodesById,
+                checkpointBindings, cancellationToken).ConfigureAwait(false);
             planStage?.AddArtifacts(plan.Steps.Count);
         }
         var rehearsalFingerprint = FingerprintRehearsal(targetState.Fingerprint, restoredFingerprint, shadowCleanupFingerprint,
@@ -307,11 +326,17 @@ public sealed class RecoveryService
             rehearsalFailure is null ? [] : [new RecoveryAssessmentIssue(RecoveryIssueCodes.RehearsalFailed, rehearsalFailure)],
             rehearsalStart, DateTimeOffset.UtcNow);
 
-        var assessmentFingerprint = FingerprintAssessment(graph.GraphHash, verification.Run, projectionBinding, policy,
-            edgeAssessments, artifactCoverage, rehearsal, issues);
+        string assessmentFingerprint;
+        using (var assessmentFingerprintStage = performanceRecorder?.StartStage(PerformanceStageKind.Recovery,
+            "recovery ledger fingerprint stream"))
+        {
+            assessmentFingerprint = await FingerprintAssessmentAsync(graph.GraphHash, verification.Run, projectionBinding, policy,
+                ledger, edgeAssessments, rehearsal, issues, cancellationToken).ConfigureAwait(false);
+            assessmentFingerprintStage?.AddArtifacts(ledgerSummary.LineageCount);
+        }
         var assessment = new RecoveryAssessment(new RecoveryAssessmentId(Guid.NewGuid()),
             rehearsalOutcome == RecoveryRehearsalOutcome.Cancelled ? RecoveryAssessmentState.Cancelled : RecoveryAssessmentState.Complete,
-            outcome, binding, policy.Fingerprint, assessmentFingerprint, edgeAssessments, artifactCoverage,
+            outcome, binding, policy.Fingerprint, assessmentFingerprint, edgeAssessments, artifactCoverage, verification.Ledger,
             issues, startedAt, DateTimeOffset.UtcNow);
         RecoveryEvidenceGraph recoveryEvidence;
         using (var evidenceStage = performanceRecorder?.StartStage(PerformanceStageKind.Recovery, "recovery evidence construction"))
@@ -466,31 +491,39 @@ public sealed class RecoveryService
         }
     }
 
-    private List<RecoveryEdgeAssessment> AssessEdges(MigrationGraph graph, VerificationResult verification,
+    private async Task<List<RecoveryEdgeAssessment>> AssessEdgesAsync(MigrationGraph graph, SqliteVerificationLedgerStore ledger,
         EffectiveRecoveryPolicy policy, IReadOnlyCollection<RecoveryTargetGroup> groups,
-        Dictionary<string, RecoveryAssessmentIssue> groupIssues,
-        Dictionary<string, MigrationNodeId> nodeIds)
+        Dictionary<string, RecoveryAssessmentIssue> groupIssues, CancellationToken cancellationToken)
     {
         var groupByEndpoint = groups.SelectMany(group => group.Targets.Select(target => (target.NodeKey, group)))
             .ToDictionary(item => item.NodeKey, item => item.group, StringComparer.Ordinal);
-        var executed = verification.JournalEntries.Where(entry => entry.Result is "produced" or "excluded")
-            .GroupBy(entry => entry.EdgeId).ToDictionary(group => group.Key, group => group.ToArray());
         var results = new List<RecoveryEdgeAssessment>();
-        foreach (var (edgeId, entries) in executed.OrderBy(pair => pair.Key.Value))
+        foreach (var edge in graph.Edges.OrderBy(edge => edge.Id.Value))
         {
-            if (!graph.Edges.Any(edge => edge.Id == edgeId))
-                throw new RecoveryException(RecoveryIssueCodes.ContextMismatch, "Verification journal references an edge absent from the recovery graph.");
-            var edge = graph.Edges.Single(item => item.Id == edgeId);
+            var hasProduced = await ledger.HasJournalEntryForEdgeAsync(edge.Id, "produced", cancellationToken).ConfigureAwait(false);
+            var hasExcluded = await ledger.HasJournalEntryForEdgeAsync(edge.Id, "excluded", cancellationToken).ConfigureAwait(false);
+            if (!hasProduced && !hasExcluded) continue;
+
+            var scopeCounts = await ledger.ReadJournalScopeCountsAsync(edge.Id, cancellationToken).ConfigureAwait(false);
+            var semanticTypes = new HashSet<string>(StringComparer.Ordinal);
+            var targetGroupsByKey = new Dictionary<string, RecoveryTargetGroup>(StringComparer.Ordinal);
+            await foreach (var source in ledger.ReadJournalScopeAsync(edge.Id, targets: false, cancellationToken)
+                .WithCancellation(cancellationToken).ConfigureAwait(false))
+                semanticTypes.Add(graph.Nodes.Single(node => node.Id == source.NodeId).SemanticType);
+            await foreach (var target in ledger.ReadJournalScopeAsync(edge.Id, targets: true, cancellationToken)
+                .WithCancellation(cancellationToken).ConfigureAwait(false))
+            {
+                var targetNode = graph.Nodes.Single(node => node.Id == target.NodeId);
+                semanticTypes.Add(targetNode.SemanticType);
+                if (groupByEndpoint.TryGetValue(targetNode.Name, out var targetGroup))
+                    targetGroupsByKey.TryAdd(targetGroup.Key, targetGroup);
+            }
+
+            var targetGroups = targetGroupsByKey.Values.ToArray();
+            var sourceCount = scopeCounts.SourceCount;
+            var targetCount = scopeCounts.TargetCount;
+            var destructiveCount = checked(sourceCount + targetCount);
             var edgeIssues = new List<RecoveryAssessmentIssue>();
-            var sources = entries.SelectMany(entry => entry.Sources)
-                .Select(source => new GraphArtifactReference(nodeIds[source.NodeKey], source.Artifact))
-                .DistinctBy(item => (item.NodeId, item.Artifact.Id)).ToArray();
-            var targets = entries.Where(entry => entry.Result == "produced" && entry.Target is not null && entry.TargetNode is not null)
-                .Select(entry => new GraphArtifactReference(nodeIds[entry.TargetNode!], entry.Target!))
-                .DistinctBy(item => (item.NodeId, item.Artifact.Id)).ToArray();
-            var semanticTypes = sources.Concat(targets).Select(item => graph.Nodes.Single(node => node.Id == item.NodeId).SemanticType)
-                .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
-            var destructiveCount = sources.Concat(targets).DistinctBy(item => (item.NodeId, item.Artifact.Id)).LongCount();
             var recovery = edge.Recovery;
             var result = RecoveryCheckResult.Pass;
             var lossy = false;
@@ -512,12 +545,16 @@ public sealed class RecoveryService
                 Fail(RecoveryIssueCodes.MissingDefinition, message);
                 risk = RecoveryRiskLevel.Critical;
             }
-            else if (edge.Operation.Type == MigrationOperationType.Exclude && entries.All(entry => entry.Result == "excluded"))
+            else if (edge.Operation.Type == MigrationOperationType.Exclude && hasExcluded && !hasProduced)
             {
-                var excludedSources = verification.Dispositions.Where(disposition =>
-                    sources.Any(source => disposition.SourceNodeId == source.NodeId && disposition.Source.Id == source.Artifact.Id) &&
-                    disposition.Disposition == ArtifactDisposition.Excluded).Count();
-                if (excludedSources != sources.Length)
+                var excludedSources = 0;
+                await foreach (var source in ledger.ReadJournalScopeAsync(edge.Id, targets: false, cancellationToken)
+                    .WithCancellation(cancellationToken).ConfigureAwait(false))
+                {
+                    var disposition = await ledger.FindDispositionAsync(source.NodeId, source.ArtifactId, cancellationToken).ConfigureAwait(false);
+                    if (disposition?.Disposition == ArtifactDisposition.Excluded) excludedSources++;
+                }
+                if (excludedSources != sourceCount)
                 {
                     result = RecoveryCheckResult.Fail;
                     Fail(RecoveryIssueCodes.ContextMismatch, "Explicit exclusion does not have matching graph-scoped source dispositions.");
@@ -544,12 +581,9 @@ public sealed class RecoveryService
                     case RecoveryMode.Restore:
                     {
                         risk = RecoveryRiskLevel.Medium;
-                                var targetGroups = targets.Select(target => graph.Nodes.Single(node => node.Id == target.NodeId))
-                                    .Where(node => groupByEndpoint.ContainsKey(node.Name)).Select(node => groupByEndpoint[node.Name])
-                                    .DistinctBy(group => group.Key).ToArray();
-                                capabilityAvailable = targets.Length > 0 && targetGroups.Length > 0 &&
-                                    targetGroups.All(group => group.RecoveryConnector is not null && !groupIssues.ContainsKey(group.Key));
-                                capabilityValidated = capabilityAvailable && targetGroups.All(group => group.CheckpointValidated);
+                        capabilityAvailable = targetCount > 0 && targetGroups.Length > 0 &&
+                            targetGroups.All(group => group.RecoveryConnector is not null && !groupIssues.ContainsKey(group.Key));
+                        capabilityValidated = capabilityAvailable && targetGroups.All(group => group.CheckpointValidated);
                         if (!capabilityAvailable || policy.RequireValidatedRestore && !capabilityValidated)
                         {
                             result = RecoveryCheckResult.Fail;
@@ -579,9 +613,6 @@ public sealed class RecoveryService
                             result = RecoveryCheckResult.Fail;
                             Fail(exception.Code, exception.Message);
                         }
-                        var targetGroups = targets.Select(target => graph.Nodes.Single(node => node.Id == target.NodeId))
-                            .Where(node => groupByEndpoint.ContainsKey(node.Name)).Select(node => groupByEndpoint[node.Name])
-                            .DistinctBy(group => group.Key).ToArray();
                         capabilityValidated = capabilityAvailable && targetGroups.Length > 0 && targetGroups.All(group =>
                             group.RecoveryConnector is not null && group.CheckpointValidated && !groupIssues.ContainsKey(group.Key));
                         if (!capabilityValidated)
@@ -618,43 +649,85 @@ public sealed class RecoveryService
                 risk = RecoveryRiskLevel.High;
 
             results.Add(new RecoveryEdgeAssessment(edge.Id, edge.Name, edge.Operation.Type, edge.Operation.IsDestructive,
-                semanticTypes, recovery?.Mode,
+                semanticTypes.Order(StringComparer.Ordinal), recovery?.Mode,
                 strategy, result, capabilityAvailable, capabilityValidated, lossy, risk, validationMode,
-                sources.LongLength, targets.LongLength, sources, targets, edgeIssues));
+                sourceCount, targetCount, edgeIssues));
         }
         return results;
     }
 
-    private static List<RecoveryArtifactCoverage> AssessArtifactCoverage(MigrationGraph graph, VerificationResult verification,
-        IReadOnlyCollection<RecoveryEdgeAssessment> assessments)
+    private static async Task<RecoveryCoverageSummary> AssessArtifactCoverageAsync(MigrationGraph graph,
+        SqliteVerificationLedgerStore ledger, IReadOnlyCollection<RecoveryEdgeAssessment> assessments,
+        CancellationToken cancellationToken)
     {
         var assessmentById = assessments.ToDictionary(item => item.EdgeId);
-        var coverage = new List<RecoveryArtifactCoverage>();
-        foreach (var lineage in verification.Lineage)
+        var bySemanticType = new Dictionary<string, (long Affected, long Recoverable)>(StringComparer.Ordinal);
+        long affected = 0;
+        long recoverableCount = 0;
+        long irrecoverable = 0;
+        long unknown = 0;
+        long unapprovedIrreversible = 0;
+        await foreach (var lineage in ledger.ReadLineageAsync(cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
         {
-            if (lineage.TargetNodeId is null)
-                throw new RecoveryException(RecoveryIssueCodes.ContextMismatch, "Recovery requires graph-scoped target lineage.");
-            var semanticType = graph.Nodes.Single(node => node.Id == lineage.TargetNodeId.Value).SemanticType;
-            var results = lineage.Path.Select(edgeId => assessmentById.TryGetValue(edgeId, out var assessment)
-                ? assessment : null).ToArray();
-            var covered = results.Length > 0 && results.All(result => result is not null && result.Result != RecoveryCheckResult.Fail);
-            var modes = results.Where(result => result is not null).Select(result => result!.ConfiguredMode)
-                .Where(mode => mode is not null).Select(mode => mode!.Value).Distinct().ToArray();
-            var approvedIrreversible = covered && modes.Contains(RecoveryMode.Irreversible);
-            var recoverable = covered && !modes.Contains(RecoveryMode.Irreversible);
-            var reason = !covered ? "At least one migration edge in the target lineage lacks validated recovery coverage."
-                : approvedIrreversible ? "Irreversible target state is explicitly permitted by the recovery policy; it remains classified as irrecoverable."
-                : "Every migration edge in the target lineage has a passing, recoverable assessment.";
-            coverage.Add(new RecoveryArtifactCoverage(new GraphArtifactReference(lineage.TargetNodeId.Value, lineage.Target), semanticType,
-                lineage.Path, modes, covered, recoverable, approvedIrreversible, reason));
+            var item = AssessArtifactCoverage(graph, lineage, assessmentById);
+            affected++;
+            if (item.Recoverable) recoverableCount++;
+            else irrecoverable++;
+            if (!item.Covered) unknown++;
+            if (item.Modes.Contains(RecoveryMode.Irreversible) && !item.ApprovedIrreversible) unapprovedIrreversible++;
+            var current = bySemanticType.GetValueOrDefault(item.SemanticType);
+            bySemanticType[item.SemanticType] = (current.Affected + 1, current.Recoverable + (item.Recoverable ? 1 : 0));
         }
-        return coverage;
+        var semanticCoverage = bySemanticType.Select(pair => new RecoverySemanticTypeCoverage(pair.Key,
+            pair.Value.Affected, pair.Value.Recoverable,
+            pair.Value.Affected == 0 ? null : decimal.Round(100m * pair.Value.Recoverable / pair.Value.Affected, 4)));
+        return new RecoveryCoverageSummary(assessments, affected, recoverableCount, irrecoverable, unknown,
+            unapprovedIrreversible, semanticCoverage);
     }
 
-    private static RecoveryPlan BuildRecoveryPlan(MigrationGraph graph, VerificationResult verification,
+    private static RecoveryArtifactCoverage AssessArtifactCoverage(MigrationGraph graph, LineageRecord lineage,
+        Dictionary<MigrationEdgeId, RecoveryEdgeAssessment> assessmentById)
+    {
+        if (lineage.TargetNodeId is null)
+            throw new RecoveryException(RecoveryIssueCodes.ContextMismatch, "Recovery requires graph-scoped target lineage.");
+        var semanticType = graph.Nodes.Single(node => node.Id == lineage.TargetNodeId.Value).SemanticType;
+        var results = lineage.Path.Select(edgeId => assessmentById.TryGetValue(edgeId, out var assessment)
+            ? assessment : null).ToArray();
+        var covered = results.Length > 0 && results.All(result => result is not null && result.Result != RecoveryCheckResult.Fail);
+        var modes = results.Where(result => result is not null).Select(result => result!.ConfiguredMode)
+            .Where(mode => mode is not null).Select(mode => mode!.Value).Distinct().ToArray();
+        var approvedIrreversible = covered && modes.Contains(RecoveryMode.Irreversible);
+        var recoverable = covered && !modes.Contains(RecoveryMode.Irreversible);
+        var reason = !covered ? "At least one migration edge in the target lineage lacks validated recovery coverage."
+            : approvedIrreversible ? "Irreversible target state is explicitly permitted by the recovery policy; it remains classified as irrecoverable."
+            : "Every migration edge in the target lineage has a passing, recoverable assessment.";
+        return new RecoveryArtifactCoverage(new GraphArtifactReference(lineage.TargetNodeId.Value, lineage.Target),
+            semanticType, lineage.Path, modes, covered, recoverable, approvedIrreversible, reason);
+    }
+
+    public static async IAsyncEnumerable<RecoveryArtifactCoverage> ReadArtifactCoverageAsync(string projectDirectory,
+        MigrationGraph graph, RecoveryAssessment assessment,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectDirectory);
+        ArgumentNullException.ThrowIfNull(graph);
+        ArgumentNullException.ThrowIfNull(assessment);
+        await using var ledger = await SqliteVerificationLedgerStore.OpenAsync(projectDirectory,
+            assessment.VerificationLedger, cancellationToken).ConfigureAwait(false);
+        var assessments = assessment.Edges.ToDictionary(item => item.EdgeId);
+        await foreach (var lineage in ledger.ReadLineageAsync(cancellationToken)
+            .WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return AssessArtifactCoverage(graph, lineage, assessments);
+        }
+    }
+
+    private static async Task<RecoveryPlan> BuildRecoveryPlanAsync(MigrationGraph graph, VerificationResult verification,
+        SqliteVerificationLedgerStore ledger,
         IReadOnlyCollection<RecoveryEdgeAssessment> assessments, EffectiveRecoveryPolicy policy,
-        IReadOnlyDictionary<MigrationNodeId, MigrationNode> nodes,
-        IReadOnlyCollection<RecoveryShadowCheckpointBinding> checkpointBindings)
+        Dictionary<MigrationNodeId, MigrationNode> nodes,
+        IReadOnlyCollection<RecoveryShadowCheckpointBinding> checkpointBindings, CancellationToken cancellationToken)
     {
         var edgeIds = assessments.Select(item => item.EdgeId).ToHashSet();
         var edges = graph.Edges.Where(edge => edgeIds.Contains(edge.Id)).ToDictionary(edge => edge.Id);
@@ -679,30 +752,22 @@ public sealed class RecoveryService
             foreach (var dependency in remaining.Values) dependency.Remove(next.Id);
         }
 
-        var scopesByEdge = verification.JournalEntries.Where(entry => entry.Result is "produced" or "excluded")
-            .GroupBy(entry => entry.EdgeId).ToDictionary(group => group.Key, group =>
-            {
-                var sources = group.SelectMany(entry => entry.Sources).Select(source =>
-                    new GraphArtifactReference(nodes.Values.Single(node => node.Name == source.NodeKey).Id, source.Artifact));
-                var targets = group.Where(entry => entry.Result == "produced" && entry.Target is not null && entry.TargetNode is not null)
-                    .Select(entry => new GraphArtifactReference(nodes.Values.Single(node => node.Name == entry.TargetNode).Id, entry.Target!));
-                return sources.Concat(targets).DistinctBy(item => (item.NodeId, item.Artifact.Id)).ToArray();
-            });
         var steps = new List<RecoveryPlanStep>(ordered.Count);
         for (var index = 0; index < ordered.Count; index++)
         {
             var edge = ordered[index];
             var node = edge.Targets.Count > 0 ? nodes[edge.Targets[0]] : nodes[edge.Sources[0]];
-            var scope = scopesByEdge.GetValueOrDefault(edge.Id, []);
+            var edgeAssessment = assessments.Single(item => item.EdgeId == edge.Id);
             steps.Add(new RecoveryPlanStep(index + 1, edge, node.SystemId, node.EndpointId,
                 edge.Recovery?.Strategy ?? edge.Recovery?.Mode.ToString().ToLowerInvariant() ?? "unknown",
-                scope, "Verification, source checkpoint, projection manifest, and target recovery checkpoint bindings remain valid.",
+                edgeAssessment.AffectedSourceArtifacts, edgeAssessment.AffectedTargetArtifacts,
+                "Verification, source checkpoint, projection manifest, and target recovery checkpoint bindings remain valid.",
                 edge.Recovery?.Mode == RecoveryMode.Compensate ? "Compensated state satisfies its registered semantic validator." : "Exact shadow baseline is restored.",
                 "Re-read the affected shadow target and validate its bound recovery fingerprint."));
         }
 
-        var fingerprint = FingerprintPlan(graph.GraphHash, verification.Run.SourceFingerprint, policy.Fingerprint,
-            checkpointBindings.Select(item => item.Checkpoint), steps);
+        var fingerprint = await FingerprintPlanAsync(graph.GraphHash, verification.Run.SourceFingerprint, policy.Fingerprint,
+            checkpointBindings.Select(item => item.Checkpoint), steps, ledger, cancellationToken).ConfigureAwait(false);
         var risks = assessments.Where(item => item.ConfiguredMode == RecoveryMode.Irreversible && item.Result == RecoveryCheckResult.Pass)
             .Select(item => new RecoveryAssessmentIssue("PSREC-IRREVERSIBLE-ACKNOWLEDGED",
                 $"Irreversible edge '{item.EdgeName}' was explicitly allowed for {item.AffectedSourceArtifacts.ToString(CultureInfo.InvariantCulture)} source and {item.AffectedTargetArtifacts.ToString(CultureInfo.InvariantCulture)} target artifacts.",
@@ -716,13 +781,18 @@ public sealed class RecoveryService
     }
 
     private async Task RestoreShadowBaselineAsync(IReadOnlyCollection<RecoveryShadowCheckpointBinding> checkpoints,
-        IReadOnlyCollection<VerificationJournalEntry> journal, Dictionary<MigrationEdgeId, MigrationEdge> edges,
+        SqliteVerificationLedgerStore ledger, Dictionary<MigrationEdgeId, MigrationEdge> edges,
         CancellationToken cancellationToken)
     {
-        var strategies = journal.Where(entry => entry.Result == "produced").Select(entry => edges[entry.EdgeId].Recovery)
-            .Where(recovery => recovery?.Mode == RecoveryMode.Compensate).Select(recovery => recovery!.Strategy!)
-            .Distinct(StringComparer.Ordinal).ToArray();
-        if (strategies.Length == 0)
+        var strategies = new HashSet<string>(StringComparer.Ordinal);
+        await foreach (var entry in ledger.ReadJournalEntriesAsync(cancellationToken)
+            .WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            if (entry.Result == "produced" && edges.TryGetValue(entry.EdgeId, out var edge) &&
+                edge.Recovery?.Mode == RecoveryMode.Compensate && edge.Recovery.Strategy is { } strategy)
+                strategies.Add(strategy);
+        }
+        if (strategies.Count == 0)
         {
             foreach (var item in checkpoints.OrderBy(item => item.Request.SystemId.Value, StringComparer.Ordinal)
                 .ThenBy(item => item.Request.EndpointId.Value, StringComparer.Ordinal))
@@ -779,8 +849,6 @@ public sealed class RecoveryService
                 new(projectionRunId: binding.ProjectionRunId),
                 new(migrationEdgeId: edge.EdgeId)
             };
-            refs.AddRange(edge.Sources.Select(source => new EvidenceReference(artifactId: source.Artifact.Id, graphNodeId: source.NodeId)));
-            refs.AddRange(edge.Targets.Select(target => new EvidenceReference(artifactId: target.Artifact.Id, graphNodeId: target.NodeId)));
             records.Add(new EvidenceRecord(StableEvidenceId(runId, $"edge:{edge.EdgeId.Value:D}"), runId,
                 EvidenceType.Recovery, ruleId, "1", edge.Result == RecoveryCheckResult.Fail ? EvidenceResult.Fail : EvidenceResult.Pass,
                 refs, edge.Issues.Count == 0
@@ -846,108 +914,142 @@ public sealed class RecoveryService
         return DryRunQualificationStatus.Qualified;
     }
 
-    private static string FingerprintAssessment(string graphHash, VerificationRunRecord verification,
+    private static async Task<string> FingerprintAssessmentAsync(string graphHash, VerificationRunRecord verification,
         ProjectionVerificationBinding projectionBinding,
-        EffectiveRecoveryPolicy policy, IEnumerable<RecoveryEdgeAssessment> edges,
-        IEnumerable<RecoveryArtifactCoverage> artifacts, RecoveryRehearsal rehearsal,
-        IEnumerable<RecoveryAssessmentIssue> issues)
+        EffectiveRecoveryPolicy policy, SqliteVerificationLedgerStore ledger, IEnumerable<RecoveryEdgeAssessment> edges,
+        RecoveryRehearsal rehearsal,
+        IEnumerable<RecoveryAssessmentIssue> issues, CancellationToken cancellationToken)
     {
-        var parts = new List<string>
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        void Add(string part)
         {
-            RecoveryFingerprintVersions.Assessment, graphHash, verification.ConfigurationHash,
-            verification.CheckpointManifestHash, verification.SourceFingerprint, verification.ProjectionManifestHash,
-            verification.ProjectionFingerprint, verification.RuleSetFingerprint, verification.EvidenceFingerprint,
-            projectionBinding.ProjectionSourceCount.ToString(CultureInfo.InvariantCulture),
-            projectionBinding.ProjectionTargetCount.ToString(CultureInfo.InvariantCulture), policy.Fingerprint,
-            rehearsal.BaselineFingerprint, rehearsal.RestoredFingerprint ?? "unavailable", rehearsal.Outcome.ToString()
-        };
+            var canonical = $"{Encoding.UTF8.GetByteCount(part).ToString(CultureInfo.InvariantCulture)}:{part};";
+            hash.AppendData(Encoding.UTF8.GetBytes(canonical));
+        }
+        Add(RecoveryFingerprintVersions.Assessment);
+        Add(graphHash);
+        Add(verification.ConfigurationHash);
+        Add(verification.CheckpointManifestHash);
+        Add(verification.SourceFingerprint);
+        Add(verification.ProjectionManifestHash);
+        Add(verification.ProjectionFingerprint);
+        Add(verification.RuleSetFingerprint);
+        Add(verification.EvidenceFingerprint);
+        Add(projectionBinding.ProjectionSourceCount.ToString(CultureInfo.InvariantCulture));
+        Add(projectionBinding.ProjectionTargetCount.ToString(CultureInfo.InvariantCulture));
+        Add(policy.Fingerprint);
+        Add(rehearsal.BaselineFingerprint);
+        Add(rehearsal.RestoredFingerprint ?? "unavailable");
+        Add(rehearsal.Outcome.ToString());
         foreach (var edge in edges.OrderBy(item => item.EdgeId.Value))
         {
-            parts.Add(edge.EdgeId.Value.ToString("D", CultureInfo.InvariantCulture));
-            parts.Add(edge.ConfiguredMode?.ToString() ?? "missing");
-            parts.Add(edge.Strategy ?? string.Empty);
-            parts.Add(edge.Result.ToString());
-            parts.Add(edge.IsDestructive.ToString());
-            foreach (var semanticType in edge.AffectedSemanticTypes) parts.Add(semanticType);
-            parts.Add(edge.IsLossy.ToString());
-            parts.Add(edge.Risk.ToString());
-            parts.Add(edge.CapabilityAvailable.ToString());
-            parts.Add(edge.CapabilityValidated.ToString());
-            parts.Add(edge.ValidationMode.ToString());
-            parts.Add(edge.AffectedSourceArtifacts.ToString(CultureInfo.InvariantCulture));
-            parts.Add(edge.AffectedTargetArtifacts.ToString(CultureInfo.InvariantCulture));
-            foreach (var source in edge.Sources.OrderBy(item => item.NodeId.Value).ThenBy(item => item.Artifact.Id.Value, StringComparer.Ordinal))
+            Add(edge.EdgeId.Value.ToString("D", CultureInfo.InvariantCulture));
+            Add(edge.ConfiguredMode?.ToString() ?? "missing");
+            Add(edge.Strategy ?? string.Empty);
+            Add(edge.Result.ToString());
+            Add(edge.IsDestructive.ToString());
+            foreach (var semanticType in edge.AffectedSemanticTypes) Add(semanticType);
+            Add(edge.IsLossy.ToString());
+            Add(edge.Risk.ToString());
+            Add(edge.CapabilityAvailable.ToString());
+            Add(edge.CapabilityValidated.ToString());
+            Add(edge.ValidationMode.ToString());
+            Add(edge.AffectedSourceArtifacts.ToString(CultureInfo.InvariantCulture));
+            Add(edge.AffectedTargetArtifacts.ToString(CultureInfo.InvariantCulture));
+            await foreach (var source in ledger.ReadJournalScopeAsync(edge.EdgeId, targets: false, cancellationToken)
+                .WithCancellation(cancellationToken).ConfigureAwait(false))
             {
-                parts.Add(source.NodeId.Value.ToString("D", CultureInfo.InvariantCulture));
-                parts.Add(source.Artifact.Id.Value);
+                Add(source.NodeId.Value.ToString("D", CultureInfo.InvariantCulture));
+                Add(source.ArtifactId.Value);
             }
-            foreach (var target in edge.Targets.OrderBy(item => item.NodeId.Value).ThenBy(item => item.Artifact.Id.Value, StringComparer.Ordinal))
+            await foreach (var target in ledger.ReadJournalScopeAsync(edge.EdgeId, targets: true, cancellationToken)
+                .WithCancellation(cancellationToken).ConfigureAwait(false))
             {
-                parts.Add(target.NodeId.Value.ToString("D", CultureInfo.InvariantCulture));
-                parts.Add(target.Artifact.Id.Value);
+                Add(target.NodeId.Value.ToString("D", CultureInfo.InvariantCulture));
+                Add(target.ArtifactId.Value);
             }
-            foreach (var issue in edge.Issues.OrderBy(issue => issue.Code, StringComparer.Ordinal)) parts.Add(issue.Code);
+            foreach (var issue in edge.Issues.OrderBy(issue => issue.Code, StringComparer.Ordinal)) Add(issue.Code);
         }
-        foreach (var artifact in artifacts.OrderBy(item => item.Target.NodeId.Value).ThenBy(item => item.Target.Artifact.Id.Value, StringComparer.Ordinal))
+        var assessmentById = edges.ToDictionary(item => item.EdgeId);
+        await foreach (var lineage in ledger.ReadLineageAsync(cancellationToken)
+            .WithCancellation(cancellationToken).ConfigureAwait(false))
         {
-            parts.Add(artifact.Target.NodeId.Value.ToString("D", CultureInfo.InvariantCulture));
-            parts.Add(artifact.Target.Artifact.Id.Value);
-            parts.Add(artifact.Recoverable.ToString());
-            parts.Add(string.Join(',', artifact.EdgePath.Select(id => id.Value.ToString("D", CultureInfo.InvariantCulture))));
+            if (lineage.TargetNodeId is not { } targetNodeId)
+                throw new RecoveryException(RecoveryIssueCodes.ContextMismatch, "Recovery fingerprint requires graph-scoped target lineage.");
+            var pathAssessments = lineage.Path.Select(edgeId => assessmentById.GetValueOrDefault(edgeId)).ToArray();
+            var covered = pathAssessments.Length > 0 && pathAssessments.All(item => item is not null && item.Result != RecoveryCheckResult.Fail);
+            var modes = pathAssessments.Where(item => item is not null).Select(item => item!.ConfiguredMode)
+                .Where(mode => mode is not null).Select(mode => mode!.Value).Distinct().ToArray();
+            var recoverable = covered && !modes.Contains(RecoveryMode.Irreversible);
+            Add(targetNodeId.Value.ToString("D", CultureInfo.InvariantCulture));
+            Add(lineage.Target.Id.Value);
+            Add(recoverable.ToString());
+            Add(string.Join(',', lineage.Path.Select(id => id.Value.ToString("D", CultureInfo.InvariantCulture))));
         }
         foreach (var issue in issues.OrderBy(issue => issue.Code, StringComparer.Ordinal)
             .ThenBy(issue => issue.EdgeId?.Value))
         {
-            parts.Add(issue.Code);
-            parts.Add(issue.EdgeId?.Value.ToString("D", CultureInfo.InvariantCulture) ?? string.Empty);
-            parts.Add(issue.ArtifactId?.Value ?? string.Empty);
-            parts.Add(issue.GraphNodeId?.Value.ToString("D", CultureInfo.InvariantCulture) ?? string.Empty);
+            Add(issue.Code);
+            Add(issue.EdgeId?.Value.ToString("D", CultureInfo.InvariantCulture) ?? string.Empty);
+            Add(issue.ArtifactId?.Value ?? string.Empty);
+            Add(issue.GraphNodeId?.Value.ToString("D", CultureInfo.InvariantCulture) ?? string.Empty);
         }
         foreach (var connector in projectionBinding.ConnectorVersions.OrderBy(item => item.Key, StringComparer.Ordinal))
         {
-            parts.Add(connector.Key);
-            parts.Add(connector.Value);
+            Add(connector.Key);
+            Add(connector.Value);
         }
         foreach (var checkpoint in rehearsal.Checkpoints.OrderBy(item => item.SystemId.Value, StringComparer.Ordinal).ThenBy(item => item.EndpointId.Value, StringComparer.Ordinal))
         {
-            parts.Add(checkpoint.SystemId.Value);
-            parts.Add(checkpoint.EndpointId.Value);
-            parts.Add(checkpoint.ConnectorVersion);
-            parts.Add(checkpoint.ContentSha256);
+            Add(checkpoint.SystemId.Value);
+            Add(checkpoint.EndpointId.Value);
+            Add(checkpoint.ConnectorVersion);
+            Add(checkpoint.ContentSha256);
         }
-        return HashParts(parts);
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
 
-    private static string FingerprintPlan(string graphHash, string sourceFingerprint, string policyFingerprint,
-        IEnumerable<ShadowRecoveryCheckpoint> targetCheckpoints, IEnumerable<RecoveryPlanStep> steps)
+    private static async Task<string> FingerprintPlanAsync(string graphHash, string sourceFingerprint, string policyFingerprint,
+        IEnumerable<ShadowRecoveryCheckpoint> targetCheckpoints, IEnumerable<RecoveryPlanStep> steps,
+        SqliteVerificationLedgerStore ledger, CancellationToken cancellationToken)
     {
-        var parts = new List<string> { RecoveryFingerprintVersions.Plan, graphHash, sourceFingerprint, policyFingerprint };
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        void Add(string part)
+        {
+            var canonical = $"{Encoding.UTF8.GetByteCount(part).ToString(CultureInfo.InvariantCulture)}:{part};";
+            hash.AppendData(Encoding.UTF8.GetBytes(canonical));
+        }
+        Add(RecoveryFingerprintVersions.Plan);
+        Add(graphHash);
+        Add(sourceFingerprint);
+        Add(policyFingerprint);
         foreach (var checkpoint in targetCheckpoints.OrderBy(item => item.SystemId.Value, StringComparer.Ordinal)
             .ThenBy(item => item.EndpointId.Value, StringComparer.Ordinal))
         {
-            parts.Add(checkpoint.SystemId.Value);
-            parts.Add(checkpoint.EndpointId.Value);
-            parts.Add(checkpoint.ContentSha256);
+            Add(checkpoint.SystemId.Value);
+            Add(checkpoint.EndpointId.Value);
+            Add(checkpoint.ContentSha256);
         }
         foreach (var step in steps.OrderBy(step => step.Sequence))
         {
-            parts.Add(step.Sequence.ToString(CultureInfo.InvariantCulture));
-            parts.Add(step.EdgeId.Value.ToString("D", CultureInfo.InvariantCulture));
-            parts.Add(step.Mode?.ToString() ?? "missing");
-            parts.Add(step.Strategy);
-            parts.Add(step.Operation);
-            parts.Add(step.SystemId.Value);
-            parts.Add(step.EndpointId.Value);
-            parts.Add(step.Preconditions);
-            parts.Add(step.ExpectedOutcome);
-            parts.Add(step.ValidationMethod);
-            foreach (var artifact in step.Scope.OrderBy(item => item.NodeId.Value).ThenBy(item => item.Artifact.Id.Value, StringComparer.Ordinal))
+            Add(step.Sequence.ToString(CultureInfo.InvariantCulture));
+            Add(step.EdgeId.Value.ToString("D", CultureInfo.InvariantCulture));
+            Add(step.Mode?.ToString() ?? "missing");
+            Add(step.Strategy);
+            Add(step.Operation);
+            Add(step.SystemId.Value);
+            Add(step.EndpointId.Value);
+            Add(step.Preconditions);
+            Add(step.ExpectedOutcome);
+            Add(step.ValidationMethod);
+            await foreach (var artifact in ledger.ReadDistinctJournalScopeAsync(step.EdgeId, cancellationToken)
+                .WithCancellation(cancellationToken).ConfigureAwait(false))
             {
-                parts.Add(artifact.NodeId.Value.ToString("D", CultureInfo.InvariantCulture));
-                parts.Add(artifact.Artifact.Id.Value);
+                Add(artifact.NodeId.Value.ToString("D", CultureInfo.InvariantCulture));
+                Add(artifact.ArtifactId.Value);
             }
         }
-        return HashParts(parts);
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
 
     private static string FingerprintRehearsal(string baseline, string? restored, string? cleanup,

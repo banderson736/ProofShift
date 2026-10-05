@@ -81,6 +81,8 @@ public sealed class SnapshotCaptureService
                 var checkpointConnector = connector as ICheckpointSourceConnector;
                 var read = checkpointConnector?.ReadForCheckpointAsync(context, node.Selector, new ReadOptions(), cancellationToken)
                     ?? connector.ReadAsync(context, node.Selector, new ReadOptions(), cancellationToken);
+                var consistencyDecision = checkpointConnector?.ResolveCheckpointConsistency(context)
+                    ?? new CheckpointConsistencyDecision("observed", "observed", SourceConsistencyGuarantee.Observed, null, null);
                 var binaryResolver = connector as ISourceBinaryContentResolver;
                 await foreach (var record in read.WithCancellation(cancellationToken).ConfigureAwait(false))
                 {
@@ -117,7 +119,6 @@ public sealed class SnapshotCaptureService
                 var segment = await session.CompleteSourceNodeAsync(node.Name, cancellationToken).ConfigureAwait(false);
                 nodeStage?.AddMeasurement("segmentBytes", segment.Length, "bytes");
                 var captureComplete = DateTimeOffset.UtcNow;
-                var consistency = checkpointConnector?.CheckpointConsistency ?? SourceConsistencyGuarantee.Observed;
                 endpoints.Add(new CheckpointEndpoint(
                     node.Name,
                     node.SystemId,
@@ -128,7 +129,7 @@ public sealed class SnapshotCaptureService
                     node.Selector.IdentityFields,
                     captureStart,
                     captureComplete,
-                    consistency,
+                    consistencyDecision.Guarantee,
                     CheckpointGuarantee.Materialized,
                     replayable: true,
                     nodeArtifacts,
@@ -136,7 +137,10 @@ public sealed class SnapshotCaptureService
                     fingerprint.Finish(node.Name),
                     segment.Reference,
                     segment.Sha256,
-                    segment.Length));
+                    segment.Length,
+                    consistencyDecision.RequestedStrategy,
+                    consistencyDecision.EffectiveStrategy,
+                    consistencyDecision.Downgrade));
                 artifactCount = checked(artifactCount + nodeArtifacts);
                 byteCount = checked(byteCount + nodeBytes);
             }

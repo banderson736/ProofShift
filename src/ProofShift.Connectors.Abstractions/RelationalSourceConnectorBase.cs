@@ -33,6 +33,25 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
         ? SourceConsistencyGuarantee.Observed
         : SourceConsistencyGuarantee.Consistent;
 
+    public virtual CheckpointConsistencyDecision ResolveCheckpointConsistency(ConnectorContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var isolation = CheckpointIsolationLevel;
+        var guarantee = isolation is null ? SourceConsistencyGuarantee.Observed : SourceConsistencyGuarantee.Consistent;
+        return new CheckpointConsistencyDecision(guarantee == SourceConsistencyGuarantee.Consistent ? "transaction-consistent" : "observed",
+            isolation is null ? "observed" : NormalizeIsolationName(isolation.Value), guarantee, null, isolation);
+    }
+
+    protected static string NormalizeIsolationName(IsolationLevel isolation) => isolation switch
+    {
+        IsolationLevel.ReadCommitted => "read-committed",
+        IsolationLevel.RepeatableRead => "repeatable-read",
+        IsolationLevel.Serializable => "serializable",
+        IsolationLevel.Snapshot => "snapshot",
+        IsolationLevel.ReadUncommitted => "read-uncommitted",
+        _ => isolation.ToString().ToLowerInvariant()
+    };
+
     public async Task<SourceInspection> InspectAsync(
         ConnectorContext context,
         ArtifactSelector selector,
@@ -231,7 +250,7 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
         ArtifactSelector selector,
         ReadOptions options,
         CancellationToken cancellationToken) =>
-        ReadRecordsAsync(context, selector, options, CheckpointIsolationLevel, cancellationToken);
+        ReadRecordsAsync(context, selector, options, ResolveCheckpointConsistency(context).IsolationLevel, cancellationToken);
 
     private async IAsyncEnumerable<RecordEnvelope> ReadRecordsAsync(
         ConnectorContext context,

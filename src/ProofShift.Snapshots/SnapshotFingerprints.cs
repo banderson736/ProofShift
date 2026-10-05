@@ -9,7 +9,7 @@ namespace ProofShift.Snapshots;
 public static class SnapshotFingerprints
 {
     public const string SourceFingerprintVersion = "proofshift-source-fingerprint-v1";
-    public const string ManifestCanonicalizationVersion = "proofshift-snapshot-manifest-v1";
+    public const string ManifestCanonicalizationVersion = "proofshift-snapshot-manifest-v2";
     public const string MaterializedFormatVersion = "proofshift-materialized-snapshot-v1";
 
     private static readonly BigInteger Modulus = BigInteger.One << 256;

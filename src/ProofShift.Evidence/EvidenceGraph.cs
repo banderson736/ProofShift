@@ -1,28 +1,32 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using ProofShift.Domain;
 
 namespace ProofShift.Evidence;
 
 public static class EvidenceFormat
 {
-    public const string CanonicalizationVersion = "proofshift-evidence-canonical-v1";
-    public const string StoreFormatVersion = "proofshift-evidence-store-v1";
+    public const string CanonicalizationVersion = "proofshift-evidence-canonical-v2";
+    public const string StoreFormatVersion = "proofshift-evidence-store-v2";
 }
 
 public sealed record EvidenceGraph
 {
     public RunId VerificationRunId { get; }
     public string CanonicalizationVersion { get; }
+    public EvidenceVerificationContext? VerificationContext { get; }
     public DomainList<EvidenceRecord> Records { get; }
     public string Fingerprint { get; }
 
-    public EvidenceGraph(RunId verificationRunId, IEnumerable<EvidenceRecord> records)
+    public EvidenceGraph(RunId verificationRunId, IEnumerable<EvidenceRecord> records,
+        EvidenceVerificationContext? verificationContext = null)
     {
         if (verificationRunId.Value == Guid.Empty) throw new ArgumentException("Verification run ID must not be empty.", nameof(verificationRunId));
         VerificationRunId = verificationRunId;
         CanonicalizationVersion = EvidenceFormat.CanonicalizationVersion;
+        VerificationContext = verificationContext;
         var materialized = records.OrderBy(record => record.Id.Value).ToArray();
         if (materialized.Any(record => record.RunId != verificationRunId))
             throw new ArgumentException("Every evidence record must belong to the verification run.", nameof(records));
@@ -58,6 +62,12 @@ public sealed record EvidenceGraph
         }
     }
 }
+
+public sealed record EvidenceVerificationContext(string ConfigurationHash, string GraphHash,
+    string CheckpointId, string CheckpointManifestHash, string SourceFingerprint, string RuleSetFingerprint,
+    string? ProjectionRunId = null, string? ProjectionFingerprint = null,
+    string? ObservationId = null, string? ObservationRunId = null, string? TargetFingerprint = null,
+    string? VerificationLedgerFingerprint = null);
 
 public static class EvidenceGraphCanonicalizer
 {
@@ -135,8 +145,18 @@ public static class EvidenceGraphCanonicalizer
 public interface IEvidenceStore
 {
     Task<EvidenceStoreReceipt> SaveAsync(EvidenceGraph graph, CancellationToken cancellationToken);
+    Task<EvidenceStoreReceipt> SaveAsync(RunId verificationRunId, string canonicalizationVersion,
+        string semanticFingerprint, long recordCount, EvidenceVerificationContext? verificationContext,
+        IAsyncEnumerable<EvidenceRecord> records,
+        CancellationToken cancellationToken);
     Task<bool> VerifyIntegrityAsync(RunId verificationRunId, CancellationToken cancellationToken);
+    Task<EvidenceStoreManifest> ReadManifestAsync(RunId verificationRunId, CancellationToken cancellationToken);
+    IAsyncEnumerable<JsonElement> ReadRecordsAsync(RunId verificationRunId, CancellationToken cancellationToken);
     ValueTask<Stream> OpenReadAsync(RunId verificationRunId, CancellationToken cancellationToken);
 }
 
 public sealed record EvidenceStoreReceipt(RunId VerificationRunId, string RelativePath, string Fingerprint, long RecordCount);
+
+public sealed record EvidenceStoreManifest(string Format, string CanonicalizationVersion, string RunId,
+    string Fingerprint, long RecordCount, EvidenceVerificationContext? VerificationContext,
+    string SegmentFile, string SegmentSha256, bool Complete, string? IntegrityHash);

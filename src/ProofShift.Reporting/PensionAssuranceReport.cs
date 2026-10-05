@@ -26,8 +26,8 @@ public sealed record PensionAssuranceReport
     public string ProjectionFingerprint { get; }
     public string RuleSetFingerprint { get; }
     public string RecoveryPolicyFingerprint { get; }
-    public int VerificationFailureCount { get; }
-    public int WarningCount { get; }
+    public long VerificationFailureCount { get; }
+    public long WarningCount { get; }
     public long UnaccountedSources { get; }
     public long UnexplainedTargets { get; }
     public long FailedRecoveryEdges { get; }
@@ -40,15 +40,15 @@ public sealed record PensionAssuranceReport
     public IReadOnlyCollection<RecoverySemanticTypeCoverage> RecoveryBySemanticType { get; }
     public long BusinessDiscrepancyCount { get; }
     public IReadOnlyDictionary<string, long> DefectCounts { get; }
-    public IReadOnlyDictionary<string, int> EvidenceFailureCounts { get; }
+    public IReadOnlyDictionary<string, long> EvidenceFailureCounts { get; }
     public IReadOnlyList<PensionAssuranceSection> Sections { get; }
     public IReadOnlyList<PensionAssuranceIssue> Exceptions { get; }
     public IReadOnlyList<string> RecoveryReasons { get; }
 
     internal PensionAssuranceReport(string project, DryRunId dryRunId, RecoveryArtifactSummary recovery,
-        string verificationOutcome, int verificationFailureCount, int warningCount, long unaccountedSources,
+        string verificationOutcome, long verificationFailureCount, long warningCount, long unaccountedSources,
         long unexplainedTargets, IReadOnlyDictionary<string, long> defectCounts,
-        IReadOnlyDictionary<string, int> evidenceFailureCounts, IReadOnlyList<PensionAssuranceSection> sections,
+        IReadOnlyDictionary<string, long> evidenceFailureCounts, IReadOnlyList<PensionAssuranceSection> sections,
         IReadOnlyList<PensionAssuranceIssue> exceptions)
     {
         Format = FormatVersion;
@@ -96,7 +96,7 @@ public sealed record PensionAssuranceReport
     }
 }
 
-public sealed record PensionAssuranceSection(string Name, int PassedFindings, int FailedFindings, int WarningFindings);
+public sealed record PensionAssuranceSection(string Name, long PassedFindings, long FailedFindings, long WarningFindings);
 
 public sealed record PensionAssuranceIssue(string EvidenceId, string Code, string RuleId,
     string RuleVersion, string Severity, string Explanation, object? Expected, object? Actual);
@@ -200,24 +200,75 @@ public static class PensionAssuranceReportBuilder
 
         var records = storedEvidence.GetProperty("records").EnumerateArray().ToArray();
         var failures = records.Where(record => Is(record, "result", "Fail")).ToArray();
-        var warnings = records.Count(record => Is(record, "result", "Warning"));
+        var warnings = records.LongCount(record => Is(record, "result", "Warning"));
         var evidenceCounts = failures.GroupBy(record => Text(record, "code"), StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
-        var businessCounts = CountBusinessDiscrepancies(evidenceCounts.ToDictionary(pair => pair.Key,
-            pair => (long)pair.Value, StringComparer.Ordinal), recovery.FalseReversibleEdges);
+            .ToDictionary(group => group.Key, group => group.LongCount(), StringComparer.Ordinal);
+        var businessCounts = CountBusinessDiscrepancies(evidenceCounts, recovery.FalseReversibleEdges);
         var sections = SectionCodes.Select(section => new PensionAssuranceSection(section.Name,
-            records.Count(record => section.Codes.Contains(Text(record, "code"), StringComparer.Ordinal) && Is(record, "result", "Pass")),
-            records.Count(record => section.Codes.Contains(Text(record, "code"), StringComparer.Ordinal) && Is(record, "result", "Fail")),
-            records.Count(record => section.Codes.Contains(Text(record, "code"), StringComparer.Ordinal) && Is(record, "result", "Warning")))).ToArray();
-        var exceptions = failures.Select(record => new PensionAssuranceIssue(Text(record, "id"), Text(record, "code"),
-            Text(record, "ruleId"), Text(record, "ruleVersion"), Text(record, "severity"), Text(record, "explanation"),
-            record.TryGetProperty("expected", out var expected) ? SafeValue(expected) : null,
-            record.TryGetProperty("actual", out var actual) ? SafeValue(actual) : null)).ToArray();
+            records.LongCount(record => section.Codes.Contains(Text(record, "code"), StringComparer.Ordinal) && Is(record, "result", "Pass")),
+            records.LongCount(record => section.Codes.Contains(Text(record, "code"), StringComparer.Ordinal) && Is(record, "result", "Fail")),
+            records.LongCount(record => section.Codes.Contains(Text(record, "code"), StringComparer.Ordinal) && Is(record, "result", "Warning")))).ToArray();
+        var exceptions = failures.Select(ToIssue).ToArray();
         var unaccounted = failures.LongCount(record => Text(record, "code") is "UnaccountedSource" or "DuplicateDisposition");
         var unexplained = failures.LongCount(record => Text(record, "code") == "UnexpectedTarget");
         var outcome = failures.Length == 0 ? warnings == 0 ? "PASSED" : "PASSED WITH WARNINGS" : "FAILED";
-        return new PensionAssuranceReport(projectName, dryRunId, recovery, outcome, failures.Length, warnings,
+        return new PensionAssuranceReport(projectName, dryRunId, recovery, outcome, failures.LongLength, warnings,
             unaccounted, unexplained, businessCounts, evidenceCounts, sections, exceptions);
+    }
+
+    public static async Task<PensionAssuranceReport> BuildAsync(string projectName, DryRunId dryRunId,
+        EvidenceStoreManifest manifest, IAsyncEnumerable<JsonElement> records, RecoveryArtifactSummary recovery,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectName);
+        ArgumentNullException.ThrowIfNull(manifest);
+        ArgumentNullException.ThrowIfNull(records);
+        ArgumentNullException.ThrowIfNull(recovery);
+        if (manifest.Format != EvidenceFormat.StoreFormatVersion || !manifest.Complete ||
+            !Guid.TryParseExact(manifest.RunId, "D", out var runId) || runId != recovery.VerificationRunId.Value ||
+            manifest.Fingerprint != recovery.VerificationEvidenceFingerprint)
+            throw new InvalidDataException("Stored verification evidence does not match the recovery assessment.");
+
+        var failureDetails = new List<PensionAssuranceIssue>();
+        var failureCounts = new SortedDictionary<string, long>(StringComparer.Ordinal);
+        var sectionCounts = SectionCodes.Select(_ => new long[3]).ToArray();
+        long failures = 0;
+        long warnings = 0;
+        long unaccounted = 0;
+        long unexplained = 0;
+        await foreach (var record in records.WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var code = Text(record, "code");
+            var result = Text(record, "result");
+            if (string.Equals(result, "Fail", StringComparison.OrdinalIgnoreCase))
+            {
+                failures++;
+                failureCounts[code] = failureCounts.GetValueOrDefault(code) + 1;
+                failureDetails.Add(ToIssue(record));
+                if (code is "UnaccountedSource" or "DuplicateDisposition") unaccounted++;
+                if (code == "UnexpectedTarget") unexplained++;
+            }
+            else if (string.Equals(result, "Warning", StringComparison.OrdinalIgnoreCase))
+            {
+                warnings++;
+            }
+
+            for (var index = 0; index < SectionCodes.Length; index++)
+            {
+                if (!SectionCodes[index].Codes.Contains(code, StringComparer.Ordinal)) continue;
+                if (string.Equals(result, "Pass", StringComparison.OrdinalIgnoreCase)) sectionCounts[index][0]++;
+                else if (string.Equals(result, "Fail", StringComparison.OrdinalIgnoreCase)) sectionCounts[index][1]++;
+                else if (string.Equals(result, "Warning", StringComparison.OrdinalIgnoreCase)) sectionCounts[index][2]++;
+            }
+        }
+
+        var sections = SectionCodes.Select((section, index) => new PensionAssuranceSection(section.Name,
+            sectionCounts[index][0], sectionCounts[index][1], sectionCounts[index][2])).ToArray();
+        var outcome = failures == 0 ? warnings == 0 ? "PASSED" : "PASSED WITH WARNINGS" : "FAILED";
+        var businessCounts = CountBusinessDiscrepancies(failureCounts, recovery.FalseReversibleEdges);
+        return new PensionAssuranceReport(projectName, dryRunId, recovery, outcome, failures, warnings,
+            unaccounted, unexplained, businessCounts, failureCounts, sections, failureDetails);
     }
 
     public static IReadOnlyDictionary<string, long> CountBusinessDiscrepancies(
@@ -267,6 +318,11 @@ public static class PensionAssuranceReportBuilder
 
     private static bool Is(JsonElement element, string property, string expected) =>
         string.Equals(Text(element, property), expected, StringComparison.OrdinalIgnoreCase);
+
+    private static PensionAssuranceIssue ToIssue(JsonElement record) => new(Text(record, "id"), Text(record, "code"),
+        Text(record, "ruleId"), Text(record, "ruleVersion"), Text(record, "severity"), Text(record, "explanation"),
+        record.TryGetProperty("expected", out var expected) ? SafeValue(expected) : null,
+        record.TryGetProperty("actual", out var actual) ? SafeValue(actual) : null);
 
     private static string Text(JsonElement element, string property) =>
         element.TryGetProperty(property, out var value) ? value.GetString() ?? string.Empty : string.Empty;

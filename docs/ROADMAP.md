@@ -158,7 +158,7 @@ Acceptance requires:
 - the clean pension fixture returns `QUALIFIED DRY RUN`; fault scenarios return `NOT QUALIFIED` with stable reasons;
 - full solution validation and remote Docker-backed CI pass with no required skips.
 
-PS-0.8 and PS-0.9 are accepted. Do not begin PS-0.10 without an explicit new assignment.
+PS-0.8 and PS-0.9 are accepted. PS-0.10A Scale Baseline & Hot-Path Hardening is assigned and In Progress. Do not begin PS-0.10B/C or connector/domain expansion.
 
 ### PS-0.9 Public Pension Assurance Vertical
 
@@ -177,9 +177,28 @@ Implemented and locally validated:
 - The integrated fast-scale run completed in 396,017 ms with 519,651,328 bytes peak working set and zero temporary workspace bytes after cleanup. The separate large benchmark remains generator-only.
 - Docker-backed GitHub Actions run 37238973286 passed the full solution suite: 113 passed, 0 failed, 0 skipped.
 
-PS-0.9 acceptance is complete. The large-scale measurement covers generator enumeration only; the integrated benchmark covers the fast multi-store corpus. External target lineage remains graph-derived expected lineage, not observed vendor execution history. PS-0.10 remains unassigned.
+PS-0.9 acceptance is complete. External target lineage remains graph-derived expected lineage, not observed vendor execution history.
 
-Do not add production migration/rollback, SaaS, UI, AI, FHIR, Oracle, DB2, Kubernetes, or unrelated platform features. Do not begin PS-0.10 until PS-0.9 is accepted.
+### PS-0.10A Scale Baseline & Hot-Path Hardening
+
+Status: In Progress. Preserve the PS-0.9 semantics and exact 149-defect / corrected-zero result.
+
+Completed and locally validated slices:
+
+- Generic performance-stage records and reports distinguish environment setup from ProofShift runtime.
+- PostgreSQL writes and the Projection Journal use bounded batch lifecycles; Pending precedes each transaction and Produced follows commit. Duplicate batches roll back data and identity rows.
+- Disposable Verification SQLite uses WAL/NORMAL and bounded transactions.
+- Verification stores graph-scoped source dispositions, target lineage, and journals in an indexed per-run SQLite ledger. Successful result models carry a ledger receipt, not full source/disposition/lineage/journal collections.
+- Recovery reopens the ledger, streams edge scopes and lineages, retains counts/semantic summaries, and supports on-demand artifact coverage reads.
+- Ordering fields are materialized as typed normalized SQLite keys and read through indexed joins; relational `ReadOptions` no longer advertises an ignored batch size.
+- Evidence store v2 writes a hashed NDJSON segment and completion manifest; CLI and pension reporting consume a record stream. Successful source accounting is aggregated while failure findings remain artifact-specific. Evidence canonicalization is explicitly v2.
+- SQL Server checkpoint consistency defaults to Observed and requires explicit isolation for transaction-consistent capture; requested/effective strategies and permitted downgrades are in the v2 checkpoint manifest.
+
+Latest-code Fast passed on 2026-10-04 in 229.1 seconds total / 214.7 seconds ProofShift runtime, with a 205.8 MB process peak and a 162.3 MB temporary-workspace peak. It preserved 149 defective discrepancies, zero corrected discrepancies, zero unaccounted sources, zero unexplained targets, and the expected qualification outcomes. The previous aggregate Fast run was 153.4 seconds total / 140.3 seconds ProofShift runtime / 202.6 MB process peak; prior stage-level timing records are unavailable, so stage delta comparison remains outstanding. The Medium attempt stopped progressing during corrected external Verification with approximately 6.69 GB private SQLite workspace and did not reach assertions or subsequent scenarios; this is not a passing benchmark.
+
+Restore/build passed, and the final full local suite completed with 119 passed, 0 failed, and 2 Windows symlink-capability skips. Remaining acceptance gates include diagnosing and completing Medium with full counts, stage metrics, workspace/ledger/evidence sizes, throughput, and verified workload memory measurements; investigating latest Fast runtime/scratch cost; before/after stage-level comparison; and remote Docker-backed GitHub Actions with zero required skips. The separate generator-only large scale is not a substitute for a medium full-pipeline run.
+
+Do not add production migration/rollback, SaaS, UI, AI, FHIR, Oracle, DB2, Kubernetes, or unrelated platform features. Do not begin PS-0.10B/C until PS-0.10A is accepted.
 
 ## Commercial validation gate after PS-0 / during PS-0
 

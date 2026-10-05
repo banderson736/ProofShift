@@ -35,20 +35,30 @@ public sealed class PensionExternalCorpusVerificationTests
     private const string SourceFilesRootSecret = "PS09_CORPUS_SOURCE_FILES_ROOT";
     private const string TargetFilesRootSecret = "PS09_CORPUS_TARGET_FILES_ROOT";
     private const string IntegratedRunDirectoryVariable = "PS09_INTEGRATED_RUN_DIRECTORY";
+    private const string BenchmarkScaleVariable = "PS010A_BENCHMARK_SCALE";
     [Fact]
     public async Task FastDefectiveAndCorrectedDatasetsRunThroughVerificationServiceWithExactBusinessCounts()
     {
         var totalStopwatch = Stopwatch.StartNew();
-        var performanceRecorder = new PerformanceRecorder("Pension Fast Integrated");
+        var benchmarkScale = Environment.GetEnvironmentVariable(BenchmarkScaleVariable) ?? "fast";
+        var datasetScale = benchmarkScale.ToLowerInvariant() switch
+        {
+            "fast" => PensionDatasetScale.Fast,
+            "medium" => PensionDatasetScale.Medium,
+            _ => throw new ArgumentException("PS010A_BENCHMARK_SCALE must be fast or medium.", BenchmarkScaleVariable)
+        };
+        var performanceRecorder = new PerformanceRecorder($"Pension {benchmarkScale} Integrated");
         var generationStopwatch = Stopwatch.StartNew();
         PensionSyntheticRecord[] sourceData;
         using (var generationStage = performanceRecorder.StartStage(PerformanceStageKind.Fixture, "synthetic source generation"))
         {
-            sourceData = PensionSyntheticDatasetGenerator.Generate().ToArray();
+            sourceData = PensionSyntheticDatasetGenerator.Generate(scale: datasetScale).ToArray();
             generationStage.AddArtifacts(sourceData.LongLength);
         }
         generationStopwatch.Stop();
-        Assert.Equal(8_220, sourceData.Length);
+        Assert.Equal(datasetScale.GeneratedRecordCount, sourceData.LongLength);
+        var payloadArtifactCount = sourceData.LongCount(record => record.Kind is PensionRecordKind.Document or PensionRecordKind.HistoricalExport);
+        var expectedCheckpointArtifacts = checked(sourceData.LongLength + payloadArtifactCount);
         var environmentStartupStopwatch = Stopwatch.StartNew();
         var environmentStage = performanceRecorder.StartStage(PerformanceStageKind.Environment, "Docker database startup");
         var sqlContainer = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-CU14-ubuntu-22.04")
@@ -114,11 +124,10 @@ public sealed class PensionExternalCorpusVerificationTests
                 foreach (var kind in Enum.GetValues<PensionRecordKind>())
                 {
                     if (kind is PensionRecordKind.Document or PensionRecordKind.HistoricalExport) continue;
-                    await BulkLoadSourceKindAsync(connection, kind, sourceData.Where(record => record.Kind == kind).ToArray());
+                    await BulkLoadSourceKindAsync(connection, kind, sourceData.Where(record => record.Kind == kind));
                 }
             }
             sourceLoadStopwatch.Stop();
-            var payloadArtifactCount = sourceData.LongCount(record => record.Kind is PensionRecordKind.Document or PensionRecordKind.HistoricalExport);
             sourceLoadStage.AddArtifacts(checked(sourceData.LongLength + payloadArtifactCount));
             sourceLoadStage.AddBytes(checked(DirectorySize(csvRoot) + DirectorySize(sourceFilesRoot)));
             sourceLoadStage.Dispose();
@@ -130,8 +139,8 @@ public sealed class PensionExternalCorpusVerificationTests
             checkpointStopwatch.Stop();
             Assert.Equal(CheckpointStatus.Complete, defectiveCapture.Status);
             Assert.Equal(CheckpointStatus.Complete, correctedCapture.Status);
-            Assert.Equal(8_495, defectiveCapture.Checkpoint!.ArtifactCount);
-            Assert.Equal(8_495, correctedCapture.Checkpoint!.ArtifactCount);
+            Assert.Equal(expectedCheckpointArtifacts, defectiveCapture.Checkpoint!.ArtifactCount);
+            Assert.Equal(expectedCheckpointArtifacts, correctedCapture.Checkpoint!.ArtifactCount);
 
             PensionSyntheticRecord[] cleanTarget;
             PensionSyntheticRecord[] defectiveTarget;
@@ -142,6 +151,8 @@ public sealed class PensionExternalCorpusVerificationTests
                 defectiveTarget = PensionDefectInjector.InjectTargetDefects(cleanTarget).ToArray();
                 targetFixtureStage.AddArtifacts(checked(cleanTarget.LongLength + defectiveTarget.LongLength));
             }
+            var expectedTargetArtifacts = checked(cleanTarget.LongLength + payloadArtifactCount + datasetScale.Members);
+            var expectedProjectionSourceVisits = CountProjectionSourceVisits(correctedScenario, correctedCapture.Checkpoint!);
             var registry = new VerificationRuleRegistry([new GenericVerificationRuleProvider(), new PensionPack()]);
             var rules = registry.Resolve(CreateRules());
             var service = new VerificationService(checkpointStore);
@@ -153,11 +164,18 @@ public sealed class PensionExternalCorpusVerificationTests
             Assert.True(corrected.Run.Outcome == VerificationOutcome.Passed,
                 string.Join(Environment.NewLine, corrected.Findings.Where(finding => finding.Result == EvidenceResult.Fail)
                     .Select(finding => $"{finding.Code}: {finding.Explanation}")));
-            Assert.Equal(8_495, corrected.Dispositions.Count);
-            Assert.DoesNotContain(corrected.Dispositions, disposition =>
-                disposition.Disposition is ArtifactDisposition.Unaccounted or ArtifactDisposition.Failed);
-            Assert.Equal(8_595, corrected.ExpectedLineage.Count);
-            Assert.All(corrected.ExpectedLineage, item => Assert.Equal(LineageBasis.GraphDerivedExpected, item.Basis));
+            Assert.Equal(expectedCheckpointArtifacts, corrected.Ledger.DispositionCount);
+            Assert.Equal(expectedTargetArtifacts, corrected.Ledger.LineageCount);
+            await using (var externalLedger = await SqliteVerificationLedgerStore.OpenAsync(
+                Path.Combine(directory, "working-corrected"), corrected.Ledger, TestContext.Current.CancellationToken))
+            {
+                await foreach (var disposition in externalLedger.ReadDispositionsAsync(TestContext.Current.CancellationToken)
+                    .WithCancellation(TestContext.Current.CancellationToken))
+                    Assert.False(disposition.Disposition is ArtifactDisposition.Unaccounted or ArtifactDisposition.Failed);
+                await foreach (var lineage in externalLedger.ReadLineageAsync(TestContext.Current.CancellationToken)
+                    .WithCancellation(TestContext.Current.CancellationToken))
+                    Assert.Equal(LineageBasis.GraphDerivedExpected, lineage.Basis);
+            }
             var correctedCounts = BusinessCounts(corrected.Findings, falseReverseEdges: 0);
             Assert.Equal(18, correctedCounts.Count);
             Assert.Equal(0L, correctedCounts.Values.Sum());
@@ -199,11 +217,11 @@ public sealed class PensionExternalCorpusVerificationTests
                 contextFactory, configuration, correctedScenario, correctedCapture, rules, directory,
                 "projected-corrected", performanceRecorder);
             Assert.Equal(ProjectionStatus.Succeeded, correctedPipeline.Projection.Status);
-            Assert.Equal(8_595, correctedPipeline.Projection.SourceArtifactCount);
-            Assert.Equal(8_595, correctedPipeline.Projection.TargetArtifactCount);
+            Assert.Equal(expectedProjectionSourceVisits, correctedPipeline.Projection.SourceArtifactCount);
+            Assert.Equal(expectedTargetArtifacts, correctedPipeline.Projection.TargetArtifactCount);
             Assert.Equal(VerificationOutcome.Passed, correctedPipeline.Verification.Run.Outcome);
-            Assert.Equal(8_495, correctedPipeline.Verification.Dispositions.Count);
-            Assert.Equal(8_595, correctedPipeline.Verification.Lineage.Count);
+            Assert.Equal(expectedCheckpointArtifacts, correctedPipeline.Verification.Ledger.DispositionCount);
+            Assert.Equal(expectedTargetArtifacts, correctedPipeline.Verification.Ledger.LineageCount);
             Assert.Equal(DryRunQualificationStatus.Qualified, correctedPipeline.Recovery.Qualification.Status);
 
             var falseReversePipeline = await ProjectVerifyAndQualifyAsync(checkpointStore, sourceConnectors, targetConnectors,
@@ -228,8 +246,8 @@ public sealed class PensionExternalCorpusVerificationTests
                 });
             Assert.Equal(ProjectionStatus.Succeeded, projectedDefectivePipeline.Projection.Status);
             Assert.Equal(VerificationOutcome.Failed, projectedDefectivePipeline.Verification.Run.Outcome);
-            Assert.Equal(8_495, projectedDefectivePipeline.Verification.Dispositions.Count);
-            Assert.Equal(8_595, projectedDefectivePipeline.Verification.Lineage.Count);
+            Assert.Equal(expectedCheckpointArtifacts, projectedDefectivePipeline.Verification.Ledger.DispositionCount);
+            Assert.Equal(expectedTargetArtifacts, projectedDefectivePipeline.Verification.Ledger.LineageCount);
             var projectedDefects = BusinessCounts(projectedDefectivePipeline.Verification.Findings,
                 projectedDefectivePipeline.Recovery.Assessment.Edges.Count(edge =>
                     edge.Issues.Any(issue => issue.Code == RecoveryIssueCodes.InvalidReverse)));
@@ -368,7 +386,7 @@ public sealed class PensionExternalCorpusVerificationTests
             using var process = Process.GetCurrentProcess();
             var demoSummary = new
             {
-                benchmarkScale = "fast",
+                benchmarkScale = benchmarkScale.ToLowerInvariant(),
                 environmentStartupMilliseconds = environmentStartupStopwatch.Elapsed.TotalMilliseconds,
                 generationMilliseconds = generationStopwatch.Elapsed.TotalMilliseconds,
                 sourceMaterializationAndLoadMilliseconds = sourceLoadStopwatch.Elapsed.TotalMilliseconds,
@@ -458,7 +476,9 @@ public sealed class PensionExternalCorpusVerificationTests
         var sourceEndpoints = new[]
         {
             new StorageEndpointDefinition(new StorageEndpointId("pension-source-db"), new ConnectorId("sqlserver"),
-                [new KeyValuePair<string, string>("connection", $"secret:{SourceConnectionSecret}")]),
+                [new KeyValuePair<string, string>("connection", $"secret:{SourceConnectionSecret}"),
+                 new KeyValuePair<string, string>("checkpoint.consistency", "transaction-consistent"),
+                 new KeyValuePair<string, string>("checkpoint.isolation", "serializable")]),
             new StorageEndpointDefinition(new StorageEndpointId("pension-source-csv"), new ConnectorId("csv"),
                 [new KeyValuePair<string, string>("root", $"secret:{CsvRootSecret}"), new KeyValuePair<string, string>("delimiter", ";")]),
             new StorageEndpointDefinition(new StorageEndpointId("pension-source-files"), new ConnectorId("files"),
@@ -715,7 +735,7 @@ public sealed class PensionExternalCorpusVerificationTests
         }
     }
 
-    private static async Task MaterializeCsvAndFileSourcesAsync(IReadOnlyCollection<PensionSyntheticRecord> records,
+    private static async Task MaterializeCsvAndFileSourcesAsync(IEnumerable<PensionSyntheticRecord> records,
         string csvRoot, string filesRoot)
     {
         Directory.CreateDirectory(csvRoot);
@@ -723,22 +743,24 @@ public sealed class PensionExternalCorpusVerificationTests
         foreach (var kind in new[] { PensionRecordKind.Document, PensionRecordKind.HistoricalExport })
         {
             var mappings = SourceColumnMappings(kind);
-            var rows = records.Where(record => record.Kind == kind).ToArray();
-            var lines = new List<string> { string.Join(';', mappings.Values.Select(EscapeCsv)) };
-            lines.AddRange(rows.Select(record => string.Join(';', mappings.Keys.Select(field =>
-                EscapeCsv(DatabaseText(record.Values[field]))))));
-            await File.WriteAllLinesAsync(Path.Combine(csvRoot, CsvFileName(kind)), lines, new UTF8Encoding(false),
-                TestContext.Current.CancellationToken);
-
-            foreach (var record in rows)
+            await using (var csv = new StreamWriter(new FileStream(Path.Combine(csvRoot, CsvFileName(kind)),
+                FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan), new UTF8Encoding(false)))
             {
-                var relativePath = ((StringValue)record.Values["relative_path"]).Value;
-                var fullPath = Path.Combine(filesRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
-                Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
-                var bytes = SyntheticPayload(record);
-                var expectedHash = ((StringValue)record.Values["content_hash"]).Value;
-                Assert.Equal(expectedHash, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
-                await File.WriteAllBytesAsync(fullPath, bytes, TestContext.Current.CancellationToken);
+                await csv.WriteLineAsync(string.Join(';', mappings.Values.Select(EscapeCsv))).ConfigureAwait(false);
+                foreach (var record in records.Where(record => record.Kind == kind))
+                {
+                    TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+                    await csv.WriteLineAsync(string.Join(';', mappings.Keys.Select(field =>
+                        EscapeCsv(DatabaseText(record.Values[field]))))).ConfigureAwait(false);
+                    var relativePath = ((StringValue)record.Values["relative_path"]).Value;
+                    var fullPath = Path.Combine(filesRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                    Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+                    var bytes = SyntheticPayload(record);
+                    var expectedHash = ((StringValue)record.Values["content_hash"]).Value;
+                    Assert.Equal(expectedHash, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
+                    await File.WriteAllBytesAsync(fullPath, bytes, TestContext.Current.CancellationToken);
+                }
             }
         }
     }
@@ -752,6 +774,15 @@ public sealed class PensionExternalCorpusVerificationTests
     private static string EscapeCsv(string value) => value.IndexOfAny([';', '"', '\r', '\n']) < 0
         ? value
         : '"' + value.Replace("\"", "\"\"", StringComparison.Ordinal) + '"';
+
+    private static long CountProjectionSourceVisits(ScenarioGraph scenario, SourceCheckpoint checkpoint)
+    {
+        var countsByNode = checkpoint.Endpoints.ToDictionary(endpoint => endpoint.SourceNodeKey,
+            endpoint => endpoint.ArtifactCount, StringComparer.Ordinal);
+        var nodesById = scenario.Graph.Nodes.ToDictionary(node => node.Id);
+        return scenario.Graph.Edges.Where(edge => edge.Operation.Type != MigrationOperationType.Relationship)
+            .Sum(edge => countsByNode[nodesById[edge.Sources.Single()].Name]);
+    }
 
     private static long DirectorySize(string path) => Directory.Exists(path)
         ? Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories).Sum(file => new FileInfo(file).Length)
@@ -908,9 +939,10 @@ public sealed class PensionExternalCorpusVerificationTests
         Assert.True(await evidenceStore.VerifyIntegrityAsync(verification.Run.Id, TestContext.Current.CancellationToken));
         Assert.True(await recoveryStore.VerifyIntegrityAsync(recovery.Id, TestContext.Current.CancellationToken));
         var summary = await recoveryStore.ReadSummaryAsync(recovery.Id, TestContext.Current.CancellationToken);
-        await using var evidenceStream = await evidenceStore.OpenReadAsync(verification.Run.Id, TestContext.Current.CancellationToken);
-        using var evidenceDocument = await JsonDocument.ParseAsync(evidenceStream, cancellationToken: TestContext.Current.CancellationToken);
-        var report = PensionAssuranceReportBuilder.Build(projectName, recovery.Id, evidenceDocument.RootElement, summary);
+        var manifest = await evidenceStore.ReadManifestAsync(verification.Run.Id, TestContext.Current.CancellationToken);
+        var report = await PensionAssuranceReportBuilder.BuildAsync(projectName, recovery.Id, manifest,
+            evidenceStore.ReadRecordsAsync(verification.Run.Id, TestContext.Current.CancellationToken), summary,
+            TestContext.Current.CancellationToken);
         var reportDirectory = Path.Combine(projectDirectory, ".proofshift", "reports");
         Directory.CreateDirectory(reportDirectory);
         await File.WriteAllTextAsync(Path.Combine(reportDirectory, $"{report.DryRunId}.json"),
@@ -1029,29 +1061,33 @@ public sealed class PensionExternalCorpusVerificationTests
     }
 
     private static async Task BulkLoadSourceKindAsync(SqlConnection connection, PensionRecordKind kind,
-        IReadOnlyCollection<PensionSyntheticRecord> records)
+        IEnumerable<PensionSyntheticRecord> records)
     {
         var mappings = SourceColumnMappings(kind);
-        var table = new DataTable();
-        foreach (var column in mappings.Values) table.Columns.Add(column, typeof(string));
-        foreach (var record in records)
+        foreach (var batch in records.Chunk(5_000))
         {
-            var row = table.NewRow();
-            foreach (var (sourceField, databaseColumn) in mappings)
-                row[databaseColumn] = record.Values[sourceField] is NullValue
-                    ? DBNull.Value
-                    : DatabaseText(record.Values[sourceField]);
-            table.Rows.Add(row);
-        }
+            var table = new DataTable();
+            foreach (var column in mappings.Values) table.Columns.Add(column, typeof(string));
+            foreach (var record in batch)
+            {
+                TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+                var row = table.NewRow();
+                foreach (var (sourceField, databaseColumn) in mappings)
+                    row[databaseColumn] = record.Values[sourceField] is NullValue
+                        ? DBNull.Value
+                        : DatabaseText(record.Values[sourceField]);
+                table.Rows.Add(row);
+            }
 
-        using var bulkCopy = new SqlBulkCopy(connection)
-        {
-            DestinationTableName = $"dbo.{SourceTableName(kind)}",
-            BatchSize = 5_000,
-            BulkCopyTimeout = 0
-        };
-        foreach (var column in mappings.Values) bulkCopy.ColumnMappings.Add(column, column);
-        await bulkCopy.WriteToServerAsync(table, TestContext.Current.CancellationToken);
+            using var bulkCopy = new SqlBulkCopy(connection)
+            {
+                DestinationTableName = $"dbo.{SourceTableName(kind)}",
+                BatchSize = 5_000,
+                BulkCopyTimeout = 0
+            };
+            foreach (var column in mappings.Values) bulkCopy.ColumnMappings.Add(column, column);
+            await bulkCopy.WriteToServerAsync(table, TestContext.Current.CancellationToken);
+        }
     }
 
     private static Dictionary<string, string> SourceColumnMappings(PensionRecordKind kind) => kind switch

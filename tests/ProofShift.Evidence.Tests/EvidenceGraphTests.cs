@@ -38,17 +38,73 @@ public sealed class EvidenceGraphTests
         try
         {
             var graph = CreateGraph(new RunId(Guid.NewGuid()), DateTimeOffset.UtcNow);
+            graph = new EvidenceGraph(graph.VerificationRunId, graph.Records,
+                new EvidenceVerificationContext(new string('a', 64), new string('b', 64), Guid.NewGuid().ToString("D"),
+                    new string('c', 64), new string('d', 64), new string('e', 64)));
             var store = new FileSystemEvidenceStore(root);
             var receipt = await store.SaveAsync(graph, TestContext.Current.CancellationToken);
             Assert.True(await store.VerifyIntegrityAsync(graph.VerificationRunId, TestContext.Current.CancellationToken));
+            var manifest = await store.ReadManifestAsync(graph.VerificationRunId, TestContext.Current.CancellationToken);
+            Assert.True(manifest.Complete);
+            Assert.Equal(EvidenceFormat.CanonicalizationVersion, manifest.CanonicalizationVersion);
+            Assert.Equal(2, manifest.RecordCount);
+            Assert.Equal(graph.VerificationContext, manifest.VerificationContext);
+            var streamedRecords = 0;
+            await foreach (var _ in store.ReadRecordsAsync(graph.VerificationRunId, TestContext.Current.CancellationToken)
+                .WithCancellation(TestContext.Current.CancellationToken))
+                streamedRecords++;
+            Assert.Equal(2, streamedRecords);
 
-            var path = Path.Combine(root, receipt.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+            var path = Path.Combine(root, graph.VerificationRunId.Value.ToString("N"), "evidence.ndjson");
             await File.AppendAllTextAsync(path, "tampered", TestContext.Current.CancellationToken);
             Assert.False(await store.VerifyIntegrityAsync(graph.VerificationRunId, TestContext.Current.CancellationToken));
         }
         finally
         {
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task StreamingWriterPreservesFingerprintAndRejectsUnorderedIncompleteOutput()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-evidence-stream-test-{Guid.NewGuid():N}");
+        try
+        {
+            var graph = CreateGraph(new RunId(Guid.NewGuid()), DateTimeOffset.UtcNow);
+            var store = new FileSystemEvidenceStore(root);
+            var receipt = await store.SaveAsync(graph.VerificationRunId, graph.CanonicalizationVersion,
+                graph.Fingerprint, graph.Records.Count, graph.VerificationContext, StreamRecords(graph.Records), TestContext.Current.CancellationToken);
+
+            Assert.Equal(graph.Fingerprint, receipt.Fingerprint);
+            Assert.Equal(graph.Records.Count, receipt.RecordCount);
+            Assert.True(await store.VerifyIntegrityAsync(graph.VerificationRunId, TestContext.Current.CancellationToken));
+            var streamedIds = new List<string>();
+            await foreach (var record in store.ReadRecordsAsync(graph.VerificationRunId, TestContext.Current.CancellationToken)
+                .WithCancellation(TestContext.Current.CancellationToken))
+                streamedIds.Add(record.GetProperty("id").GetString()!);
+            Assert.Equal(graph.Records.Select(record => record.Id.Value.ToString("D")).Order(StringComparer.Ordinal), streamedIds);
+
+            var badRun = new RunId(Guid.NewGuid());
+            var badRoot = Path.Combine(root, "bad");
+            var descending = StreamRecords(graph.Records.Reverse());
+            await Assert.ThrowsAsync<InvalidDataException>(() => new FileSystemEvidenceStore(badRoot).SaveAsync(
+                badRun, graph.CanonicalizationVersion, graph.Fingerprint, graph.Records.Count, graph.VerificationContext, descending,
+                TestContext.Current.CancellationToken));
+            Assert.False(File.Exists(Path.Combine(badRoot, badRun.Value.ToString("N"), "manifest.json")));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static async IAsyncEnumerable<EvidenceRecord> StreamRecords(IEnumerable<EvidenceRecord> records)
+    {
+        foreach (var record in records)
+        {
+            yield return record;
+            await Task.Yield();
         }
     }
 

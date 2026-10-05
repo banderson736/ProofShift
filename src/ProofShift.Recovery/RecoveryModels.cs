@@ -158,8 +158,6 @@ public sealed record RecoveryEdgeAssessment
     public RecoveryValidationMode ValidationMode { get; }
     public long AffectedSourceArtifacts { get; }
     public long AffectedTargetArtifacts { get; }
-    public DomainList<GraphArtifactReference> Sources { get; }
-    public DomainList<GraphArtifactReference> Targets { get; }
     public DomainList<RecoveryAssessmentIssue> Issues { get; }
 
     public RecoveryEdgeAssessment(MigrationEdgeId edgeId, string edgeName, MigrationOperationType operation,
@@ -167,7 +165,6 @@ public sealed record RecoveryEdgeAssessment
         RecoveryMode? configuredMode, string? strategy, RecoveryCheckResult result, bool capabilityAvailable,
         bool capabilityValidated, bool isLossy, RecoveryRiskLevel risk, RecoveryValidationMode validationMode,
         long affectedSourceArtifacts, long affectedTargetArtifacts,
-        IEnumerable<GraphArtifactReference> sources, IEnumerable<GraphArtifactReference> targets,
         IEnumerable<RecoveryAssessmentIssue> issues)
     {
         EdgeId = edgeId;
@@ -187,8 +184,6 @@ public sealed record RecoveryEdgeAssessment
         ArgumentOutOfRangeException.ThrowIfNegative(affectedTargetArtifacts);
         AffectedSourceArtifacts = affectedSourceArtifacts;
         AffectedTargetArtifacts = affectedTargetArtifacts;
-        Sources = new DomainList<GraphArtifactReference>(sources);
-        Targets = new DomainList<GraphArtifactReference>(targets);
         Issues = new DomainList<RecoveryAssessmentIssue>(issues);
     }
 
@@ -238,14 +233,15 @@ public sealed record RecoveryCoverageSummary
     public long RecoverableArtifacts { get; }
     public long IrrecoverableArtifacts { get; }
     public long UnknownArtifacts { get; }
+    public long UnapprovedIrreversibleArtifacts { get; }
     public decimal? RecoverablePercentage { get; }
     public IReadOnlyDictionary<string, RecoverySemanticTypeCoverage> BySemanticType { get; }
 
-    public RecoveryCoverageSummary(IEnumerable<RecoveryEdgeAssessment> edges,
-        IEnumerable<RecoveryArtifactCoverage> artifacts)
+    public RecoveryCoverageSummary(IEnumerable<RecoveryEdgeAssessment> edges, long affectedArtifacts,
+        long recoverableArtifacts, long irrecoverableArtifacts, long unknownArtifacts,
+        long unapprovedIrreversibleArtifacts, IEnumerable<RecoverySemanticTypeCoverage> bySemanticType)
     {
         var edgeArray = edges.ToArray();
-        var artifactArray = artifacts.ToArray();
         ExecutedEdges = edgeArray.LongLength;
         ReverseEdges = edgeArray.LongCount(edge => edge.ConfiguredMode == RecoveryMode.Reverse);
         RestoreEdges = edgeArray.LongCount(edge => edge.ConfiguredMode == RecoveryMode.Restore);
@@ -253,21 +249,20 @@ public sealed record RecoveryCoverageSummary
         IrreversibleEdges = edgeArray.LongCount(edge => edge.ConfiguredMode == RecoveryMode.Irreversible);
         ValidatedEdges = edgeArray.LongCount(edge => edge.Result is RecoveryCheckResult.Pass or RecoveryCheckResult.NotApplicable);
         FailedEdges = edgeArray.LongCount(edge => edge.Result == RecoveryCheckResult.Fail);
-        AffectedArtifacts = artifactArray.LongLength;
-        RecoverableArtifacts = artifactArray.LongCount(artifact => artifact.Recoverable);
-        IrrecoverableArtifacts = artifactArray.LongCount(artifact => !artifact.Recoverable);
-        UnknownArtifacts = artifactArray.LongCount(artifact => !artifact.Covered);
+        ArgumentOutOfRangeException.ThrowIfNegative(affectedArtifacts);
+        ArgumentOutOfRangeException.ThrowIfNegative(recoverableArtifacts);
+        ArgumentOutOfRangeException.ThrowIfNegative(irrecoverableArtifacts);
+        ArgumentOutOfRangeException.ThrowIfNegative(unknownArtifacts);
+        ArgumentOutOfRangeException.ThrowIfNegative(unapprovedIrreversibleArtifacts);
+        AffectedArtifacts = affectedArtifacts;
+        RecoverableArtifacts = recoverableArtifacts;
+        IrrecoverableArtifacts = irrecoverableArtifacts;
+        UnknownArtifacts = unknownArtifacts;
+        UnapprovedIrreversibleArtifacts = unapprovedIrreversibleArtifacts;
         RecoverablePercentage = AffectedArtifacts == 0 ? null : decimal.Round(100m * RecoverableArtifacts / AffectedArtifacts, 4);
         BySemanticType = new System.Collections.ObjectModel.ReadOnlyDictionary<string, RecoverySemanticTypeCoverage>(
-            artifactArray.GroupBy(artifact => artifact.SemanticType, StringComparer.Ordinal)
-                .OrderBy(group => group.Key, StringComparer.Ordinal)
-                .ToDictionary(group => group.Key, group =>
-                {
-                    var affected = group.LongCount();
-                    var recoverable = group.LongCount(artifact => artifact.Recoverable);
-                    return new RecoverySemanticTypeCoverage(group.Key, affected, recoverable,
-                        affected == 0 ? null : decimal.Round(100m * recoverable / affected, 4));
-                }, StringComparer.Ordinal));
+            bySemanticType.OrderBy(item => item.SemanticType, StringComparer.Ordinal)
+                .ToDictionary(item => item.SemanticType, StringComparer.Ordinal));
     }
 }
 
@@ -282,14 +277,15 @@ public sealed record RecoveryAssessment
     public string Fingerprint { get; }
     public RecoveryCoverageSummary Coverage { get; }
     public DomainList<RecoveryEdgeAssessment> Edges { get; }
-    public DomainList<RecoveryArtifactCoverage> Artifacts { get; }
+    public VerificationLedgerStoreReceipt VerificationLedger { get; }
     public DomainList<RecoveryAssessmentIssue> Issues { get; }
     public DateTimeOffset StartedAt { get; }
     public DateTimeOffset CompletedAt { get; }
 
     public RecoveryAssessment(RecoveryAssessmentId id, RecoveryAssessmentState state, RecoveryAssessmentOutcome outcome,
         RecoveryExecutionBinding binding, string policyFingerprint, string fingerprint,
-        IEnumerable<RecoveryEdgeAssessment> edges, IEnumerable<RecoveryArtifactCoverage> artifacts,
+        IEnumerable<RecoveryEdgeAssessment> edges, RecoveryCoverageSummary coverage,
+        VerificationLedgerStoreReceipt verificationLedger,
         IEnumerable<RecoveryAssessmentIssue> issues, DateTimeOffset startedAt, DateTimeOffset completedAt)
     {
         Id = id;
@@ -299,9 +295,9 @@ public sealed record RecoveryAssessment
         PolicyFingerprint = Hash(policyFingerprint, nameof(policyFingerprint));
         Fingerprint = Hash(fingerprint, nameof(fingerprint));
         Edges = new DomainList<RecoveryEdgeAssessment>(edges.OrderBy(edge => edge.EdgeId.Value));
-        Artifacts = new DomainList<RecoveryArtifactCoverage>(artifacts.OrderBy(item => item.Target.NodeId.Value).ThenBy(item => item.Target.Artifact.Id.Value, StringComparer.Ordinal));
+        Coverage = coverage ?? throw new ArgumentNullException(nameof(coverage));
+        VerificationLedger = verificationLedger ?? throw new ArgumentNullException(nameof(verificationLedger));
         Issues = new DomainList<RecoveryAssessmentIssue>(issues);
-        Coverage = new RecoveryCoverageSummary(Edges, Artifacts);
         StartedAt = startedAt;
         CompletedAt = completedAt;
     }
@@ -325,14 +321,15 @@ public sealed record RecoveryPlanStep
     public string Operation { get; }
     public RecoveryMode? Mode { get; }
     public string Strategy { get; }
-    public DomainList<GraphArtifactReference> Scope { get; }
+    public long AffectedSourceArtifacts { get; }
+    public long AffectedTargetArtifacts { get; }
     public string Preconditions { get; }
     public string ExpectedOutcome { get; }
     public string ValidationMethod { get; }
 
     public RecoveryPlanStep(int sequence, MigrationEdge edge, SystemId systemId, StorageEndpointId endpointId,
-        string strategy, IEnumerable<GraphArtifactReference> scope, string preconditions, string expectedOutcome,
-        string validationMethod)
+        string strategy, long affectedSourceArtifacts, long affectedTargetArtifacts, string preconditions,
+        string expectedOutcome, string validationMethod)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sequence);
         Sequence = sequence;
@@ -343,7 +340,10 @@ public sealed record RecoveryPlanStep
         Operation = edge.Operation.Type.ToString();
         Mode = edge.Recovery?.Mode;
         Strategy = string.IsNullOrWhiteSpace(strategy) ? "reverse" : strategy.Trim();
-        Scope = new DomainList<GraphArtifactReference>(scope);
+        ArgumentOutOfRangeException.ThrowIfNegative(affectedSourceArtifacts);
+        ArgumentOutOfRangeException.ThrowIfNegative(affectedTargetArtifacts);
+        AffectedSourceArtifacts = affectedSourceArtifacts;
+        AffectedTargetArtifacts = affectedTargetArtifacts;
         Preconditions = Required(preconditions, nameof(preconditions));
         ExpectedOutcome = Required(expectedOutcome, nameof(expectedOutcome));
         ValidationMethod = Required(validationMethod, nameof(validationMethod));

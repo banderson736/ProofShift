@@ -131,3 +131,13 @@ PS-0.9 was accepted after Docker-backed [GitHub Actions run 37238973286, job 111
 Status: Accepted for PS-0.10A
 
 The private per-run Verification workspace uses SQLite WAL with `synchronous=NORMAL` and retains bounded transactions. Power loss may lose its latest committed scratch transactions, so incomplete Verification is rerun and never accepted. Final Evidence Graph persistence remains a separate durable operation. See `docs/adr/0015-disposable-verification-workspace-sqlite-profile.md`.
+
+### D-025 — SQL Server checkpoint consistency is explicit and endpoint-scoped
+Status: Accepted for PS-0.10A
+
+SQL Server checkpoint capture defaults to Observed. Transaction-consistent reads require explicit endpoint isolation; Serializable is opt-in, Snapshot is not enabled automatically, and any permitted downgrade is recorded in the checkpoint manifest. PostgreSQL retains repeatable-read semantics, and no endpoint policy claims cross-system atomicity. Snapshot manifest canonicalization is v2 to integrity-bind requested/effective strategy and downgrade metadata. See `docs/adr/0016-explicit-sqlserver-checkpoint-consistency.md`.
+
+### D-026 — Persist Verification ledgers and stream Evidence artifacts
+Status: Accepted for PS-0.10A
+
+Verification and Recovery consume a private indexed SQLite ledger rather than successful result-sized lineage/disposition/journal arrays. Recovery exposes aggregate coverage plus on-demand ledger queries. Filesystem Evidence uses a v2 manifest and streamed NDJSON segment with integrity hashes; successful source accounting uses population evidence while failures remain detailed. Generic typed ordering keys are materialized and indexed at workspace ingest. Evidence canonicalization is explicitly v2 for the population-evidence policy. See `docs/adr/0017-persisted-verification-ledgers-and-streaming-evidence.md`.

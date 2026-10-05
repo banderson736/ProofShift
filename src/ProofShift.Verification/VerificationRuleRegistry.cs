@@ -41,6 +41,7 @@ public sealed record VerificationRuleSet
 {
     public DomainList<VerificationRuleDefinition> Definitions { get; }
     public DomainList<IVerificationRule> Rules { get; }
+    public DomainList<VerificationOrderingKey> RequiredOrderingKeys { get; }
     public IReadOnlyDictionary<string, string> ProviderVersions { get; }
     public string Fingerprint { get; }
 
@@ -49,6 +50,9 @@ public sealed record VerificationRuleSet
     {
         Definitions = new DomainList<VerificationRuleDefinition>(definitions.OrderBy(item => item.Id.Value, StringComparer.Ordinal));
         Rules = new DomainList<IVerificationRule>(rules.OrderBy(item => item.Id.Value, StringComparer.Ordinal));
+        RequiredOrderingKeys = new DomainList<VerificationOrderingKey>(Rules.SelectMany(rule => rule.RequiredOrderingKeys)
+            .Distinct().OrderBy(key => key.SemanticType, StringComparer.Ordinal)
+            .ThenBy(key => key.Field, StringComparer.Ordinal).ThenBy(key => key.Role));
         ProviderVersions = new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(
             new SortedDictionary<string, string>(providerVersions.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal), StringComparer.Ordinal));
         Fingerprint = fingerprint;

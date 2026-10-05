@@ -6,6 +6,9 @@ storage:
     connector: sqlserver
     connection:
       secret: PS05_SQL_CONNECTION
+    checkpoint:
+      consistency: transaction-consistent
+      isolation: serializable
   member-documents:
     connector: files
     root:

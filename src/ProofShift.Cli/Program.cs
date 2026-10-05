@@ -374,6 +374,9 @@ internal static class Program
                 result.Checkpoint?.SourceFingerprint,
                 result.Checkpoint?.CrossSystemAtomic,
                 result.Checkpoint?.CaptureWindow.TotalMilliseconds,
+                result.Checkpoint?.Endpoints.Select(endpoint => new CheckpointConsistencyOutput(
+                    endpoint.SourceNodeKey, endpoint.RequestedConsistencyStrategy, endpoint.EffectiveConsistencyStrategy,
+                    endpoint.SourceConsistency.ToString().ToLowerInvariant(), endpoint.ConsistencyDowngrade)).ToArray() ?? [],
                 result.ExpectedSourceNodes,
                 result.CapturedSourceNodes,
                 result.CapturedArtifacts,
@@ -396,6 +399,11 @@ internal static class Program
                 Console.WriteLine($"Materialized Bytes: {output.CapturedBytes}");
                 if (output.CheckpointPath is not null) Console.WriteLine($"Path: {output.CheckpointPath}");
                 if (output.FailureCode is not null) Console.WriteLine($"Failure: {output.FailureCode}");
+                foreach (var endpoint in output.EndpointConsistency)
+                {
+                    Console.WriteLine($"{endpoint.Endpoint}: requested={endpoint.RequestedStrategy}; effective={endpoint.EffectiveStrategy}; guarantee={endpoint.Guarantee}");
+                    if (endpoint.Downgrade is not null) Console.WriteLine($"  Downgrade: {endpoint.Downgrade}");
+                }
                 if (output.CrossSystemAtomic is false) Console.WriteLine("Consistency: endpoint guarantees only; cross-system atomicity is not claimed.");
             }
 
@@ -693,6 +701,9 @@ internal static class Program
             result.Checkpoint?.Id.Value.ToString("N", CultureInfo.InvariantCulture),
             result.Checkpoint?.Checkpoint?.ManifestHash, result.Checkpoint?.Checkpoint?.SourceFingerprint,
             result.Checkpoint?.Checkpoint?.CrossSystemAtomic,
+            result.Checkpoint?.Checkpoint?.Endpoints.Select(endpoint => new CheckpointConsistencyOutput(
+                endpoint.SourceNodeKey, endpoint.RequestedConsistencyStrategy, endpoint.EffectiveConsistencyStrategy,
+                endpoint.SourceConsistency.ToString().ToLowerInvariant(), endpoint.ConsistencyDowngrade)).ToArray() ?? [],
             result.Projection?.Id.Value.ToString("D", CultureInfo.InvariantCulture),
             result.Projection?.Status.ToString().ToLowerInvariant(), result.Projection?.Fingerprint,
             recovery?.Assessment.Binding.ProjectionManifestHash,
@@ -734,6 +745,11 @@ internal static class Program
         Console.WriteLine($"Status: {output.CheckpointStatus?.ToUpperInvariant() ?? "NOT CREATED"}");
         if (output.CheckpointId is not null) Console.WriteLine($"Checkpoint: {output.CheckpointId}");
         if (output.CrossSystemAtomic is false) Console.WriteLine("Cross-System Atomic: NO");
+        foreach (var endpoint in output.EndpointConsistency)
+        {
+            Console.WriteLine($"{endpoint.Endpoint}: requested={endpoint.RequestedStrategy}; effective={endpoint.EffectiveStrategy}; guarantee={endpoint.Guarantee}");
+            if (endpoint.Downgrade is not null) Console.WriteLine($"  Downgrade: {endpoint.Downgrade}");
+        }
         Console.WriteLine();
         Console.WriteLine("PROJECTION");
         Console.WriteLine($"Status: {output.ProjectionStatus?.ToUpperInvariant() ?? "NOT CREATED"}");
@@ -904,9 +920,10 @@ internal static class Program
         var evidenceStore = new FileSystemEvidenceStore(Path.Combine(projectDirectory, ".proofshift", "verifications"));
         if (!await evidenceStore.VerifyIntegrityAsync(recovery.VerificationRunId, CancellationToken.None).ConfigureAwait(false))
             throw new InvalidDataException("Verification evidence integrity verification failed.");
-        await using var stream = await evidenceStore.OpenReadAsync(recovery.VerificationRunId, CancellationToken.None).ConfigureAwait(false);
-        using var document = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
-        return PensionAssuranceReportBuilder.Build(projectName, dryRunId, document.RootElement, recovery);
+        var manifest = await evidenceStore.ReadManifestAsync(recovery.VerificationRunId, CancellationToken.None).ConfigureAwait(false);
+        return await PensionAssuranceReportBuilder.BuildAsync(projectName, dryRunId, manifest,
+            evidenceStore.ReadRecordsAsync(recovery.VerificationRunId, CancellationToken.None), recovery,
+            CancellationToken.None).ConfigureAwait(false);
     }
 
     private static void WritePensionReport(PensionAssuranceReport report)
@@ -1025,19 +1042,29 @@ internal static class Program
                 return 1;
             }
 
-            await using var stream = await store.OpenReadAsync(new RunId(runGuid), CancellationToken.None).ConfigureAwait(false);
+            var runId = new RunId(runGuid);
+            var manifest = await store.ReadManifestAsync(runId, CancellationToken.None).ConfigureAwait(false);
             if (jsonOutput)
             {
-                using var document = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
-                Console.WriteLine(JsonSerializer.Serialize(document.RootElement, JsonOptions));
+                await using var output = Console.OpenStandardOutput();
+                await using var writer = new Utf8JsonWriter(output, new JsonWriterOptions { Indented = true });
+                writer.WriteStartObject();
+                writer.WritePropertyName("manifest");
+                JsonSerializer.Serialize(writer, manifest, JsonOptions);
+                writer.WritePropertyName("records");
+                writer.WriteStartArray();
+                await foreach (var record in store.ReadRecordsAsync(runId, CancellationToken.None).ConfigureAwait(false))
+                    record.WriteTo(writer);
+                writer.WriteEndArray();
+                writer.WriteEndObject();
+                await writer.FlushAsync().ConfigureAwait(false);
             }
             else
             {
-                using var document = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
                 Console.WriteLine("ProofShift Evidence Graph");
                 Console.WriteLine($"Run: {runGuid:D}");
-                Console.WriteLine($"Fingerprint: {document.RootElement.GetProperty("fingerprint").GetString()}");
-                Console.WriteLine($"Records: {document.RootElement.GetProperty("records").GetArrayLength()}");
+                Console.WriteLine($"Fingerprint: {manifest.Fingerprint}");
+                Console.WriteLine($"Records: {manifest.RecordCount.ToString(CultureInfo.InvariantCulture)}");
                 Console.WriteLine("Integrity: VERIFIED");
             }
             return 0;
@@ -1363,12 +1390,16 @@ internal static class Program
         string? SourceFingerprint,
         bool? CrossSystemAtomic,
         double? CaptureWindowMilliseconds,
+        CheckpointConsistencyOutput[] EndpointConsistency,
         int ExpectedSourceNodes,
         int CapturedSourceNodes,
         long CapturedArtifacts,
         long CapturedBytes,
         string? FailureCode,
         string? CheckpointPath);
+
+    private sealed record CheckpointConsistencyOutput(string Endpoint, string RequestedStrategy,
+        string EffectiveStrategy, string Guarantee, string? Downgrade);
 
     private sealed record ValidationOutput(
         bool Valid,
@@ -1449,6 +1480,7 @@ internal static class Program
         string? CheckpointManifestHash,
         string? SourceFingerprint,
         bool? CrossSystemAtomic,
+        CheckpointConsistencyOutput[] EndpointConsistency,
         string? ProjectionRunId,
         string? ProjectionStatus,
         string? ProjectionFingerprint,

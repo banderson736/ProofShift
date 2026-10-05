@@ -230,8 +230,19 @@ public interface IVerificationRule
     RuleId Id { get; }
     string Version { get; }
     VerificationScope Scope { get; }
+    IReadOnlyCollection<VerificationOrderingKey> RequiredOrderingKeys => [];
     IAsyncEnumerable<VerificationFinding> EvaluateAsync(VerificationExecutionContext context, CancellationToken cancellationToken);
 }
+
+public enum VerificationOrderingRole
+{
+    Grouping,
+    Ordering,
+    Lookup
+}
+
+public sealed record VerificationOrderingKey(string SemanticType, string Field,
+    VerificationOrderingRole Role, bool Descending = false);
 
 public sealed record VerificationJournalEntry
 {
@@ -330,6 +341,19 @@ public interface IVerificationWorkspace : IAsyncDisposable
     IAsyncEnumerable<VerificationArtifactRecord> ReadArtifactRecordsAsync(VerificationArtifactRole role,
         string? nodeKey, string? semanticType, CancellationToken cancellationToken,
         IReadOnlyCollection<string>? orderByFields = null);
+    IAsyncEnumerable<VerificationArtifactRecord> ReadArtifactRecordsByKeysAsync(VerificationArtifactRole role,
+        string? nodeKey, string? semanticType, IReadOnlyCollection<VerificationOrderingKey> orderByKeys,
+        CancellationToken cancellationToken) =>
+        ReadArtifactRecordsAsync(role, nodeKey, semanticType, cancellationToken,
+            orderByKeys.Select(key => key.Field).ToArray());
+    async Task<bool> ContainsFieldValueAsync(VerificationArtifactRole role, string nodeKey, string semanticType,
+        string field, ValueNode value, CancellationToken cancellationToken)
+    {
+        await foreach (var record in ReadArtifactRecordsAsync(role, nodeKey, semanticType, cancellationToken)
+            .WithCancellation(cancellationToken).ConfigureAwait(false))
+            if (record.Values.TryGetValue(field, out var actual) && Equals(actual, value)) return true;
+        return false;
+    }
     IAsyncEnumerable<VerificationTargetFact> ReadMaterializedJournalTargetsAsync(CancellationToken cancellationToken);
     IAsyncEnumerable<VerificationTargetFact> ReadGraphDerivedTargetFactsAsync(CancellationToken cancellationToken);
     IAsyncEnumerable<VerificationTargetFact> ReadMissingGraphDerivedTargetFactsAsync(CancellationToken cancellationToken);
@@ -510,8 +534,7 @@ public sealed record VerificationRuntimeFingerprint
 }
 
 public sealed record VerificationResult(VerificationRunRecord Run, Evidence.EvidenceGraph EvidenceGraph,
-    IReadOnlyList<ArtifactDispositionRecord> Dispositions, IReadOnlyList<LineageRecord> Lineage,
-    IReadOnlyList<VerificationFinding> Findings, IReadOnlyList<VerificationJournalEntry> JournalEntries);
+    IReadOnlyList<VerificationFinding> Findings, VerificationLedgerStoreReceipt Ledger);
 
 public sealed record ExternalVerificationRunRecord(RunId Id, string ObservationId, RunId ObservationRunId,
     string ConfigurationHash, string GraphHash, CheckpointId CheckpointId, string CheckpointManifestHash,
@@ -520,5 +543,4 @@ public sealed record ExternalVerificationRunRecord(RunId Id, string ObservationI
     int RulesExecuted, int FailedRules, int WarningRules, DateTimeOffset StartedAt, DateTimeOffset CompletedAt);
 
 public sealed record ExternalVerificationResult(ExternalVerificationRunRecord Run, Evidence.EvidenceGraph EvidenceGraph,
-    IReadOnlyList<ArtifactDispositionRecord> Dispositions, IReadOnlyList<LineageRecord> ExpectedLineage,
-    IReadOnlyList<VerificationFinding> Findings);
+    IReadOnlyList<VerificationFinding> Findings, VerificationLedgerStoreReceipt Ledger);

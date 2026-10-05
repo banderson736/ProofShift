@@ -100,6 +100,9 @@ internal static class SnapshotManifestCodec
             endpoint.CaptureStartedAt.ToString("O", CultureInfo.InvariantCulture),
             endpoint.CaptureCompletedAt.ToString("O", CultureInfo.InvariantCulture),
             endpoint.SourceConsistency.ToString().ToLowerInvariant(),
+            endpoint.RequestedConsistencyStrategy,
+            endpoint.EffectiveConsistencyStrategy,
+            endpoint.ConsistencyDowngrade,
             endpoint.Guarantee.ToString().ToLowerInvariant(),
             endpoint.Replayable,
             endpoint.ArtifactCount,
@@ -129,7 +132,10 @@ internal static class SnapshotManifestCodec
             endpoint.SourceFingerprint,
             endpoint.SegmentReference,
             endpoint.SegmentSha256,
-            endpoint.SegmentLength)).ToArray();
+            endpoint.SegmentLength,
+            endpoint.RequestedConsistencyStrategy,
+            endpoint.EffectiveConsistencyStrategy,
+            endpoint.ConsistencyDowngrade)).ToArray();
 
         return new SourceCheckpoint(
             new CheckpointId(Guid.ParseExact(document.CheckpointId, "N")),
@@ -181,6 +187,9 @@ internal static class SnapshotManifestCodec
         string CaptureStartedAt,
         string CaptureCompletedAt,
         string SourceConsistency,
+        string RequestedConsistencyStrategy,
+        string EffectiveConsistencyStrategy,
+        string? ConsistencyDowngrade,
         string Guarantee,
         bool Replayable,
         long ArtifactCount,

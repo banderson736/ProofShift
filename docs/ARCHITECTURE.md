@@ -135,6 +135,8 @@ PS-0.4 inspection orchestration lives in `ProofShift.Engine` and resolves only `
 
 Relational selectors are validated identifier sets, never arbitrary SQL. Reads are ordered by configured or discovered identity fields and stream records. Filesystem/CSV paths are endpoint-relative; file content hashes and large relational binary hashes are streamed. CSV identity collision checks use a temporary disk-backed fingerprint index.
 
+Relational read streams are physically fetched according to the provider's `DbDataReader` behavior; ProofShift does not promise a configurable fetch size. `ReadOptions` carries only supported partition selection. Relational partitioning is currently rejected explicitly, and connector streaming remains one record at a time with cancellation and deterministic identity ordering.
+
 ## Migration Graph
 
 The Migration Graph describes how information moves and changes.
@@ -195,6 +197,12 @@ readiness decision
 Each evidence record includes rule/version, expected/actual state, inputs, timestamp, run, and explanation.
 
 Evidence may reference artifacts or other evidence records.
+
+### PS-0.10A persistence and scale boundary
+
+The private Verification workspace is not the long-lived lineage/disposition API. A separate per-run SQLite ledger stores opaque artifact IDs and graph-node scopes, supports indexed queries and deterministic streams, and is reopened by receipt during Recovery. Successful `VerificationResult` values carry summary data and the ledger receipt rather than full lineage/disposition/journal collections. Recovery stores edge counts and aggregate coverage; individual target coverage is queried from the ledger on demand.
+
+The filesystem Evidence store uses `manifest.json` plus `evidence.ndjson` (store format v2). It streams one serialized record at a time, hashes the segment incrementally, writes a completion manifest last, and verifies both manifest and segment before exposing records. Clean source accounting is a population PASS with migrated/excluded counts; detailed failures remain artifact-specific. Evidence canonicalization v2 identifies this evidence policy. The current Verification orchestrator still constructs its bounded-by-findings `EvidenceGraph` before store persistence; the scalable policy avoids one success object per artifact, while high-failure runs and rule-specific findings may still grow with failure count.
 
 ## Recovery Model
 
@@ -310,7 +318,9 @@ PS-0.6 implements a replayable logical checkpoint for the exact source nodes in 
 
 Structured records are streamed to versioned NDJSON segments. Binary values are copied to SHA-256-addressed blobs with bounded buffers and length/hash verification. The manifest records configuration/graph hashes, source-node selector hashes, endpoint consistency, capture start/completion, artifact/byte counts, endpoint/source fingerprints, segment hashes, aggregate capture interval, and `CrossSystemAtomic`. A checkpoint becomes `Complete` only after every required segment and the canonical manifest are finalized. Failed/cancelled data may remain for diagnosis but is never replayable.
 
-PostgreSQL checkpoint reads use repeatable-read transactions; SQL Server reads use serializable transactions. These are per-endpoint provider guarantees, not guarantees about inspection performed before the transaction. Filesystem and CSV are `Observed`: the filesystem compares a matched-file inventory around the read, and CSV compares file state/hash around logical-row parsing. For mixed endpoints, cross-system atomicity is false and the aggregate time window is reported.
+PostgreSQL checkpoint reads use repeatable-read transactions. SQL Server defaults to `Observed`; transaction-consistent capture requires explicit endpoint policy and an explicit `snapshot` or `serializable` isolation choice. `read-committed` is reported as `Observed` and may only be used as an explicit downgrade. ProofShift never enables SQL Server database snapshot settings automatically and never silently escalates locking. Requested/effective strategies, guarantees, and downgrades are integrity-bound in the v2 checkpoint manifest. These are per-endpoint provider guarantees, not guarantees about inspection performed before the transaction. Filesystem and CSV are `Observed`: the filesystem compares a matched-file inventory around the read, and CSV compares file state/hash around logical-row parsing. For mixed endpoints, cross-system atomicity is false and the aggregate time window is reported.
+
+Relational `ReadOptions` does not expose a fetch-size promise. Physical row fetching follows provider streaming behavior; ProofShift consumes `DbDataReader` rows incrementally, maintains deterministic identity ordering, and propagates cancellation. Partition selection remains explicitly unsupported until a provider-backed partition model is implemented.
 
 Checkpoint-backed Projection validates the current configuration hash, compiled graph hash, exact source-node set, endpoint identity, and selector hash before preparing destinations. It verifies manifest, segments, source fingerprints, and binary blobs before replay. The provider has no live-connector fallback, and original artifact identity/provenance is retained with additive checkpoint provenance. `proofshift project --checkpoint` therefore cannot mix checkpoint and live source reads.
 
@@ -355,9 +365,9 @@ Every source has disposition; every target has lineage.
 ### Recovery
 Recovery coverage and destructive-operation readiness.
 
-PS-0.9 adds `VerificationArtifactRecord` as a generic typed source/expected-target/actual-target observation returned through `IVerificationWorkspace.ReadArtifactRecordsAsync`. The temporary SQLite workspace stores a private typed representation for the duration of verification and can order streams by configured normalized fields. Domain rules merge ordered groups and release each group before advancing, avoiding whole-transaction materialization in memory. The interface and workspace contain no pension concepts; pension rules remain in `ProofShift.Packs.Pension`. Evidence still stores only safe values/fingerprints and graph-scoped references.
+PS-0.9 adds `VerificationArtifactRecord` as a generic typed source/expected-target/actual-target observation returned through `IVerificationWorkspace.ReadArtifactRecordsAsync`. The temporary SQLite workspace stores a private typed representation for the duration of verification. PS-0.10A materializes normalized typed ordering keys into a generic indexed table and reads multi-field ordered streams without correlated JSON extraction. Domain rules merge ordered groups and release each group before advancing, avoiding whole-transaction materialization in memory. The interface and workspace contain no pension schema; rule metadata declares pack-neutral grouping/ordering requirements. Evidence still stores safe values/fingerprints and graph-scoped references.
 
-The CLI `report` consumes the persisted Verification Evidence Graph and integrity-checked Recovery summary. It requires exact Verification run/evidence/configuration/graph binding and derives exception counts from evidence records. `compare` compares persisted report projections and uses fingerprints for supported difference attribution; it does not recalculate verification.
+The CLI `report` consumes the persisted Verification Evidence stream and integrity-checked Recovery summary. It requires exact Verification run/evidence/configuration/graph binding and derives exception counts incrementally from evidence records. `compare` compares persisted report projections and uses fingerprints for supported difference attribution; it does not recalculate verification.
 
 ## Observability
 

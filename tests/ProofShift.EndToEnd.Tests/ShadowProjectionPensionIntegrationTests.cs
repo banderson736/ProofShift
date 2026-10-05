@@ -203,8 +203,8 @@ public sealed class ShadowProjectionPensionIntegrationTests
                 Path.Combine(projectRoot, ".proofshift", "temporary"), "0.1.0", targetRuntimes,
                 TestContext.Current.CancellationToken);
             Assert.Equal(VerificationOutcome.Passed, clean.Run.Outcome);
-            Assert.Equal(21, clean.Dispositions.Count);
-            Assert.Equal(31, clean.Lineage.Count);
+            Assert.Equal(21, clean.Ledger.DispositionCount);
+            Assert.Equal(31, clean.Ledger.LineageCount);
 
             using (var cancelled = new CancellationTokenSource())
             {
@@ -295,6 +295,15 @@ public sealed class ShadowProjectionPensionIntegrationTests
             Assert.Equal(31, recovery.Assessment.Coverage.AffectedArtifacts);
             Assert.Equal(31, recovery.Assessment.Coverage.RecoverableArtifacts);
             Assert.NotEmpty(recovery.Assessment.Coverage.BySemanticType);
+            var streamedCoverageCount = 0;
+            await foreach (var item in RecoveryService.ReadArtifactCoverageAsync(projectRoot, graph, recovery.Assessment,
+                TestContext.Current.CancellationToken).WithCancellation(TestContext.Current.CancellationToken))
+            {
+                Assert.True(item.Covered);
+                Assert.True(item.Recoverable);
+                streamedCoverageCount++;
+            }
+            Assert.Equal(31, streamedCoverageCount);
 
             var repeatedRecovery = await recoveryService.AssessAndRehearseAsync(configuration, graph, binding, repaired,
                 new EffectiveRecoveryPolicy(), targetRuntimes, projectRoot, TestContext.Current.CancellationToken);
@@ -719,11 +728,11 @@ public sealed class ShadowProjectionPensionIntegrationTests
             Assert.DoesNotContain(postgresContainer.GetConnectionString(), verification.StandardOutput, StringComparison.Ordinal);
             using var verificationJson = JsonDocument.Parse(verification.StandardOutput);
             Assert.Equal("passed", verificationJson.RootElement.GetProperty("outcome").GetString());
-            Assert.Equal(57, verificationJson.RootElement.GetProperty("findings").GetInt32());
+            Assert.Equal(9, verificationJson.RootElement.GetProperty("findings").GetInt32());
             var verificationRunId = verificationJson.RootElement.GetProperty("runId").GetString();
             var evidence = await RunCliAsync(cli, fixture, environment, "evidence", "--run", verificationRunId!, "--json");
             Assert.Equal(0, evidence.ExitCode);
-            Assert.Contains("proofshift-evidence-store-v1", evidence.StandardOutput, StringComparison.Ordinal);
+            Assert.Contains("proofshift-evidence-store-v2", evidence.StandardOutput, StringComparison.Ordinal);
         }
         finally
         {
@@ -763,7 +772,8 @@ public sealed class ShadowProjectionPensionIntegrationTests
     {
         var source = new SystemDefinition(new SystemId("legacy-pension"), "Synthetic Legacy Pension", SystemRole.Source,
         [
-            Endpoint("member-database", "sqlserver", ("connection", "secret:PS05_SQL_CONNECTION")),
+            Endpoint("member-database", "sqlserver", ("connection", "secret:PS05_SQL_CONNECTION"),
+                ("checkpoint.consistency", "transaction-consistent"), ("checkpoint.isolation", "serializable")),
             Endpoint("member-documents", "files", ("root", "env:PS05_SOURCE_FILES")),
             Endpoint("supplemental-members", "csv", ("root", "env:PS05_SOURCE_CSV"))
         ]);

@@ -73,7 +73,9 @@ public sealed class RecoveryAnalysisTests
             [new MigrationEdgeId(Guid.NewGuid())], [RecoveryMode.Irreversible], covered: true,
             recoverable: false, approvedIrreversible: true, reason: "Explicitly approved irreversible target state.");
 
-        var summary = new RecoveryCoverageSummary([], [assessment]);
+        var summary = new RecoveryCoverageSummary([], affectedArtifacts: 1, recoverableArtifacts: 0,
+            irrecoverableArtifacts: 1, unknownArtifacts: 0, unapprovedIrreversibleArtifacts: 0,
+            bySemanticType: [new RecoverySemanticTypeCoverage("Pension.Member", 1, 0, 0m)]);
 
         Assert.Equal(1, summary.AffectedArtifacts);
         Assert.Equal(0, summary.RecoverableArtifacts);

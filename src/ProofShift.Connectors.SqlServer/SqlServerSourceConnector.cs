@@ -2,6 +2,7 @@ using System.Data.Common;
 using System.Data;
 using Microsoft.Data.SqlClient;
 using ProofShift.Connectors.Abstractions;
+using ProofShift.Domain;
 
 namespace ProofShift.Connectors.SqlServer;
 
@@ -11,7 +12,48 @@ public sealed class SqlServerSourceConnector : RelationalSourceConnectorBase
     {
     }
 
-    protected override IsolationLevel? CheckpointIsolationLevel => IsolationLevel.Serializable;
+    public override CheckpointConsistencyDecision ResolveCheckpointConsistency(ConnectorContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var requested = GetOptional(context, "checkpoint.consistency") ?? "observed";
+        if (string.Equals(requested, "observed", StringComparison.OrdinalIgnoreCase))
+        {
+            if (GetOptional(context, "checkpoint.isolation") is not null)
+                throw new ConnectorConfigurationException(ConnectorIssueCodes.MissingConfiguration,
+                    "SQL Server checkpoint isolation requires checkpoint.consistency: transaction-consistent.");
+            return new CheckpointConsistencyDecision("observed", "observed", SourceConsistencyGuarantee.Observed, null, null);
+        }
+
+        if (!string.Equals(requested, "transaction-consistent", StringComparison.OrdinalIgnoreCase))
+            throw new ConnectorConfigurationException(ConnectorIssueCodes.MissingConfiguration,
+                "SQL Server checkpoint.consistency must be observed or transaction-consistent.");
+
+        var isolationName = GetOptional(context, "checkpoint.isolation")
+            ?? throw new ConnectorConfigurationException(ConnectorIssueCodes.MissingConfiguration,
+                "Transaction-consistent SQL Server checkpoints require an explicit checkpoint.isolation.");
+        var allowDowngrade = GetOptional(context, "checkpoint.allowDowngrade");
+        var downgradeAllowed = allowDowngrade is not null && bool.TryParse(allowDowngrade, out var parsedAllow) && parsedAllow;
+        var isolation = isolationName.ToLowerInvariant() switch
+        {
+            "snapshot" => IsolationLevel.Snapshot,
+            "serializable" => IsolationLevel.Serializable,
+            "read-committed" when downgradeAllowed => IsolationLevel.ReadCommitted,
+            "read-committed" => throw new ConnectorConfigurationException(ConnectorIssueCodes.MissingConfiguration,
+                "Read-committed does not provide a transaction-consistent checkpoint guarantee; explicitly allow downgrade to use it."),
+            _ => throw new ConnectorConfigurationException(ConnectorIssueCodes.MissingConfiguration,
+                "SQL Server checkpoint.isolation must be snapshot, serializable, or explicitly downgraded read-committed.")
+        };
+        var guarantee = isolation == IsolationLevel.ReadCommitted
+            ? SourceConsistencyGuarantee.Observed : SourceConsistencyGuarantee.Consistent;
+        var downgrade = guarantee == SourceConsistencyGuarantee.Observed
+            ? "Requested transaction-consistent capture was explicitly downgraded to observed using read-committed."
+            : null;
+        return new CheckpointConsistencyDecision("transaction-consistent", NormalizeIsolationName(isolation),
+            guarantee, downgrade, isolation);
+    }
+
+    private static string? GetOptional(ConnectorContext context, string key) =>
+        context.Configuration.TryGet(key, out var setting) ? setting.UseValue(value => value.Trim()) : null;
 
     protected override string ColumnsSql => """
         SELECT columns.name, types.name, columns.is_nullable, columns.column_id

@@ -29,6 +29,19 @@ public sealed class PerformanceRecorder
         return new PerformanceStageScope(this, kind, name, connectorId, nodeKey, edgeName, ruleId);
     }
 
+    public void RecordMeasuredStage(PerformanceStageKind kind, string name, long elapsedMicroseconds,
+        long artifactCount = 0, long byteCount = 0, IEnumerable<PerformanceMeasurement>? measurements = null)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _completed) != 0, this);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentOutOfRangeException.ThrowIfNegative(elapsedMicroseconds);
+        ArgumentOutOfRangeException.ThrowIfNegative(artifactCount);
+        ArgumentOutOfRangeException.ThrowIfNegative(byteCount);
+        _stages.Enqueue(new PerformanceStage(kind, name.Trim(), elapsedMicroseconds, artifactCount, byteCount,
+            null, null, null, null, (measurements ?? []).ToArray()));
+        SampleWorkingSet();
+    }
+
     public PerformanceRun Complete(long temporaryWorkspacePeakBytes = 0)
     {
         if (Interlocked.Exchange(ref _completed, 1) != 0)

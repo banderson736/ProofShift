@@ -42,6 +42,9 @@ public sealed record CheckpointEndpoint
     public DateTimeOffset CaptureStartedAt { get; }
     public DateTimeOffset CaptureCompletedAt { get; }
     public SourceConsistencyGuarantee SourceConsistency { get; }
+    public string RequestedConsistencyStrategy { get; }
+    public string EffectiveConsistencyStrategy { get; }
+    public string? ConsistencyDowngrade { get; }
     public CheckpointGuarantee Guarantee { get; }
     public bool Replayable { get; }
     public long ArtifactCount { get; }
@@ -69,7 +72,10 @@ public sealed record CheckpointEndpoint
         string sourceFingerprint,
         string segmentReference,
         string segmentSha256,
-        long segmentLength)
+        long segmentLength,
+        string? requestedConsistencyStrategy = null,
+        string? effectiveConsistencyStrategy = null,
+        string? consistencyDowngrade = null)
     {
         SourceNodeKey = DomainGuard.Required(sourceNodeKey, nameof(sourceNodeKey));
         SystemId = DomainGuard.Required(systemId, nameof(systemId));
@@ -91,6 +97,13 @@ public sealed record CheckpointEndpoint
         CaptureStartedAt = captureStartedAt;
         CaptureCompletedAt = captureCompletedAt;
         SourceConsistency = sourceConsistency;
+        RequestedConsistencyStrategy = DomainGuard.Required(requestedConsistencyStrategy ??
+            (sourceConsistency == SourceConsistencyGuarantee.Consistent ? "transaction-consistent" : "observed"),
+            nameof(requestedConsistencyStrategy));
+        EffectiveConsistencyStrategy = DomainGuard.Required(effectiveConsistencyStrategy ??
+            (sourceConsistency == SourceConsistencyGuarantee.Consistent ? "provider-default" : "observed"),
+            nameof(effectiveConsistencyStrategy));
+        ConsistencyDowngrade = string.IsNullOrWhiteSpace(consistencyDowngrade) ? null : consistencyDowngrade.Trim();
         Guarantee = guarantee;
         Replayable = replayable;
         ArtifactCount = artifactCount;

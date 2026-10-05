@@ -10,14 +10,23 @@ public abstract class PensionRuleBase(VerificationRuleDefinition definition) : V
 {
     protected sealed record PensionRecordGroup(string Key, IReadOnlyList<VerificationArtifactRecord> Records);
 
+    public override IReadOnlyCollection<VerificationOrderingKey> RequiredOrderingKeys => Definition.Options
+        .Where(pair => pair.Key.EndsWith("Field", StringComparison.Ordinal) || pair.Key is "groupBy" or "businessKey")
+        .SelectMany(pair => pair.Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(orderingField => new VerificationOrderingKey(Option("semanticType"), orderingField,
+                pair.Key is "groupBy" or "businessKey" ? VerificationOrderingRole.Grouping : VerificationOrderingRole.Ordering)))
+        .Distinct().OrderBy(key => key.SemanticType, StringComparer.Ordinal).ThenBy(key => key.Field, StringComparer.Ordinal).ToArray();
+
     protected static async IAsyncEnumerable<PensionRecordGroup> ReadRecordGroupsAsync(VerificationExecutionContext context,
         VerificationArtifactRole role, string node, string semanticType, string[] groupFields,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         string? currentKey = null;
         var group = new List<VerificationArtifactRecord>();
-        await foreach (var record in context.Workspace.ReadArtifactRecordsAsync(role, node, semanticType,
-            cancellationToken, groupFields).WithCancellation(cancellationToken).ConfigureAwait(false))
+        var orderingKeys = groupFields.Select(field => new VerificationOrderingKey(semanticType, field,
+            VerificationOrderingRole.Grouping)).ToArray();
+        await foreach (var record in context.Workspace.ReadArtifactRecordsByKeysAsync(role, node, semanticType,
+            orderingKeys, cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var key = groupFields.Length == 0 ? record.Artifact.Identity : CompositeKey(record, groupFields);
@@ -543,13 +552,9 @@ public sealed class BeneficiaryRelationshipRule(VerificationRuleDefinition defin
         var tolerance = Tolerance("allocationTolerance");
         var expected = ReadRecordGroupsAsync(context, VerificationArtifactRole.ExpectedTarget, TargetNode, semantic, [keyField], cancellationToken);
         var actual = ReadRecordGroupsAsync(context, VerificationArtifactRole.ActualTarget, TargetNode, semantic, [keyField], cancellationToken);
-        var knownMembers = new HashSet<string>(StringComparer.Ordinal);
-        if (!string.IsNullOrWhiteSpace(Option("memberNode")))
-        {
-            var members = ReadRecordGroupsAsync(context, VerificationArtifactRole.ActualTarget, Option("memberNode"),
-                Option("memberSemanticType", "Pension.Member"), [Option("memberBusinessKey", "member_id")], cancellationToken);
-            await foreach (var member in members.WithCancellation(cancellationToken).ConfigureAwait(false)) knownMembers.Add(member.Key);
-        }
+        var memberNode = Option("memberNode");
+        var memberSemantic = Option("memberSemanticType", "Pension.Member");
+        var memberBusinessKey = Option("memberBusinessKey", "member_id");
         var errors = 0;
         await foreach (var pair in MergeGroupsAsync(expected, actual, cancellationToken).ConfigureAwait(false))
         {
@@ -571,7 +576,9 @@ public sealed class BeneficiaryRelationshipRule(VerificationRuleDefinition defin
             var expectedMember = FieldText(expectedRelationship, memberField);
             var actualMember = FieldText(actualRelationship, memberField);
             var wrongMember = !string.Equals(expectedMember, actualMember, StringComparison.Ordinal);
-            var missingMember = knownMembers.Count > 0 && !knownMembers.Contains(actualMember);
+            var missingMember = memberNode.Length > 0 && !await context.Workspace.ContainsFieldValueAsync(
+                VerificationArtifactRole.ActualTarget, memberNode, memberSemantic, memberBusinessKey,
+                new StringValue(actualMember), cancellationToken).ConfigureAwait(false);
             var wrongType = relationField.Length > 0 && !string.Equals(FieldText(expectedRelationship, relationField), FieldText(actualRelationship, relationField), StringComparison.Ordinal);
             var expectedAllocation = DecimalValue(expectedRelationship, allocationField);
             var actualAllocation = DecimalValue(actualRelationship, allocationField);

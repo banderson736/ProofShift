@@ -35,7 +35,9 @@ public sealed class ExternalTargetVerificationTests
         await using var postgresCleanup = postgresContainer;
         var sourceSystem = new SystemDefinition(new SystemId("legacy"), "Synthetic Legacy", SystemRole.Source,
             [new StorageEndpointDefinition(new StorageEndpointId("source-store"), new ConnectorId("sqlserver"),
-                [new KeyValuePair<string, string>("connection", $"secret:{SourceSecret}")])]);
+                [new KeyValuePair<string, string>("connection", $"secret:{SourceSecret}"),
+                 new KeyValuePair<string, string>("checkpoint.consistency", "transaction-consistent"),
+                 new KeyValuePair<string, string>("checkpoint.isolation", "serializable")])]);
         var targetSystem = new SystemDefinition(new SystemId("shadow"), "Externally Loaded Target", SystemRole.ShadowTarget,
             [new StorageEndpointDefinition(new StorageEndpointId("target-store"), new ConnectorId("postgres"),
                 [new KeyValuePair<string, string>("connection", $"secret:{TargetSecret}")])]);
@@ -126,10 +128,22 @@ public sealed class ExternalTargetVerificationTests
                 string.Join(Environment.NewLine, result.Findings.Where(finding => finding.Result == EvidenceResult.Fail)
                     .Select(finding => $"{finding.Code}: {finding.Explanation} [{finding.StableKey}]")));
             Assert.Equal("vendor-conversion-42", result.Run.ObservationId);
-            var disposition = Assert.Single(result.Dispositions);
+            Assert.Equal(1, result.Ledger.DispositionCount);
+            Assert.Equal(1, result.Ledger.LineageCount);
+            await using var verificationLedger = await SqliteVerificationLedgerStore.OpenAsync(
+                Path.Combine(directory, "working"), result.Ledger, TestContext.Current.CancellationToken);
+            await using var dispositionReader = verificationLedger.ReadDispositionsAsync(TestContext.Current.CancellationToken)
+                .GetAsyncEnumerator(TestContext.Current.CancellationToken);
+            Assert.True(await dispositionReader.MoveNextAsync());
+            var disposition = dispositionReader.Current;
             Assert.Equal(ArtifactDisposition.Transformed, disposition.Disposition);
-            var lineage = Assert.Single(result.ExpectedLineage);
+            Assert.False(await dispositionReader.MoveNextAsync());
+            await using var lineageReader = verificationLedger.ReadLineageAsync(TestContext.Current.CancellationToken)
+                .GetAsyncEnumerator(TestContext.Current.CancellationToken);
+            Assert.True(await lineageReader.MoveNextAsync());
+            var lineage = lineageReader.Current;
             Assert.Equal(LineageBasis.GraphDerivedExpected, lineage.Basis);
+            Assert.False(await lineageReader.MoveNextAsync());
             var observationFinding = Assert.Single(result.Findings, finding => finding.Code == "ExternalTargetObserved");
             Assert.Equal("ProofShift independently observed externally populated target state; this observation does not claim ProofShift executed the migration.",
                 observationFinding.Explanation);

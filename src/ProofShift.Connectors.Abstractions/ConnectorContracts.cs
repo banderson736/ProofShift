@@ -144,17 +144,10 @@ public sealed record SourceInspection
 
 public sealed record ReadOptions
 {
-    public int BatchSize { get; }
     public IReadOnlyDictionary<string, string> Partition { get; }
 
-    public ReadOptions(int batchSize = 512, IReadOnlyDictionary<string, string>? partition = null)
+    public ReadOptions(IReadOnlyDictionary<string, string>? partition = null)
     {
-        if (batchSize <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(batchSize), "Batch size must be positive.");
-        }
-
-        BatchSize = batchSize;
         var partitionValues = new SortedDictionary<string, string>(StringComparer.Ordinal);
         if (partition is not null)
         {
@@ -188,6 +181,10 @@ public interface ISourceConnector
 public interface ICheckpointSourceConnector : ISourceConnector
 {
     SourceConsistencyGuarantee CheckpointConsistency { get; }
+    CheckpointConsistencyDecision ResolveCheckpointConsistency(ConnectorContext context) =>
+        new(CheckpointConsistency == SourceConsistencyGuarantee.Consistent ? "transaction-consistent" : "observed",
+            CheckpointConsistency == SourceConsistencyGuarantee.Consistent ? "provider-default" : "observed",
+            CheckpointConsistency, null, null);
 
     IAsyncEnumerable<RecordEnvelope> ReadForCheckpointAsync(
         ConnectorContext context,
@@ -195,6 +192,9 @@ public interface ICheckpointSourceConnector : ISourceConnector
         ReadOptions options,
         CancellationToken cancellationToken);
 }
+
+public sealed record CheckpointConsistencyDecision(string RequestedStrategy, string EffectiveStrategy,
+    SourceConsistencyGuarantee Guarantee, string? Downgrade, System.Data.IsolationLevel? IsolationLevel);
 
 public interface ISourceArtifactStreamProvider
 {

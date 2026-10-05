@@ -254,7 +254,7 @@ public sealed class FileSystemRecoveryArtifactStore : IRecoveryArtifactStore
     }
 
     private static AssessmentDocument ToDocument(RecoveryAssessment assessment) => new(
-        "proofshift-recovery-assessment-v1", RecoveryAssessment.FingerprintVersion,
+        "proofshift-recovery-assessment-v2", RecoveryAssessment.FingerprintVersion,
         EffectiveRecoveryPolicy.FingerprintVersion, assessment.Id.Value.ToString("D", CultureInfo.InvariantCulture),
         assessment.State.ToString(), assessment.Outcome.ToString(),
         assessment.Binding.VerificationRunId.Value.ToString("D", CultureInfo.InvariantCulture),
@@ -276,23 +276,18 @@ public sealed class FileSystemRecoveryArtifactStore : IRecoveryArtifactStore
             edge.ConfiguredMode?.ToString(), edge.Strategy, edge.Result.ToString(),
             edge.CapabilityAvailable, edge.CapabilityValidated, edge.IsLossy, edge.Risk.ToString(), edge.ValidationMode.ToString(),
             edge.AffectedSourceArtifacts, edge.AffectedTargetArtifacts, edge.Issues.Select(ToDocument).ToArray())).ToArray(),
-        assessment.Artifacts.Select(item => new ArtifactCoverageDocument(item.Target.NodeId.Value.ToString("D", CultureInfo.InvariantCulture),
-            item.Target.Artifact.Id.Value, item.SemanticType,
-            item.EdgePath.Select(id => id.Value.ToString("D", CultureInfo.InvariantCulture)).ToArray(),
-            item.Modes.Select(mode => mode.ToString()).ToArray(), item.Covered, item.Recoverable,
-            item.ApprovedIrreversible, item.Reason)).ToArray(), assessment.Issues.Select(ToDocument).ToArray(),
+        assessment.VerificationLedger, assessment.Issues.Select(ToDocument).ToArray(),
         assessment.StartedAt, assessment.CompletedAt);
 
     private static PlanDocument ToDocument(RecoveryPlan plan) => new(
-        "proofshift-recovery-plan-v1", RecoveryPlan.FingerprintVersion, plan.Id.Value.ToString("D", CultureInfo.InvariantCulture),
+        "proofshift-recovery-plan-v2", RecoveryPlan.FingerprintVersion, plan.Id.Value.ToString("D", CultureInfo.InvariantCulture),
         plan.VerificationRunId.Value.ToString("D", CultureInfo.InvariantCulture),
         plan.SourceCheckpointId.Value.ToString("D", CultureInfo.InvariantCulture),
         plan.TargetRecoveryCheckpointIds.Select(id => id.Value.ToString("D", CultureInfo.InvariantCulture)).ToArray(),
         plan.PolicyFingerprint, plan.Fingerprint, plan.Preconditions.ToArray(),
         plan.Steps.Select(step => new PlanStepDocument(step.Sequence, step.EdgeId.Value.ToString("D", CultureInfo.InvariantCulture),
             step.EdgeName, step.SystemId.Value, step.EndpointId.Value, step.Operation, step.Mode?.ToString() ?? "missing", step.Strategy,
-            step.Scope.Select(item => new ArtifactCoverageDocument(item.NodeId.Value.ToString("D", CultureInfo.InvariantCulture),
-                item.Artifact.Id.Value, null, [], [], true, true, false, string.Empty)).ToArray(),
+            step.AffectedSourceArtifacts, step.AffectedTargetArtifacts,
             step.Preconditions, step.ExpectedOutcome, step.ValidationMethod)).ToArray(),
         plan.IrreversibleRisks.Select(ToDocument).ToArray());
 
@@ -377,7 +372,8 @@ public sealed class FileSystemRecoveryArtifactStore : IRecoveryArtifactStore
         long ValidatedEdges, long FailedEdges, long AffectedArtifacts, long RecoverableArtifacts,
         long IrrecoverableArtifacts, long UnknownArtifacts, decimal? RecoverablePercentage,
         SemanticCoverageDocument[] SemanticTypeCoverage,
-        EdgeDocument[] Edges, ArtifactCoverageDocument[] Artifacts, IssueDocument[] Issues,
+        EdgeDocument[] Edges, ProofShift.Verification.VerificationLedgerStoreReceipt VerificationLedger,
+        IssueDocument[] Issues,
         DateTimeOffset StartedAt, DateTimeOffset CompletedAt);
     private sealed record EdgeDocument(string EdgeId, string EdgeName, string Operation, bool IsDestructive,
         string[] AffectedSemanticTypes, string? ConfiguredMode, string? Strategy, string Result,
@@ -393,7 +389,7 @@ public sealed class FileSystemRecoveryArtifactStore : IRecoveryArtifactStore
         string PolicyFingerprint, string Fingerprint,
         string[] Preconditions, PlanStepDocument[] Steps, IssueDocument[] IrreversibleRisks);
     private sealed record PlanStepDocument(int Sequence, string EdgeId, string EdgeName, string SystemId, string EndpointId,
-        string Operation, string Mode, string Strategy, ArtifactCoverageDocument[] Scope,
+        string Operation, string Mode, string Strategy, long AffectedSourceArtifacts, long AffectedTargetArtifacts,
         string Preconditions, string ExpectedOutcome, string ValidationMethod);
     private sealed record RehearsalDocument(string Format, string FingerprintVersion, string Environment,
         string Id, string State,
