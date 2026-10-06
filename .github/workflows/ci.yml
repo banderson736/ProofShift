@@ -63,5 +63,10 @@ jobs:
           dotnet-version: 10.0.x
       - name: Restore
         run: dotnet restore tests/ProofShift.Connectors.Db2.Tests/ProofShift.Connectors.Db2.Tests.csproj
+      - name: Configure Db2 Linux native driver path
+        run: |
+          driver_library="$HOME/.nuget/packages/net.ibm.data.db2-lnx/10.0.0.300/buildTransitive/clidriver/lib"
+          test -f "$driver_library/libdb2.so"
+          echo "LD_LIBRARY_PATH=$driver_library${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
       - name: Test Db2 Community integration
         run: dotnet test --project tests/ProofShift.Connectors.Db2.Tests/ProofShift.Connectors.Db2.Tests.csproj --no-restore
