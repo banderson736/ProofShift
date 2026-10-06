@@ -57,4 +57,4 @@ These repeatable synthetic measurements are diagnostic snapshots, not SLAs. The 
 
 Oracle used `Oracle.ManagedDataAccess.Core` 23.26.301; Db2 used IBM provider 10.0.0.300 for the local Windows x64 run. These samples show no evidence of whole-input materialization at the measured file scales; a single run is not proof of constant memory. Database startup and provisioning durations are reported separately and never included in connector read throughput.
 
-The final full local solution run completed with 183 passed, 0 failed and 2 Windows symlink-capability skips (185 total); Oracle and Db2 each passed 2 tests with 0 skips. The required remote CI run has not yet been recorded.
+The final full local solution run completed with 183 passed, 0 failed and 2 Windows symlink-capability skips (185 total); Oracle and Db2 each passed 2 tests with 0 skips. Remote GitHub Actions [run 37416501703](https://github.com/banderson736/ProofShift/actions/runs/37416501703) passed all three required jobs with 185 passed, 0 failed and 0 skipped. The Db2 job sets `LD_LIBRARY_PATH` to IBM’s package-provided `clidriver/lib` directory so Linux can load `libdb2.so`.
