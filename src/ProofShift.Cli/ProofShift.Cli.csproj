@@ -5,6 +5,9 @@
     <AssemblyName>ProofShift.Cli</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../ProofShift.Connectors.Oracle/ProofShift.Connectors.Oracle.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.Db2/ProofShift.Connectors.Db2.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.StructuredFiles/ProofShift.Connectors.StructuredFiles.csproj" />
     <ProjectReference Include="../ProofShift.Domain/ProofShift.Domain.csproj" />
     <ProjectReference Include="../ProofShift.Configuration/ProofShift.Configuration.csproj" />
     <ProjectReference Include="../ProofShift.Graph/ProofShift.Graph.csproj" />

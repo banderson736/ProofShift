@@ -2,11 +2,25 @@ using ProofShift.Packs.Abstractions;
 using ProofShift.Packs.Pension;
 using ProofShift.Verification;
 using ProofShift.Configuration;
+using ProofShift.Engine;
+using ProofShift.Connectors.SqlServer;
+using ProofShift.Connectors.Postgres;
+using ProofShift.Connectors.Csv;
+using ProofShift.Connectors.Files;
+using ProofShift.Connectors.Oracle;
+using ProofShift.Connectors.Db2;
+using ProofShift.Connectors.StructuredFiles;
 
 namespace ProofShift.Cli;
 
 internal static class CliComposition
 {
+    internal static ConnectorCatalog Connectors() => new(
+        [new SqlServerSourceConnector(), new PostgresSourceConnector(), new CsvSourceConnector(), new FilesystemSourceConnector(),
+            new OracleSourceConnector(), new Db2SourceConnector(), new StructuredFileConnector("fixed-width"), new StructuredFileConnector("json"),
+            new StructuredFileConnector("ndjson"), new StructuredFileConnector("xml")],
+        [new PostgresShadowTargetConnector(), new FilesystemShadowTargetConnector()]);
+
     internal static PackRegistry Packs() => new([new PensionPack()]);
 
     internal static IReadOnlyCollection<RuleDescriptor> InstalledRuleDescriptors() =>

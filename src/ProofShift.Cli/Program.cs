@@ -38,7 +38,7 @@ internal static class Program
             return await DiscoveryCommands.RunAsync(args).ConfigureAwait(false);
         if (args.Length > 0 && args[0] == "init")
             return await ProjectInitCommand.RunAsync(args).ConfigureAwait(false);
-        if (args.Length > 0 && args[0] is "rules" or "capabilities")
+        if (args.Length > 0 && args[0] is "rules" or "capabilities" or "connectors")
             return RuleAuthoringCommands.Run(args);
         if (args.Length >= 2 && string.Equals(args[0], "demo", StringComparison.OrdinalIgnoreCase) &&
             string.Equals(args[1], "generate", StringComparison.OrdinalIgnoreCase))
@@ -212,6 +212,9 @@ internal static class Program
                     var graph = MigrationGraphCompiler.Compile(configuration);
                     if (graph.Graph is { } compiled)
                     {
+                        if (strict)
+                            result = new ConfigurationLoadResult(configuration, result.Issues.Concat(
+                                ConnectorConfigurationValidator.Validate(configuration, compiled, CliComposition.Connectors())));
                         result = new ConfigurationLoadResult(configuration, result.Issues.Concat(
                             RuleReferenceValidator.Validate(definitions, registry, compiled)));
                         _ = RecoveryPolicyConfigurationLoader.Load(configuration);

@@ -6,3 +6,8 @@ namespace ProofShift.EndToEnd.Tests;
 public sealed class DockerIntegrationTestGroup
 {
 }
+
+[CollectionDefinition("ProcessTempDirectory", DisableParallelization = true)]
+public sealed class ProcessTempDirectoryTestGroup
+{
+}

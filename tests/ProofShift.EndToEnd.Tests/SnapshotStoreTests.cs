@@ -2,7 +2,11 @@ using System.Numerics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using ProofShift.Configuration;
+using ProofShift.Connectors.Abstractions;
 using ProofShift.Domain;
+using ProofShift.Engine;
+using ProofShift.Graph;
 using ProofShift.Snapshots;
 using Xunit;
 
@@ -93,6 +97,40 @@ public sealed class SnapshotStoreTests
 
             var exception = await Assert.ThrowsAsync<SnapshotStoreException>(
                 () => store.OpenCompleteAsync(id.Value.ToString("N"), TestContext.Current.CancellationToken));
+            Assert.Equal(SnapshotIssueCodes.CheckpointNotComplete, exception.Code);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CancellationDuringCapturePersistsAnUnreplayableIncompleteCheckpoint()
+    {
+        var directory = CreateTemporaryDirectory();
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            var system = new SystemDefinition(new SystemId("source"), "Synthetic Source", SystemRole.Source,
+            [new StorageEndpointDefinition(new StorageEndpointId("source-store"), new ConnectorId("cancelling-source"), [])]);
+            var selector = new ArtifactSelector("table", [new KeyValuePair<string, string>("name", "members")], ["member_id"]);
+            var node = new MigrationNode(new MigrationNodeId(Guid.NewGuid()), "members", MigrationNodeType.Source,
+                "Pension.Member", system.Id, system.StorageEndpoints[0].Id, selector);
+            var graph = new MigrationGraph(new MigrationGraphId(Guid.NewGuid()), [node], [], new string('a', 64), "test-v1");
+            var configuration = new LoadedProjectConfiguration(new RootConfigurationDto(1,
+                new ProjectConfigurationDto("snapshot-cancellation", "Snapshot Cancellation"), null, [], null, null, null), [],
+                [system], [], "snapshot-cancellation", new string('b', 64));
+            var store = new FileSystemSnapshotStore(directory);
+            var service = new SnapshotCaptureService(new ConnectorRegistry([new CancellingSourceConnector(cancellation)]), store);
+
+            var result = await service.CaptureAsync(configuration, graph, cancellation.Token);
+
+            Assert.Equal(CheckpointStatus.Cancelled, result.Status);
+            Assert.Null(result.Checkpoint);
+            Assert.Equal("PSSNAP_CANCELLED", result.FailureCode);
+            var exception = await Assert.ThrowsAsync<SnapshotStoreException>(
+                () => store.OpenCompleteAsync(result.Id.Value.ToString("N"), TestContext.Current.CancellationToken));
             Assert.Equal(SnapshotIssueCodes.CheckpointNotComplete, exception.Code);
         }
         finally
@@ -221,6 +259,30 @@ public sealed class SnapshotStoreTests
                 effectiveFrom: new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero),
                 recordedAt: DateTimeOffset.UnixEpoch,
                 version: 7));
+    }
+
+    private sealed class CancellingSourceConnector(CancellationTokenSource cancellation) : ISourceConnector
+    {
+        public ConnectorId Id { get; } = new("cancelling-source");
+        public string Version => "test-v1";
+
+        public Task<SourceInspection> InspectAsync(ConnectorContext context, ArtifactSelector selector, CancellationToken cancellationToken) =>
+            Task.FromResult(new SourceInspection(SourceInspectionStatus.Valid, identityFields: ["member_id"]));
+
+        public async IAsyncEnumerable<RecordEnvelope> ReadAsync(ConnectorContext context, ArtifactSelector selector, ReadOptions options,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            var system = new SystemId("source");
+            var endpoint = new StorageEndpointId("source-store");
+            yield return new RecordEnvelope(new ArtifactReference(new ArtifactId("member-1"), system, endpoint,
+                "row", "member_id=1"), "Pension.Member", new Dictionary<string, ValueNode>
+                {
+                    ["member_id"] = new IntegerValue(1)
+                }, new ProvenanceMetadata(Id, endpoint, "synthetic", DateTimeOffset.UnixEpoch));
+            cancellation.Cancel();
+            await Task.Yield();
+            cancellationToken.ThrowIfCancellationRequested();
+        }
     }
 
     private static string CreateTemporaryDirectory()

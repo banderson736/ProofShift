@@ -333,6 +333,7 @@ public sealed class PensionExternalCorpusVerificationTests
             var defectiveReport = await BuildPersistedReportAsync(directory, evidenceStore, projectedRecoveryStore,
                 projectedDefectivePipeline.Verification, projectedDefectivePipeline.Recovery, "Synthetic PS-0.9 Fast Defective");
             Assert.Equal("QUALIFIED", correctedReport.Qualification);
+            Assert.Equal("Passed", correctedReport.RehearsalOutcome);
             Assert.Equal(0L, correctedReport.BusinessDiscrepancyCount);
             Assert.Equal(0L, correctedReport.UnaccountedSources);
             Assert.Equal(0L, correctedReport.UnexplainedTargets);
@@ -731,7 +732,7 @@ public sealed class PensionExternalCorpusVerificationTests
         foreach (var runtime in runtimes)
         {
             var node = scenario.Graph.Nodes.Single(item => item.Name == runtime.NodeKey);
-            await foreach (var record in runtime.Connector.ReadAsync(new ReadRequest(runtime.Context, node.Selector),
+            await foreach (var record in runtime.Connector.ObserveAsync(new TargetObservationRequest(runtime.Context, node.Selector, new ReadOptions()),
                 TestContext.Current.CancellationToken).WithCancellation(TestContext.Current.CancellationToken).ConfigureAwait(false))
             {
                 foreach (var identityField in node.Selector.IdentityFields)

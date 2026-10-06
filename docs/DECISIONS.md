@@ -6,6 +6,8 @@ PS-0.10B authoring contracts: see [ADR-0018](adr/0018-structured-rule-authoring-
 
 ## Accepted decisions
 
+PS-0.10C's assigned implementation boundary is recorded in [ADR-0019](adr/0019-target-observation-and-connector-capabilities.md): independent read-only target observation, distinct shadow mutation/Recovery authority and connector capability reporting. The milestone remains In Progress; provider and format acceptance gates are not satisfied by compilation.
+
 ### D-001 — ProofShift is migration assurance, not generic DB diff
 Status: Accepted
 

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>ProofShift.Connectors.Db2</RootNamespace>
+    <AssemblyName>ProofShift.Connectors.Db2</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(OS)' == 'Windows_NT'">
+    <PackageReference Include="Net.IBM.Data.Db2" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(OS)' != 'Windows_NT'">
+    <PackageReference Include="Net.IBM.Data.Db2-lnx" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ProofShift.Connectors.Abstractions/ProofShift.Connectors.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

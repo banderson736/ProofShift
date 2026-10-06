@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>ProofShift.Connectors.StructuredFiles</RootNamespace>
+    <AssemblyName>ProofShift.Connectors.StructuredFiles</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <ProjectReference Include="../ProofShift.Connectors.Abstractions/ProofShift.Connectors.Abstractions.csproj" />
+    <Compile Include="../ProofShift.Connectors.Csv/DiskBackedIdentityIndex.cs" Link="Shared/DiskBackedIdentityIndex.cs" />
+  </ItemGroup>
+</Project>

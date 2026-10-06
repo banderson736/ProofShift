@@ -6,7 +6,6 @@ namespace ProofShift.Cli;
 internal static class RuleAuthoringCommands
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-    private static readonly string[] ConnectorNames = ["sqlserver", "postgres", "csv", "filesystem"];
 
     internal static int Run(string[] args)
     {
@@ -15,11 +14,14 @@ internal static class RuleAuthoringCommands
         var descriptors = CliComposition.InstalledRuleDescriptors();
         if (arguments is ["capabilities"])
         {
+            var connectors = CliComposition.Connectors().Capabilities;
+            var connectorSchemas = CliComposition.Connectors().ConfigurationSchemas;
             var packs = CliComposition.Packs().Installed.Select(pack => new { pack.Id, pack.Version }).ToArray();
             if (json) Console.WriteLine(JsonSerializer.Serialize(new
             {
-                connectors = ConnectorNames,
-                discoverySupport = ConnectorNames,
+                connectors,
+                connectorSchemas = connectorSchemas.Select(schema => schema.ConnectorId),
+                discoverySupport = connectors.Where(connector => connector.Discovery).Select(connector => connector.Id),
                 importFormats = "csv",
                 ruleSchemaFormat = "JSON Schema 2020-12",
                 packs,
@@ -27,10 +29,16 @@ internal static class RuleAuthoringCommands
             }, JsonOptions));
             else
             {
-                Console.WriteLine("Connectors: sqlserver, postgres, csv, filesystem");
+                foreach (var connector in connectors)
+                    Console.WriteLine($"{connector.Id} {connector.Version}: discover={connector.Discovery}, read={connector.SourceRead}, checkpoint={connector.CheckpointCapture}, observe={connector.TargetObservation}, shadow-write={connector.ShadowWrite}, binary={connector.BinaryStreaming}, consistency={connector.Consistency}, partitioning={connector.Partitioning}");
                 foreach (var pack in packs) Console.WriteLine($"Pack: {pack.Id} {pack.Version}");
                 Console.WriteLine("Rule provider: proofshift.verification.generic 1");
             }
+            return 0;
+        }
+        if (arguments is ["connectors", "schema", var connectorId])
+        {
+            Console.WriteLine(CliComposition.Connectors().ConfigurationSchema(connectorId).ToJsonSchema().ToJsonString(JsonOptions));
             return 0;
         }
         if (arguments is ["rules", "schema"])
@@ -83,7 +91,7 @@ internal static class RuleAuthoringCommands
             }
             return 0;
         }
-        Console.Error.WriteLine("Usage: proofshift rules list|describe <type>|schema [--json]; proofshift capabilities [--json]");
+        Console.Error.WriteLine("Usage: proofshift rules list|describe <type>|schema [--json]; proofshift connectors schema <id>; proofshift capabilities [--json]");
         return 2;
     }
 }

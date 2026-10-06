@@ -70,6 +70,8 @@ public interface IShadowTargetConnector
 {
     ConnectorId Id { get; }
     string Version { get; }
+    ConnectorCapabilityDescriptor Capabilities => new(Id.Value, Version, false, false, false, true, true,
+        false, false, "Observed", false);
 
     Task PrepareAsync(ShadowTargetContext context, ArtifactSelector selector, CancellationToken cancellationToken);
     Task WriteAsync(ShadowWriteRequest request, CancellationToken cancellationToken);

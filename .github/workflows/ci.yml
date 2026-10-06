@@ -10,7 +10,7 @@ permissions:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -21,4 +21,47 @@ jobs:
       - name: Build
         run: dotnet build ProofShift.sln --no-restore
       - name: Test
-        run: dotnet test --solution ProofShift.sln --no-restore
+        run: |
+          for project in tests/*/*.csproj; do
+            case "$project" in
+              *ProofShift.Connectors.Oracle.Tests*|*ProofShift.Connectors.Db2.Tests*) continue ;;
+            esac
+            dotnet test --project "$project" --no-restore
+          done
+
+  oracle-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Checkout official Oracle image build source
+        uses: actions/checkout@v4
+        with:
+          repository: oracle/docker-images
+          ref: f376ce7eb011e6adaacfa325f4e2aee99e9a0830
+          path: oracle-docker-images
+          sparse-checkout: OracleDatabase/SingleInstance
+          sparse-checkout-cone-mode: true
+      - name: Build Oracle Database Free 23.26.0 from official source
+        working-directory: oracle-docker-images/OracleDatabase/SingleInstance/dockerfiles
+        run: ./buildContainerImage.sh -v 23.26.0 -f -t oracle/database:23.26.0-free
+      - name: Restore
+        run: dotnet restore tests/ProofShift.Connectors.Oracle.Tests/ProofShift.Connectors.Oracle.Tests.csproj
+      - name: Test Oracle Free integration
+        run: dotnet test --project tests/ProofShift.Connectors.Oracle.Tests/ProofShift.Connectors.Oracle.Tests.csproj --no-restore
+
+  db2-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Restore
+        run: dotnet restore tests/ProofShift.Connectors.Db2.Tests/ProofShift.Connectors.Db2.Tests.csproj
+      - name: Test Db2 Community integration
+        run: dotnet test --project tests/ProofShift.Connectors.Db2.Tests/ProofShift.Connectors.Db2.Tests.csproj --no-restore

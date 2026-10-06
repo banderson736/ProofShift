@@ -349,7 +349,7 @@ public sealed class ShadowProjectionPensionIntegrationTests
             }
 
             var missingCapabilityTargets = targetRuntimes.Select(target => target.Connector.Id.Value == "files"
-                ? new VerificationTargetRuntime(target.NodeKey, new ReadOnlyShadowConnectorProxy(target.Connector), target.Context)
+                ? new VerificationTargetRuntime(target.NodeKey, new ReadOnlyShadowConnectorProxy(target.ShadowWriter!), target.Context)
                 : target).ToArray();
             var missingCapability = await recoveryService.AssessAndRehearseAsync(configuration, graph, binding, repaired,
                 new EffectiveRecoveryPolicy(), missingCapabilityTargets, projectRoot, TestContext.Current.CancellationToken);
@@ -359,7 +359,7 @@ public sealed class ShadowProjectionPensionIntegrationTests
 
             var corruptCheckpointTargets = targetRuntimes.Select(target => target.Connector.Id.Value == "postgres"
                 ? new VerificationTargetRuntime(target.NodeKey,
-                    new RecoveryConnectorProxy((IShadowTargetRecoveryConnector)target.Connector, corruptCheckpoint: true), target.Context)
+                    new RecoveryConnectorProxy((IShadowTargetRecoveryConnector)target.ShadowWriter!, corruptCheckpoint: true), target.Context)
                 : target).ToArray();
             var corruptCheckpoint = await recoveryService.AssessAndRehearseAsync(configuration, graph, binding, repaired,
                 new EffectiveRecoveryPolicy(), corruptCheckpointTargets, projectRoot, TestContext.Current.CancellationToken);
@@ -368,7 +368,7 @@ public sealed class ShadowProjectionPensionIntegrationTests
 
             var failedMutationTargets = targetRuntimes.Select(target => target.Connector.Id.Value == "postgres"
                 ? new VerificationTargetRuntime(target.NodeKey,
-                    new RecoveryConnectorProxy((IShadowTargetRecoveryConnector)target.Connector, failMutation: true), target.Context)
+                    new RecoveryConnectorProxy((IShadowTargetRecoveryConnector)target.ShadowWriter!, failMutation: true), target.Context)
                 : target).ToArray();
             var failedRehearsal = await recoveryService.AssessAndRehearseAsync(configuration, graph, binding, repaired,
                 new EffectiveRecoveryPolicy(), failedMutationTargets, projectRoot, TestContext.Current.CancellationToken);

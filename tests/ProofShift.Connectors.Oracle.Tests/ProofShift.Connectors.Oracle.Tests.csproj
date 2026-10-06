@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Testcontainers" />
+    <PackageReference Include="Testcontainers.MsSql" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="Microsoft.Data.SqlClient" />
+    <PackageReference Include="Npgsql" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/ProofShift.Connectors.Abstractions/ProofShift.Connectors.Abstractions.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Connectors.Oracle/ProofShift.Connectors.Oracle.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Connectors.Postgres/ProofShift.Connectors.Postgres.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Connectors.SqlServer/ProofShift.Connectors.SqlServer.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Engine/ProofShift.Engine.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Snapshots/ProofShift.Snapshots.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../ProofShift.EndToEnd.Tests/OracleConnectorIntegrationTests.cs" Link="OracleConnectorIntegrationTests.cs" />
+    <Compile Include="../ProofShift.EndToEnd.Tests/ConnectorReadMeasurement.cs" Link="ConnectorReadMeasurement.cs" />
+  </ItemGroup>
+</Project>

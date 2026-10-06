@@ -13,10 +13,15 @@ using ProofShift.Snapshots;
 
 namespace ProofShift.Verification;
 
-public sealed record VerificationTargetRuntime(
-    string NodeKey,
-    IShadowTargetConnector Connector,
-    ShadowTargetContext Context);
+public sealed record VerificationTargetRuntime(string NodeKey, ITargetObserver Connector, TargetObservationContext Context)
+{
+    public IShadowTargetConnector? ShadowWriter { get; private init; }
+    public VerificationTargetRuntime(string nodeKey, IShadowTargetConnector connector, TargetObservationContext context)
+        : this(nodeKey, new ShadowReadObserverAdapter(connector), context) { ShadowWriter = connector; }
+    public VerificationTargetRuntime(string nodeKey, IShadowTargetConnector connector, ShadowTargetContext context)
+        : this(nodeKey, new ShadowReadObserverAdapter(connector),
+            new TargetObservationContext(context.ConnectorContext, context.RunId, context.Role)) { ShadowWriter = connector; }
+}
 
 public sealed class VerificationService
 {
@@ -215,8 +220,8 @@ public sealed class VerificationService
             using var readStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
                 "actual target read-back and ingest", targetRuntime.Connector.Id.Value, node.Name);
             long observedCount = 0;
-            var request = new ReadRequest(targetRuntime.Context, node.Selector);
-            await foreach (var actual in targetRuntime.Connector.ReadAsync(request, cancellationToken)
+            var request = new TargetObservationRequest(targetRuntime.Context, node.Selector, new ReadOptions());
+            await foreach (var actual in targetRuntime.Connector.ObserveAsync(request, cancellationToken)
                 .WithCancellation(cancellationToken).ConfigureAwait(false))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -529,7 +534,7 @@ public sealed class VerificationService
             using var targetReadStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
                 "external target read-back and ingest", targetRuntime.Connector.Id.Value, node.Name);
             long observedCount = 0;
-            await foreach (var actual in targetRuntime.Connector.ReadAsync(new ReadRequest(targetRuntime.Context, node.Selector), cancellationToken)
+            await foreach (var actual in targetRuntime.Connector.ObserveAsync(new TargetObservationRequest(targetRuntime.Context, node.Selector, new ReadOptions()), cancellationToken)
                 .WithCancellation(cancellationToken).ConfigureAwait(false))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -754,7 +759,7 @@ public sealed class VerificationService
             var endpoint = system.StorageEndpoints.SingleOrDefault(candidate => candidate.Id == node.EndpointId)
                 ?? throw ContextMismatch("External target graph node references an unknown endpoint.");
             var observedEndpoint = endpoints[node.Name];
-            if (system.Role != SystemRole.ShadowTarget || observedEndpoint.SystemId != node.SystemId ||
+            if (system.Role is not (SystemRole.Target or SystemRole.ShadowTarget) || observedEndpoint.SystemId != node.SystemId ||
                 observedEndpoint.EndpointId != node.EndpointId || observedEndpoint.ConnectorId != endpoint.Connector ||
                 target.Connector.Id != endpoint.Connector || observedEndpoint.ConnectorVersion != target.Connector.Version ||
                 target.Context.RunId != observation.ObservationRunId || target.Context.Role != system.Role ||

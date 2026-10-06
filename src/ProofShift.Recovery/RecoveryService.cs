@@ -161,7 +161,8 @@ public sealed class RecoveryService
 
                     var checkpointId = new RecoveryCheckpointId(Guid.NewGuid());
                     var request = new ShadowRecoveryRequest(checkpointId, graph.GraphHash, group.Fingerprint,
-                        group.TargetCount, group.Targets.Select(target => new ShadowRecoveryTarget(target.Context, graphNodes[target.NodeKey].Selector)));
+                        group.TargetCount, group.Targets.Select(target => new ShadowRecoveryTarget(new ShadowTargetContext(
+                            target.Context.ConnectorContext, target.Context.RunId, target.Context.Role), graphNodes[target.NodeKey].Selector)));
                     using var checkpointStage = performanceRecorder?.StartStage(PerformanceStageKind.Recovery,
                         "target recovery checkpoint", group.Connector.Id.Value, nodeKey: group.Key);
                     var checkpoint = await recoveryConnector.CaptureRecoveryCheckpointAsync(request, cancellationToken).ConfigureAwait(false);
@@ -436,7 +437,8 @@ public sealed class RecoveryService
             .Select(group =>
             {
                 var groupTargets = group.OrderBy(target => target.NodeKey, StringComparer.Ordinal).ToArray();
-                var connector = groupTargets[0].Connector;
+                var connector = groupTargets[0].ShadowWriter ?? throw new RecoveryException(RecoveryIssueCodes.MissingCapability,
+                    "Recovery rehearsal requires an explicitly provided isolated shadow writer; observation alone grants no mutation capability.");
                 if (groupTargets.Any(target => target.Connector.Id != connector.Id || target.Connector.Version != connector.Version))
                     throw new RecoveryException(RecoveryIssueCodes.ContextMismatch, "One target endpoint resolved inconsistent connector implementations or versions.");
                 return new RecoveryTargetGroup(group.Key.SystemKey, group.Key.EndpointKey, connector,
@@ -462,7 +464,7 @@ public sealed class RecoveryService
                 cancellationToken.ThrowIfCancellationRequested();
                 var group = groupByNode[target.NodeKey];
                 var node = graph.Nodes.Single(item => item.Name == target.NodeKey);
-                await foreach (var record in target.Connector.ReadAsync(new ReadRequest(target.Context, node.Selector), cancellationToken)
+                await foreach (var record in target.Connector.ObserveAsync(new TargetObservationRequest(target.Context, node.Selector, new ReadOptions()), cancellationToken)
                     .WithCancellation(cancellationToken).ConfigureAwait(false))
                 {
                     cancellationToken.ThrowIfCancellationRequested();

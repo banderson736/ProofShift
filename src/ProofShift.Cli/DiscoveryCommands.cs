@@ -64,12 +64,8 @@ internal static class DiscoveryCommands
                         context.SemanticType, new RuntimeConfiguration(settings));
                 }
             }
-            IPhysicalDiscoveryConnector connector = endpoint.Connector.Value switch
-            {
-                "sqlserver" => new SqlServerSourceConnector(), "postgres" => new PostgresSourceConnector(),
-                "csv" => new CsvSourceConnector(), "files" => new FilesystemSourceConnector(),
-                _ => throw new InvalidDataException("Configured connector has no physical discovery capability.")
-            };
+            var connector = CliComposition.Connectors().Reader(endpoint.Connector.Value) as IPhysicalDiscoveryConnector
+                ?? throw new InvalidDataException("Configured connector has no physical discovery capability.");
             if (endpoint.Connector.Value == "csv" && nodes.Length == 0)
                 throw new InvalidDataException("CSV discovery requires a configured CSV selector.");
             var artifact = await connector.DiscoverAsync(context, nodes.Select(node => node.Selector).ToArray(), cancellationToken);

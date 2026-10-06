@@ -13,6 +13,7 @@ proofshift rules describe pension-contribution-total
 proofshift rules describe pension-contribution-total --json
 proofshift rules schema > proofshift-rules.schema.json
 proofshift capabilities --json
+proofshift connectors schema oracle > oracle-connector.schema.json
 proofshift discover my-project/proofshift.yaml --system source --endpoint records --output discovery/source --json
 proofshift discovery diff discovery/source discovery/source-later --json
 proofshift scaffold --source-discovery discovery/source --target-discovery discovery/target --output suggested-project
@@ -59,6 +60,10 @@ rules:
 Sequences remain ordered sequences; decimals/booleans retain their types; nested mappings remain immutable objects. Provider-owned descriptors drive validation, JSON Schema, descriptions and declared defaults. The installed catalog is authoritative: parser/schema support for nested values is not permission to use an unregistered generic alias or silently activate a pack. Pension aggregate/relationship/timeline semantics use the installed provider's configured rules.
 
 ## Diagnostics And Strict Policy
+
+PS-0.10C adds provider-owned connector schemas for Oracle, Db2, fixed-width, JSON, NDJSON and XML. `proofshift connectors schema <id>` emits the installed connector's endpoint and selector JSON Schema. `proofshift validate <config> --strict` rejects undeclared endpoint/selector properties with source file and configuration path diagnostics; it also checks required endpoint properties, selector identity, format-required selector values and fixed-width field start/length pairs. Dynamic `fields.<name>.*` and XML `namespaces.<prefix>` properties are constrained by provider-declared patterns.
+
+Fixed-width `width`, `start` and `length` are one-based positions/counts in decoded .NET UTF-16 code units, not source bytes. Supported fixed-width encodings are UTF-8 and UTF-16. NDJSON supports UTF-8 and UTF-16; top-level JSON arrays are UTF-8 only and streamed. XML uses XML-declaration/parser encoding detection and does not accept an endpoint-locale override. These format contracts describe current implementation, not semantic approval.
 
 | Code | Meaning |
 | --- | --- |

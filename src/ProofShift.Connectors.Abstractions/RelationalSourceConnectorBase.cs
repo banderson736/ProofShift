@@ -30,6 +30,7 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
     protected abstract string DiscoveryColumnsSql { get; }
     protected abstract string DiscoveryKeysSql { get; }
     protected abstract string DiscoveryRelationshipsSql { get; }
+    protected virtual void ConfigureDiscoveryCommand(DbCommand command, ConnectorContext context) { }
 
     public async Task<PhysicalDiscoveryArtifact> DiscoverAsync(ConnectorContext context,
         IReadOnlyCollection<ArtifactSelector> selectors, CancellationToken cancellationToken)
@@ -43,22 +44,24 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
         await using (var command = connection.CreateCommand())
         {
             command.CommandText = DiscoveryColumnsSql;
+            ConfigureDiscoveryCommand(command, context);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
                 var key = (reader.GetString(0), reader.GetString(1));
                 if (!objects.TryGetValue(key, out var item)) item = (reader.GetString(2), []);
-                item.Fields.Add(new(reader.GetString(3), reader.GetString(4), reader.GetBoolean(5), reader.GetInt32(6)));
+                item.Fields.Add(new(reader.GetString(3), reader.GetString(4), ReadNullableState(reader.GetValue(5)), reader.GetInt32(6)));
                 objects[key] = item;
             }
         }
         await using (var command = connection.CreateCommand())
         {
             command.CommandText = DiscoveryKeysSql;
+            ConfigureDiscoveryCommand(command, context);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
-                var key = (reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3));
+                var key = (reader.GetString(0), reader.GetString(1), reader.GetString(2), ReadNullableState(reader.GetValue(3)));
                 if (!keys.TryGetValue(key, out var fields)) keys.Add(key, fields = []);
                 fields.Add(reader.GetString(4));
             }
@@ -66,6 +69,7 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
         await using (var command = connection.CreateCommand())
         {
             command.CommandText = DiscoveryRelationshipsSql;
+            ConfigureDiscoveryCommand(command, context);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
@@ -203,9 +207,10 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
         {
             throw;
         }
-        catch
+        catch (Exception exception)
         {
-            return Failed(context, ConnectorIssueCodes.SourceConnectionFailed, "Source inspection failed.");
+            return Failed(context, ConnectorIssueCodes.SourceConnectionFailed,
+                $"Source inspection failed ({InspectionFailureDiagnostic(exception)}).");
         }
     }
 
@@ -255,7 +260,7 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
             {
                 var part = locator.Identity[index];
                 var parameterName = $"identity{index.ToString(CultureInfo.InvariantCulture)}";
-                predicates.Add($"{QuoteIdentifier(part.Name)} = @{parameterName}");
+                predicates.Add($"{QuoteIdentifier(part.Name)} = {ParameterPlaceholder(parameterName)}");
                 AddParameter(command, parameterName, ParseLocatorValue(part));
             }
 
@@ -400,6 +405,10 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
         {
             throw;
         }
+        catch (Exception exception) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException("Source connection was canceled.", exception, cancellationToken);
+        }
         catch
         {
             throw new ConnectorReadException(ConnectorIssueCodes.SourceConnectionFailed, "Source connection failed.");
@@ -428,6 +437,10 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
         {
             throw;
         }
+        catch (Exception exception) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException("Source query was canceled.", exception, cancellationToken);
+        }
         catch
         {
             throw new ConnectorReadException(ConnectorIssueCodes.SourceReadFailed, "Source query failed.");
@@ -443,6 +456,10 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
         catch (OperationCanceledException)
         {
             throw;
+        }
+        catch (Exception exception) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException("Source row read was canceled.", exception, cancellationToken);
         }
         catch
         {
@@ -478,7 +495,7 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
                     continue;
                 }
 
-                if (reader.GetFieldType(ordinal) == typeof(byte[]))
+                if (IsBinaryField(reader, ordinal))
                 {
                     var (binaryLength, binaryHash) = await HashBinaryFieldAsync(reader, ordinal, cancellationToken).ConfigureAwait(false);
                     binaryValues.Add((name, binaryLength, binaryHash));
@@ -490,8 +507,8 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
                     continue;
                 }
 
-                var rawValue = reader.GetValue(ordinal);
-                values.Add(new KeyValuePair<string, ValueNode>(name, ToValueNode(rawValue, reader.GetDataTypeName(ordinal))));
+                var rawValue = ReadProviderValue(reader, ordinal);
+                values.Add(new KeyValuePair<string, ValueNode>(name, NormalizeProviderValue(rawValue, reader.GetDataTypeName(ordinal))));
                 if (identitySet.Contains(name))
                 {
                     identityValues[name] = rawValue;
@@ -528,6 +545,10 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
         catch (OperationCanceledException)
         {
             throw;
+        }
+        catch (Exception exception) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException("Source row normalization was canceled.", exception, cancellationToken);
         }
         catch (ConnectorReadException)
         {
@@ -566,7 +587,7 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
     private static bool ReadNullableState(object value) => value switch
     {
         bool nullable => nullable,
-        string text => !string.Equals(text, "NO", StringComparison.OrdinalIgnoreCase) &&
+        string text => !string.Equals(text, "N", StringComparison.OrdinalIgnoreCase) && !string.Equals(text, "NO", StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(text, "false", StringComparison.OrdinalIgnoreCase),
         _ => Convert.ToBoolean(value, CultureInfo.InvariantCulture)
     };
@@ -695,6 +716,10 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
         var key = context.Configuration.TryGet("connection", out _) ? "connection" : "connectionString";
         return context.Configuration.GetRequired(key).UseValue(value => value);
     }
+
+    protected virtual object ReadProviderValue(DbDataReader reader, int ordinal) => reader.GetValue(ordinal);
+    protected virtual ValueNode NormalizeProviderValue(object value, string providerType) => ToValueNode(value, providerType);
+    protected virtual string InspectionFailureDiagnostic(Exception exception) => exception.GetType().Name;
 
     private static ValueNode ToValueNode(object value, string providerType)
     {
@@ -891,10 +916,14 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
 
     private static bool IsValidIdentifier(string identifier) => IdentifierPattern.IsMatch(identifier);
 
-    private static void AddParameter(DbCommand command, string name, object value)
+    protected virtual bool IsBinaryField(DbDataReader reader, int ordinal) => reader.GetFieldType(ordinal) == typeof(byte[]);
+    protected virtual string ParameterName(string name) => $"@{name}";
+    protected virtual string ParameterPlaceholder(string name) => $"@{name}";
+
+    private void AddParameter(DbCommand command, string name, object value)
     {
         var parameter = command.CreateParameter();
-        parameter.ParameterName = $"@{name}";
+        parameter.ParameterName = ParameterName(name);
         parameter.Value = value;
         command.Parameters.Add(parameter);
     }

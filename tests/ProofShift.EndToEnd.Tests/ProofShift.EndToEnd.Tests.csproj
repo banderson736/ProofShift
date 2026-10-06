@@ -4,6 +4,11 @@
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Remove="OracleConnectorIntegrationTests.cs" />
+    <Compile Remove="Db2ConnectorIntegrationTests.cs" />
+    <ProjectReference Include="../../src/ProofShift.Connectors.Oracle/ProofShift.Connectors.Oracle.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Connectors.Db2/ProofShift.Connectors.Db2.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Connectors.StructuredFiles/ProofShift.Connectors.StructuredFiles.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit.v3" />
   </ItemGroup>

@@ -1,3 +1,4 @@
+PS-0.10C Enterprise Connector & Data-Format Coverage is explicitly assigned and remains In Progress. Preserve read-only observation separately from shadow writing/Recovery. Db2 LUW Community 11.5.9.0 and Oracle Database Free 26ai 23.26.0 official-source-build integrations pass locally. Required Oracle CI builds from pinned official Oracle source and downloads Free media directly from Oracle; images are test-only and not redistributed. See docs/CONNECTOR_TEST_RUNTIMES.md and ADR-0019. Do not begin PS-0.10D, other provider/domain expansion, or production execution/rollback.
 # GitHub Copilot Instructions — ProofShift
 
 You are working in **ProofShift**, a migration assurance and evidence platform for high-risk system modernization.
@@ -47,6 +48,7 @@ Do not skip ahead to UI, SaaS, Kubernetes, AI, FHIR, Oracle, DB2, or enterprise 
 PS-0.10B Configuration & Authoring UX is Accepted after Docker-backed run 37353339103, job 111909408991 verified final implementation commit 625ca84 with 143 passed, 0 failed, 0 skipped. Preserve deterministic authoring, provider-owned typed schemas, explicit pack versions, read-only discovery/diff, review-state scaffold/import, named maps, effective explain/strict validation, and committed Pension configuration with exact 149/0/QUALIFIED semantics. The workflow and limitations are documented in docs/CONFIGURATION_AUTHORING.md, docs/AUTHORING_WALKTHROUGH.md and ADR-0018. Do not begin PS-0.10C, connector/domain expansion, UI/AI authoring, unrelated performance work, or production execution/rollback without a new explicit assignment.
 
 ## Implementation style
+The active PS-0.10C assignment in the current-work section supersedes historical A/B status text that says C is deferred or unassigned. Production migration execution and rollback remain out of scope.
 
 - Target .NET 10 / modern C#.
 - Favor immutable records/value objects for domain state.

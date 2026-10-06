@@ -20,6 +20,81 @@ namespace ProofShift.EndToEnd.Tests;
 [Collection("DockerIntegration")]
 public sealed class ExternalTargetVerificationTests
 {
+    [Fact]
+    public async Task ExternalVerificationObservesOrdinaryTargetWithSelectOnlyDatabasePrivileges()
+    {
+        await using var sourceContainer = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-CU14-ubuntu-22.04").Build();
+        await sourceContainer.StartAsync(TestContext.Current.CancellationToken);
+        await using var targetContainer = new PostgreSqlBuilder("postgres:16-alpine").Build();
+        await targetContainer.StartAsync(TestContext.Current.CancellationToken);
+        var sourceSystem = new SystemDefinition(new SystemId("legacy"), "Synthetic Source", SystemRole.Source,
+            [new StorageEndpointDefinition(new StorageEndpointId("records"), new ConnectorId("sqlserver"),
+                [new KeyValuePair<string, string>("connection", "secret:READONLY_TEST_SOURCE")])]);
+        var targetSystem = new SystemDefinition(new SystemId("external"), "Observed Target", SystemRole.Target,
+            [new StorageEndpointDefinition(new StorageEndpointId("records"), new ConnectorId("postgres"),
+                [new KeyValuePair<string, string>("connection", "secret:READONLY_TEST_TARGET")])]);
+        var source = new MigrationNode(new MigrationNodeId(Guid.NewGuid()), "source", MigrationNodeType.Source, "Generic.Record",
+            sourceSystem.Id, sourceSystem.StorageEndpoints[0].Id, new ArtifactSelector("table", [new("name", "dbo.records")], ["id"]));
+        var target = new MigrationNode(new MigrationNodeId(Guid.NewGuid()), "target", MigrationNodeType.Target, "Generic.Record",
+            targetSystem.Id, targetSystem.StorageEndpoints[0].Id, new ArtifactSelector("table", [new("name", "public.records")], ["id"]));
+        var edge = new MigrationEdge(new MigrationEdgeId(Guid.NewGuid()), "mapping", [source.Id], [target.Id],
+            new MigrationOperation(MigrationOperationType.Copy), "1", new RecoveryDefinition(RecoveryMode.Reverse));
+        var graph = new MigrationGraph(new MigrationGraphId(Guid.NewGuid()), [source, target], [edge], new string('b', 64), "test");
+        var configuration = new LoadedProjectConfiguration(new RootConfigurationDto(1,
+            new ProjectConfigurationDto("read-only-test", "Read-only Target"), null, [], null, null, null), [],
+            [sourceSystem, targetSystem], [], "read-only-test", new string('a', 64));
+        await using (var connection = new SqlConnection(sourceContainer.GetConnectionString()))
+        {
+            await connection.OpenAsync(TestContext.Current.CancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText = "CREATE TABLE dbo.records(id int NOT NULL PRIMARY KEY,value nvarchar(30) NOT NULL); INSERT INTO dbo.records VALUES(1,N'synthetic');";
+            await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+        }
+        await using (var connection = new NpgsqlConnection(targetContainer.GetConnectionString()))
+        {
+            await connection.OpenAsync(TestContext.Current.CancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText = "CREATE TABLE public.records(id integer NOT NULL PRIMARY KEY,value text NOT NULL); INSERT INTO public.records VALUES(1,'synthetic'); CREATE ROLE proofshift_observer LOGIN PASSWORD 'Synthetic-Read-Only!2026'; GRANT USAGE ON SCHEMA public TO proofshift_observer; GRANT SELECT ON public.records TO proofshift_observer;";
+            await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+        }
+        var observedConnection = new NpgsqlConnectionStringBuilder(targetContainer.GetConnectionString())
+        { Username = "proofshift_observer", Password = "Synthetic-Read-Only!2026" }.ConnectionString;
+        await using (var connection = new NpgsqlConnection(observedConnection))
+        {
+            await connection.OpenAsync(TestContext.Current.CancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT has_table_privilege(current_user,'public.records','INSERT') OR has_table_privilege(current_user,'public.records','UPDATE') OR has_table_privilege(current_user,'public.records','DELETE')";
+            Assert.False((bool)(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken))!);
+        }
+        var contexts = new RuntimeConnectorContextFactory(new MapEnvironmentProvider(new Dictionary<string, string>
+        {
+            ["READONLY_TEST_SOURCE"] = sourceContainer.GetConnectionString(), ["READONLY_TEST_TARGET"] = observedConnection
+        }));
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-readonly-{Guid.NewGuid():N}");
+        try
+        {
+            var snapshots = new FileSystemSnapshotStore(Path.Combine(root, "snapshots"));
+            var checkpoint = await new SnapshotCaptureService(new ConnectorRegistry([new SqlServerSourceConnector()]), snapshots, contexts)
+                .CaptureAsync(configuration, graph, TestContext.Current.CancellationToken);
+            Assert.Equal(CheckpointStatus.Complete, checkpoint.Status);
+            var runId = new RunId(Guid.NewGuid());
+            var observer = new ReaderTargetObserver(new ProofShift.Connectors.Postgres.PostgresSourceConnector());
+            var observation = new ExternalMigrationObservation(runId, "vendor-loaded", configuration.ConfigurationHash, graph.GraphHash,
+                checkpoint.Id, checkpoint.Checkpoint!.ManifestHash!, checkpoint.Checkpoint.SourceFingerprint!,
+                [new ExternalTargetEndpoint(target.Name, targetSystem.Id, target.EndpointId, observer.Id, observer.Version)], DateTimeOffset.UnixEpoch);
+            var runtime = new VerificationTargetRuntime(target.Name, observer,
+                new TargetObservationContext(contexts.Create(configuration, target), runId, SystemRole.Target));
+            Assert.Null(runtime.ShadowWriter);
+            var rules = new VerificationRuleRegistry([new GenericVerificationRuleProvider()]).Resolve(
+                [Rule("accounting", "source-artifact-accounting"), Rule("lineage", "target-lineage"), Rule("presence", "target-presence"), Rule("values", "attribute-comparison")]);
+            var result = await new VerificationService(snapshots).VerifyExternalTargetAsync(configuration, graph, observation, rules,
+                Path.Combine(root, "working"), "0.10-test", [runtime], TestContext.Current.CancellationToken);
+            Assert.Equal(VerificationOutcome.Passed, result.Run.Outcome);
+            Assert.Equal(1, result.Ledger.LineageCount);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
     private const string TargetSecret = "PS09_EXTERNAL_TARGET_CONNECTION";
     private const string SourceSecret = "PS09_EXTERNAL_SOURCE_CONNECTION";
 

@@ -165,6 +165,9 @@ public interface ISourceConnector
 {
     ConnectorId Id { get; }
     string Version { get; }
+    ConnectorCapabilityDescriptor Capabilities => new(Id.Value, Version, this is IPhysicalDiscoveryConnector, true,
+        this is ICheckpointSourceConnector, true, false, this is ISourceBinaryContentResolver, true,
+        this is ICheckpointSourceConnector checkpoint ? checkpoint.CheckpointConsistency.ToString() : "Observed", false);
 
     Task<SourceInspection> InspectAsync(
         ConnectorContext context,

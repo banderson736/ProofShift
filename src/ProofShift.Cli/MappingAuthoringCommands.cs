@@ -141,9 +141,14 @@ internal static class MappingAuthoringCommands
         type, system, storage = "records", semanticType = "Physical.Uninterpreted",
         selector = new
         {
-            kind = connector is "postgres" or "sqlserver" ? "table" : connector == "csv" ? "csv" : "file-pattern",
-            properties = connector is "postgres" or "sqlserver"
-                ? new Dictionary<string, string> { ["name"] = MappingScaffold.Name(entity), ["columns"] = string.Join(',', entity.Fields.Select(field => field.Name)) }
+            kind = connector is "postgres" or "sqlserver" or "oracle" or "db2"
+                ? "table" : connector == "csv" ? "csv" : connector is "json" or "ndjson" or "xml" or "fixed-width" ? connector : "file-pattern",
+            properties = connector is "postgres" or "sqlserver" or "oracle" or "db2"
+                ? (entity.SelectorProperties ?? new Dictionary<string, string>())
+                    .Append(new KeyValuePair<string, string>("name", MappingScaffold.Name(entity)))
+                    .Append(new KeyValuePair<string, string>("columns", string.Join(',', entity.Fields.Select(field => field.Name))))
+                    .GroupBy(pair => pair.Key, StringComparer.Ordinal)
+                    .ToDictionary(group => group.Key, group => group.Last().Value, StringComparer.Ordinal)
                 : entity.SelectorProperties ?? new Dictionary<string, string> { [connector == "csv" ? "path" : "pattern"] = entity.Name },
             identity = entity.Keys.FirstOrDefault(key => key.Primary)?.Fields ?? []
         }
@@ -153,7 +158,7 @@ internal static class MappingAuthoringCommands
     {
         id, name = id, role, storage = new Dictionary<string, object>
         {
-            ["records"] = connector is "sqlserver" or "postgres"
+            ["records"] = connector is "sqlserver" or "postgres" or "oracle" or "db2"
                 ? new { connector, connection = new { secret = id == "source" ? "PROOFSHIFT_SOURCE_CONNECTION" : "PROOFSHIFT_TARGET_CONNECTION" } }
                 : new { connector, root = new { env = id == "source" ? "PROOFSHIFT_SOURCE_ROOT" : "PROOFSHIFT_TARGET_ROOT" } }
         }

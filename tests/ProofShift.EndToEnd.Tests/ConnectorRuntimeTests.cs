@@ -10,6 +10,7 @@ using Xunit;
 
 namespace ProofShift.EndToEnd.Tests;
 
+[Collection("ProcessTempDirectory")]
 public sealed class ConnectorRuntimeTests
 {
     [Fact]

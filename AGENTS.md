@@ -1,3 +1,5 @@
+The active PS-0.10C assignment at the top of this guide supersedes historical milestone notes that describe C as deferred or unassigned. Production migration execution and rollback remain out of scope.
+PS-0.10C Enterprise Connector & Data-Format Coverage is explicitly assigned and remains In Progress. Preserve observation-only target access separately from shadow writing and Recovery. Db2 LUW Community 11.5.9.0 and Oracle Database Free 26ai 23.26.0 official-source-build integrations pass locally, including mixed Db2 replay and Oracle read-only DML denial/checkpoint replay. Oracle's required CI job builds from pinned official Oracle docker-images source and downloads Free media directly from Oracle. Server images are test-only and never redistributed. See docs/CONNECTOR_TEST_RUNTIMES.md and ADR-0019. Do not begin PS-0.10D or production execution/rollback.
 # Agent Guide
 
 This repository is intended to be developed primarily with an IDE coding agent while preserving product/architecture continuity.
@@ -8,7 +10,7 @@ The repository documentation is part of the product specification. When code and
 
 PS-0.1 through PS-0.8 are accepted. PS-0.6 was accepted by Docker-backed GitHub Actions run 37180351598, job 111371493382 (88 passed, 0 failed, 0 skipped). PS-0.7 was accepted by Docker-backed GitHub Actions run 37185122084, job 111385343893 (96 passed, 0 failed, 0 skipped). PS-0.8 Recovery Readiness & Dry-Run Qualification was accepted by Docker-backed GitHub Actions run 37190061657, job 111400188926 (103 passed, 0 failed, 0 skipped).
 
-PS-0.9 Public Pension Assurance Vertical was accepted after Docker-backed GitHub Actions run 37238973286, job 111543651181 passed 113 tests with zero failures and zero skips. Do not implement production migration execution, production rollback, or PS-0.10 without an explicit new assignment.
+PS-0.9 Public Pension Assurance Vertical was accepted after Docker-backed GitHub Actions run 37238973286, job 111543651181 passed 113 tests with zero failures and zero skips. Production migration execution and rollback remain deferred.
 
 PS-0.10A Scale Baseline & Hot-Path Hardening is Accepted after Docker-backed GitHub Actions run 37284331965, job 111679522042 verified implementation commit 8111c9c with 123 passed, 0 failed, 0 skipped. Medium completed with 424,750 checkpoint artifacts, 429,750 projected targets, exact 149-defect / corrected-zero semantics, and measured workload memory/scratch. Preserve bounded PostgreSQL batching, WAL/NORMAL scratch, persisted Verification ledgers, aggregate Recovery, typed keys, streamed Evidence, explicit checkpoint consistency, prepared workspace commands, and indexed identity coverage. Retain documented above-linear Verification runtime/scratch limitations; acceptance is not a production SLA. Do not begin PS-0.10B/C, connector/domain expansion, production migration execution, or rollback without a new explicit assignment.
 
