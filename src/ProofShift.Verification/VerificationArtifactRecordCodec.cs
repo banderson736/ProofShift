@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using ProofShift.Domain;
 
@@ -8,12 +9,25 @@ internal static class VerificationArtifactRecordCodec
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    public static string Encode(RecordEnvelope record)
+    public static string Encode(RecordEnvelope record, IReadOnlyCollection<string>? requiredFields = null)
+        => JsonSerializer.Serialize(CreateDocument(record, requiredFields), JsonOptions);
+
+    public static string Encode(RecordEnvelope record, IReadOnlyCollection<string>? requiredFields,
+        out long fullSerializedBytes)
     {
-        var document = new RecordDocument(
+        var fullPayload = JsonSerializer.SerializeToUtf8Bytes(CreateDocument(record, requiredFields: null), JsonOptions);
+        fullSerializedBytes = fullPayload.LongLength;
+        return requiredFields is null ? Encoding.UTF8.GetString(fullPayload) : Encode(record, requiredFields);
+    }
+
+    private static RecordDocument CreateDocument(RecordEnvelope record, IReadOnlyCollection<string>? requiredFields)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        return new RecordDocument(
             record.Artifact.Id.Value, record.Artifact.SystemId.Value, record.Artifact.EndpointId.Value,
             record.Artifact.ArtifactType, record.Artifact.Identity, record.SemanticType,
-            record.Values.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            record.Values.Where(pair => requiredFields is null || requiredFields.Contains(pair.Key, StringComparer.Ordinal))
+                .OrderBy(pair => pair.Key, StringComparer.Ordinal)
                 .Select(pair => new ValueEntry(pair.Key, EncodeValue(pair.Value))).ToArray(),
             record.Relationships.Select(relationship => new RelationshipDocument(relationship.Type,
                 relationship.Target.Id.Value, relationship.Target.SystemId.Value, relationship.Target.EndpointId.Value,
@@ -21,11 +35,10 @@ internal static class VerificationArtifactRecordCodec
             record.Temporal is null ? null : new TemporalDocument(
                 Format(record.Temporal.EffectiveFrom), Format(record.Temporal.EffectiveTo),
                 Format(record.Temporal.RecordedAt), record.Temporal.Version));
-        return JsonSerializer.Serialize(document, JsonOptions);
     }
 
     public static VerificationArtifactRecord Decode(string json, string nodeKey, VerificationArtifactRole role,
-        string semanticType)
+        string semanticType, IReadOnlyCollection<string>? declaredFields = null)
     {
         var document = JsonSerializer.Deserialize<RecordDocument>(json, JsonOptions)
             ?? throw new InvalidDataException("Verification workspace record is empty.");
@@ -39,7 +52,8 @@ internal static class VerificationArtifactRecordCodec
         var temporal = document.Temporal is null ? null : new TemporalMetadata(
             ParseDateTimeOffset(document.Temporal.EffectiveFrom), ParseDateTimeOffset(document.Temporal.EffectiveTo),
             ParseDateTimeOffset(document.Temporal.RecordedAt), document.Temporal.Version);
-        return new VerificationArtifactRecord(nodeKey, role, semanticType, artifact, values, relationships, temporal);
+        return new VerificationArtifactRecord(nodeKey, role, semanticType, artifact, values, relationships, temporal,
+            declaredFields);
     }
 
     private static ValueDocument EncodeValue(ValueNode value) => value switch
@@ -65,7 +79,7 @@ internal static class VerificationArtifactRecordCodec
         "null" => new NullValue(),
         "string" => new StringValue(value.Text ?? string.Empty),
         "integer" => new IntegerValue(value.Integer ?? throw InvalidValue()),
-        "decimal" => new DecimalValue(decimal.Parse(value.Text ?? throw InvalidValue(), NumberStyles.Number, CultureInfo.InvariantCulture)),
+        "decimal" => new DecimalValue(decimal.Parse(value.Text ?? throw InvalidValue(), NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.InvariantCulture)),
         "boolean" => new BooleanValue(value.Boolean ?? throw InvalidValue()),
         "date" => new DateValue(DateOnly.ParseExact(value.Text ?? throw InvalidValue(), "yyyy-MM-dd", CultureInfo.InvariantCulture)),
         "instant" => new InstantValue(DateTimeOffset.ParseExact(value.Text ?? throw InvalidValue(), "O", CultureInfo.InvariantCulture, DateTimeStyles.None)),

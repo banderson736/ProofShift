@@ -37,6 +37,8 @@ public sealed class PensionSyntheticDataTests
         Assert.Equal(100_000, PensionDatasetScale.Large.Members);
         Assert.Equal(5_000_000, PensionDatasetScale.Large.Contributions);
         Assert.Equal(2_000_000, PensionDatasetScale.Large.BenefitPayments);
+        Assert.Equal(1_500_000, PensionDatasetScale.LargeAcceptance.GeneratedRecordCount);
+        Assert.Equal(912_409, PensionDatasetScale.LargeAcceptance.Contributions);
     }
 
     [Fact]

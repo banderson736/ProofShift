@@ -28,7 +28,27 @@ namespace ProofShift.EndToEnd.Tests;
 
 public sealed class PensionExternalCorpusVerificationTests
 {
+    private const string VerificationExecutionModeVariable = "PS010D_VERIFICATION_EXECUTION_MODE";
+        private const string PartitionWorkersVariable = "PS010D_PARTITION_WORKERS";
     private static readonly JsonSerializerOptions DemoJsonOptions = new() { WriteIndented = true };
+
+    private static VerificationRuleExecutionMode GetVerificationExecutionMode() =>
+        Environment.GetEnvironmentVariable(VerificationExecutionModeVariable)?.Trim().ToLowerInvariant() switch
+        {
+            null or "" or "globalrulereference" => VerificationRuleExecutionMode.GlobalRuleReference,
+            "partitionlocalexperimental" => VerificationRuleExecutionMode.PartitionLocalExperimental,
+            _ => throw new InvalidOperationException(
+                $"{VerificationExecutionModeVariable} must be GlobalRuleReference or PartitionLocalExperimental.")
+        };
+
+    private static int GetMaxPartitionWorkers()
+    {
+        var value = Environment.GetEnvironmentVariable(PartitionWorkersVariable);
+        if (string.IsNullOrWhiteSpace(value)) return 1;
+        if (!int.TryParse(value, out var workers) || workers is not (1 or 2 or 4 or 6 or 8))
+            throw new InvalidOperationException($"{PartitionWorkersVariable} must be 1, 2, 4, 6, or 8.");
+        return workers;
+    }
     private const string TargetConnectionSecret = "PS09_CORPUS_TARGET_CONNECTION";
     private const string SourceConnectionSecret = "PS09_CORPUS_SOURCE_CONNECTION";
     private const string CsvRootSecret = "PS09_CORPUS_CSV_ROOT";
@@ -65,8 +85,12 @@ public sealed class PensionExternalCorpusVerificationTests
         var datasetScale = benchmarkScale.ToLowerInvariant() switch
         {
             "fast" => PensionDatasetScale.Fast,
+            "probe-50k" => new PensionDatasetScale(608, 1825, 30_414, 2129, 973, 213, 12_164, 1522, 152),
+            "probe-100k" => new PensionDatasetScale(1216, 3650, 60_828, 4258, 1946, 426, 24_328, 3044, 304),
+            "probe-200k" => new PensionDatasetScale(2432, 7300, 121_656, 8516, 3892, 852, 48_656, 6088, 608),
             "medium" => PensionDatasetScale.Medium,
-            _ => throw new ArgumentException("PS010A_BENCHMARK_SCALE must be fast or medium.", BenchmarkScaleVariable)
+            "large-acceptance" => PensionDatasetScale.LargeAcceptance,
+            _ => throw new ArgumentException("PS010A_BENCHMARK_SCALE must be fast, probe-50k, probe-100k, probe-200k, medium, or large-acceptance.", BenchmarkScaleVariable)
         };
         var performanceRecorder = new PerformanceRecorder($"Pension {benchmarkScale} Integrated");
         var generationStopwatch = Stopwatch.StartNew();
@@ -187,7 +211,11 @@ public sealed class PensionExternalCorpusVerificationTests
             var expectedProjectionSourceVisits = CountProjectionSourceVisits(correctedScenario, correctedCapture.Checkpoint!);
             var registry = new ProofShift.Packs.Abstractions.PackRegistry([new PensionPack()]).Resolve(configuration.Root.Packs);
             var rules = registry.Resolve(VerificationRuleConfigurationLoader.Load(configuration));
-            var service = new VerificationService(checkpointStore);
+            await using var expectedWorksets = new VerificationExpectedWorksetScope(Path.Combine(directory, "working-expected"));
+            var partitionCount = int.TryParse(Environment.GetEnvironmentVariable("PS010D_PARTITION_COUNT"), out var configuredPartitions)
+                ? configuredPartitions : 1;
+            var service = new VerificationService(checkpointStore, expectedWorksets, partitionCount,
+                GetVerificationExecutionMode(), GetMaxPartitionWorkers());
 
             var externalVerificationStopwatch = Stopwatch.StartNew();
             var corrected = await VerifyExternalAsync(service, configuration, correctedScenario, correctedCapture,
@@ -235,6 +263,7 @@ public sealed class PensionExternalCorpusVerificationTests
             Assert.Equal(corrected.Run.TargetFingerprint, repeated.Run.TargetFingerprint);
             Assert.Equal(corrected.Run.RuleSetFingerprint, repeated.Run.RuleSetFingerprint);
             Assert.Equal(corrected.Run.EvidenceFingerprint, repeated.Run.EvidenceFingerprint);
+            Assert.Equal(corrected.Ledger.Fingerprint, repeated.Ledger.Fingerprint);
             externalVerificationStopwatch.Stop();
 
             var integratedAssuranceStopwatch = Stopwatch.StartNew();
@@ -247,7 +276,7 @@ public sealed class PensionExternalCorpusVerificationTests
             var targetConnectors = new ShadowTargetConnectorRegistry([targetConnector, new FilesystemShadowTargetConnector()]);
             var correctedPipeline = await ProjectVerifyAndQualifyAsync(checkpointStore, sourceConnectors, targetConnectors,
                 contextFactory, configuration, correctedScenario, correctedCapture, rules, directory,
-                "projected-corrected", performanceRecorder);
+                "projected-corrected", performanceRecorder, expectedWorksets: expectedWorksets);
             Assert.Equal(ProjectionStatus.Succeeded, correctedPipeline.Projection.Status);
             Assert.Equal(expectedProjectionSourceVisits, correctedPipeline.Projection.SourceArtifactCount);
             Assert.Equal(expectedTargetArtifacts, correctedPipeline.Projection.TargetArtifactCount);
@@ -258,7 +287,7 @@ public sealed class PensionExternalCorpusVerificationTests
 
             var falseReversePipeline = await ProjectVerifyAndQualifyAsync(checkpointStore, sourceConnectors, targetConnectors,
                 contextFactory, configuration, defectiveScenario, defectiveCapture, rules, directory,
-                "projected-false-reverse", performanceRecorder);
+                "projected-false-reverse", performanceRecorder, expectedWorksets: expectedWorksets);
             Assert.Equal(ProjectionStatus.Succeeded, falseReversePipeline.Projection.Status);
             Assert.Equal(VerificationOutcome.Passed, falseReversePipeline.Verification.Run.Outcome);
             Assert.Equal(DryRunQualificationStatus.NotQualified, falseReversePipeline.Recovery.Qualification.Status);
@@ -275,7 +304,7 @@ public sealed class PensionExternalCorpusVerificationTests
                     await ReplaceProjectedPostgresTargetsAsync(postgresContainer, projection.Id, defectiveTarget, defectiveScenario);
                     await RemoveMissingProjectedFilesAsync(targetFilesRoot, projection.Id, cleanTarget, defectiveTarget,
                         defectiveScenario);
-                });
+                }, expectedWorksets: expectedWorksets);
             Assert.Equal(ProjectionStatus.Succeeded, projectedDefectivePipeline.Projection.Status);
             Assert.Equal(VerificationOutcome.Failed, projectedDefectivePipeline.Verification.Run.Outcome);
             Assert.Equal(expectedCheckpointArtifacts, projectedDefectivePipeline.Verification.Ledger.DispositionCount);
@@ -286,6 +315,8 @@ public sealed class PensionExternalCorpusVerificationTests
             Assert.Equal(ExpectedDefects(), projectedDefects);
             Assert.Equal(149L, projectedDefects.Values.Sum());
             Assert.Equal(DryRunQualificationStatus.NotQualified, projectedDefectivePipeline.Recovery.Qualification.Status);
+            Assert.Equal(2, expectedWorksets.BuildCount);
+            Assert.Equal(4, expectedWorksets.ReuseCount);
 
             integratedAssuranceStopwatch.Stop();
             var persistenceAndReportStopwatch = Stopwatch.StartNew();
@@ -405,6 +436,65 @@ public sealed class PensionExternalCorpusVerificationTests
             cliReportingStage.Dispose();
             persistenceAndReportStopwatch.Stop();
             var performanceRun = performanceRecorder.Complete();
+            var journalValidationStages = performanceRun.Stages.Where(stage =>
+                stage.Kind == PerformanceStageKind.Verification && stage.Name == "projection journal validation");
+            Assert.NotEmpty(journalValidationStages);
+            foreach (var stage in journalValidationStages)
+            {
+                var workspaceAppend = Assert.Single(stage.Measurements,
+                    measurement => measurement.Name == "workspaceAppendElapsedMicroseconds");
+                var ledgerAppend = Assert.Single(stage.Measurements,
+                    measurement => measurement.Name == "ledgerAppendElapsedMicroseconds");
+                var journalReadAndValidation = Assert.Single(stage.Measurements,
+                    measurement => measurement.Name == "journalReadAndValidationElapsedMicroseconds");
+                Assert.All([workspaceAppend, ledgerAppend, journalReadAndValidation], measurement =>
+                    Assert.Equal("microseconds", measurement.Unit));
+                Assert.InRange(workspaceAppend.Value + ledgerAppend.Value + journalReadAndValidation.Value,
+                    0, stage.ElapsedMicroseconds);
+            }
+            var orderedArtifactQueryStages = performanceRun.Stages.Where(stage =>
+                stage.Kind == PerformanceStageKind.Verification && stage.Name.StartsWith(
+                    "SQLite ordered ", StringComparison.Ordinal)).ToArray();
+            Assert.NotEmpty(orderedArtifactQueryStages);
+            Assert.All(orderedArtifactQueryStages, stage =>
+            {
+                Assert.Equal(1, Assert.Single(stage.Measurements,
+                    measurement => measurement.Name == "queryExecutions").Value);
+                Assert.Equal((double)stage.ArtifactCount, Assert.Single(stage.Measurements,
+                    measurement => measurement.Name == "rowsReturned").Value);
+            });
+            var streamedReadCategories = new[]
+            {
+                "SQLite projection lineage stream",
+                "SQLite source disposition facts stream",
+                "SQLite graph-derived lineage stream",
+                "SQLite graph-derived source disposition facts stream"
+            };
+            foreach (var category in streamedReadCategories)
+            {
+                var stages = performanceRun.Stages.Where(stage => stage.Name == category).ToArray();
+                Assert.NotEmpty(stages);
+                Assert.All(stages, stage =>
+                {
+                    Assert.Equal(1, Assert.Single(stage.Measurements,
+                        measurement => measurement.Name == "queryExecutions").Value);
+                    Assert.Equal((double)stage.ArtifactCount, Assert.Single(stage.Measurements,
+                        measurement => measurement.Name == "recordsReturned").Value);
+                });
+            }
+            var ledgerWriteCategories = new[]
+            {
+                "verification ledger lineage writes",
+                "verification ledger disposition writes"
+            };
+            foreach (var category in ledgerWriteCategories)
+            {
+                var stages = performanceRun.Stages.Where(stage => stage.Name == category).ToArray();
+                Assert.NotEmpty(stages);
+                Assert.All(stages, stage => Assert.Equal((double)stage.ArtifactCount,
+                    Assert.Single(stage.Measurements,
+                        measurement => measurement.Name == "ledgerAppendOperations").Value));
+            }
             var performanceJson = PerformanceReportBuilder.ToJson(performanceRun);
             var performanceText = PerformanceReportBuilder.ToHumanReadable(performanceRun);
             await File.WriteAllTextAsync(Path.Combine(directory, "performance-run.json"), performanceJson,
@@ -420,6 +510,11 @@ public sealed class PensionExternalCorpusVerificationTests
             var demoSummary = new
             {
                 benchmarkScale = benchmarkScale.ToLowerInvariant(),
+                generatorVersion = PensionSyntheticDatasetGenerator.Version,
+                generatorSeed = PensionSyntheticDatasetGenerator.DefaultSeed,
+                verificationExecutionMode = GetVerificationExecutionMode().ToString(),
+                partitionCount,
+                maxPartitionWorkers = GetMaxPartitionWorkers(),
                 environmentStartupMilliseconds = environmentStartupStopwatch.Elapsed.TotalMilliseconds,
                 generationMilliseconds = generationStopwatch.Elapsed.TotalMilliseconds,
                 sourceMaterializationAndLoadMilliseconds = sourceLoadStopwatch.Elapsed.TotalMilliseconds,
@@ -785,6 +880,7 @@ public sealed class PensionExternalCorpusVerificationTests
     private static async Task MaterializeCsvAndFileSourcesAsync(IEnumerable<PensionSyntheticRecord> records,
         string csvRoot, string filesRoot)
     {
+        var stableModifiedAt = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         Directory.CreateDirectory(csvRoot);
         Directory.CreateDirectory(filesRoot);
         foreach (var kind in new[] { PensionRecordKind.Document, PensionRecordKind.HistoricalExport })
@@ -807,6 +903,7 @@ public sealed class PensionExternalCorpusVerificationTests
                     var expectedHash = ((StringValue)record.Values["content_hash"]).Value;
                     Assert.Equal(expectedHash, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
                     await File.WriteAllBytesAsync(fullPath, bytes, TestContext.Current.CancellationToken);
+                    File.SetLastWriteTimeUtc(fullPath, stableModifiedAt);
                 }
             }
         }
@@ -879,7 +976,8 @@ public sealed class PensionExternalCorpusVerificationTests
             LoadedProjectConfiguration configuration, ScenarioGraph scenario, SnapshotCaptureResult capture,
             VerificationRuleSet rules, string projectDirectory, string runName,
             PerformanceRecorder performanceRecorder,
-            Func<ProjectionRun, Task>? beforeVerification = null)
+            Func<ProjectionRun, Task>? beforeVerification = null,
+            VerificationExpectedWorksetScope? expectedWorksets = null)
     {
         await using var checkpoint = await checkpointStore.OpenCompleteAsync(
             capture.Id.Value.ToString("N", System.Globalization.CultureInfo.InvariantCulture), TestContext.Current.CancellationToken);
@@ -908,7 +1006,10 @@ public sealed class PensionExternalCorpusVerificationTests
             await beforeVerification(projection);
             fixtureMutationStage.AddArtifacts(projection.TargetArtifactCount);
         }
-        var verification = await new VerificationService(checkpointStore).VerifyAsync(configuration, scenario.Graph, binding,
+        var partitionCount = int.TryParse(Environment.GetEnvironmentVariable("PS010D_PARTITION_COUNT"), out var configuredPartitions)
+            ? configuredPartitions : 1;
+        var verification = await new VerificationService(checkpointStore, expectedWorksets, partitionCount,
+            GetVerificationExecutionMode(), GetMaxPartitionWorkers()).VerifyAsync(configuration, scenario.Graph, binding,
             rules, projectDirectory, Path.Combine(projectDirectory, ".proofshift", "temporary", runName), "0.9-test",
             targets, performanceRecorder, TestContext.Current.CancellationToken);
         var recovery = await new RecoveryService(checkpointStore,

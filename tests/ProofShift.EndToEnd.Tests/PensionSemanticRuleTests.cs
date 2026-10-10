@@ -38,6 +38,25 @@ public sealed class PensionSemanticRuleTests
         var expected = PensionTargetDataModel.Transform(source).ToArray();
         var defective = PensionDefectInjector.InjectTargetDefects(expected).ToArray();
         var definitions = RuleDefinitions();
+        var relationshipDescriptor = new PensionPack().RuleFactories
+            .Single(factory => factory.Type == "pension-beneficiary-relationship").Descriptor;
+        Assert.Equal(VerificationPartitionExecution.Global, relationshipDescriptor.PartitionExecution);
+        var globallyScopedPensionRules = new PensionPack().RuleFactories.Where(factory => factory.Type is
+            "pension-employment-timeline" or "pension-beneficiary-relationship" or "pension-document-relationship" or
+            "pension-contribution-total" or "pension-service-credit-total" or "pension-benefit-payment-total");
+        Assert.All(globallyScopedPensionRules, factory =>
+            Assert.Equal(VerificationPartitionExecution.Global, factory.Descriptor.PartitionExecution));
+        var beneficiaries = expected.Where(record => record.Kind == PensionRecordKind.Beneficiary).ToArray();
+        var crossPartitionRelationship = (
+            from beneficiary in beneficiaries
+            let memberId = ((StringValue)beneficiary.Values["participant_id"]).Value
+            let member = expected.FirstOrDefault(record => record.Kind == PensionRecordKind.Member &&
+                ((StringValue)record.Values["member_id"]).Value == memberId)
+            where member is not null && VerificationPartitioning.AssignArtifactIdentity("target-member", member.Identity, 8) !=
+                VerificationPartitioning.AssignArtifactIdentity("target-beneficiary", beneficiary.Identity, 8)
+            select (Member: member!, Beneficiary: beneficiary)).FirstOrDefault();
+        Assert.NotNull(crossPartitionRelationship.Member);
+        Assert.NotNull(crossPartitionRelationship.Beneficiary);
         if (structured)
         {
             var descriptors = new PensionPack().RuleFactories.ToDictionary(factory => factory.Type, factory => factory.Descriptor);

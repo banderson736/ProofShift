@@ -50,6 +50,8 @@ public sealed record PensionDatasetScale
     public static PensionDatasetScale Fast { get; } = new(100, 300, 5_000, 350, 160, 35, 2_000, 250, 25);
     public static PensionDatasetScale Medium { get; } = new(5_000, 15_000, 250_000, 17_500, 8_000, 1_750,
         100_000, 12_500, 1_250);
+    public static PensionDatasetScale LargeAcceptance { get; } = new(18_248, 54_745, 912_409, 63_869,
+        29_197, 6_387, 364_963, 45_620, 4_562);
     public static PensionDatasetScale Large { get; } = new(100_000, 300_000, 5_000_000, 350_000,
         160_000, 35_000, 2_000_000, 250_000, 25_000);
 

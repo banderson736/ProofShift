@@ -51,6 +51,10 @@ public static class PerformanceReportBuilder
                 lines.Add($"{label}: {FormatMilliseconds(stage.ElapsedMicroseconds)} ms" +
                     (stage.ArtifactCount > 0 ? $", {stage.ArtifactCount.ToString("N0", CultureInfo.InvariantCulture)} artifacts" : string.Empty) +
                     (stage.ByteCount > 0 ? $", {FormatBytes(stage.ByteCount)}" : string.Empty));
+                var exclusive = stage.Measurements.FirstOrDefault(measurement =>
+                    measurement.Name == "exclusiveElapsedMicroseconds");
+                if (exclusive is not null)
+                    lines.Add($"  Exclusive: {FormatMilliseconds((long)Math.Round(exclusive.Value))} ms");
                 if (stage.ArtifactCount > 0 && stage.ElapsedMicroseconds > 0)
                 {
                     var seconds = stage.ElapsedMicroseconds / 1_000_000d;

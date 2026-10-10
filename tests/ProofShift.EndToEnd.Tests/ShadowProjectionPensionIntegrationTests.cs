@@ -198,13 +198,16 @@ public sealed class ShadowProjectionPensionIntegrationTests
                         replayed.Id, SystemRole.ShadowTarget))).ToArray();
             var ruleRegistry = new VerificationRuleRegistry([new GenericVerificationRuleProvider(), new PensionPack()]);
             var ruleSet = ruleRegistry.Resolve(CreateVerificationRules());
-            var verificationService = new VerificationService(checkpointStore);
+            await using var expectedWorksets = new VerificationExpectedWorksetScope(Path.Combine(projectRoot, "expected"));
+            var verificationService = new VerificationService(checkpointStore, expectedWorksets);
             var clean = await verificationService.VerifyAsync(configuration, graph, binding, ruleSet, projectRoot,
                 Path.Combine(projectRoot, ".proofshift", "temporary"), "0.1.0", targetRuntimes,
                 TestContext.Current.CancellationToken);
             Assert.Equal(VerificationOutcome.Passed, clean.Run.Outcome);
             Assert.Equal(21, clean.Ledger.DispositionCount);
             Assert.Equal(31, clean.Ledger.LineageCount);
+            Assert.Equal(1, expectedWorksets.BuildCount);
+            Assert.Equal(0, expectedWorksets.ReuseCount);
 
             using (var cancelled = new CancellationTokenSource())
             {
@@ -273,6 +276,9 @@ public sealed class ShadowProjectionPensionIntegrationTests
                 TestContext.Current.CancellationToken);
             Assert.Equal(VerificationOutcome.Passed, repaired.Run.Outcome);
             Assert.Equal(clean.Run.EvidenceFingerprint, repaired.Run.EvidenceFingerprint);
+            Assert.Equal(clean.Ledger.Fingerprint, repaired.Ledger.Fingerprint);
+            Assert.Equal(System.Text.Json.JsonSerializer.Serialize(clean.Findings), System.Text.Json.JsonSerializer.Serialize(repaired.Findings));
+            Assert.True(expectedWorksets.ReuseCount >= 2);
             var changedRuleSet = ruleRegistry.Resolve(CreateVerificationRules(attribute: "amount"));
             Assert.NotEqual(ruleSet.Fingerprint, changedRuleSet.Fingerprint);
 
@@ -310,6 +316,33 @@ public sealed class ShadowProjectionPensionIntegrationTests
             Assert.Equal(recovery.Assessment.Fingerprint, repeatedRecovery.Assessment.Fingerprint);
             Assert.Equal(recovery.Rehearsal.Fingerprint, repeatedRecovery.Rehearsal.Fingerprint);
             Assert.Equal(recovery.Qualification.DryRunFingerprint, repeatedRecovery.Qualification.DryRunFingerprint);
+            var freshRecovery = await recoveryService.AssessAndRehearseAsync(configuration, graph, binding, clean,
+                new EffectiveRecoveryPolicy(), targetRuntimes, projectRoot, TestContext.Current.CancellationToken);
+            Assert.Equal(recovery.Assessment.Fingerprint, freshRecovery.Assessment.Fingerprint);
+            Assert.Equal(recovery.Plan.Fingerprint, freshRecovery.Plan.Fingerprint);
+            Assert.Equal(recovery.Rehearsal.Fingerprint, freshRecovery.Rehearsal.Fingerprint);
+            Assert.Equal(recovery.Qualification.Status, freshRecovery.Qualification.Status);
+            Assert.Equal(System.Text.Json.JsonSerializer.Serialize(recovery.Qualification.Reasons),
+                System.Text.Json.JsonSerializer.Serialize(freshRecovery.Qualification.Reasons));
+            Assert.Equal(clean.Run.Id, freshRecovery.Assessment.Binding.VerificationRunId);
+            Assert.Equal(repaired.Run.Id, recovery.Assessment.Binding.VerificationRunId);
+            foreach (var partitionCount in new[] { 4, 8 })
+            {
+                var partitioned = await new VerificationService(checkpointStore, expectedWorksets, partitionCount).VerifyAsync(
+                    configuration, graph, binding, ruleSet, projectRoot, Path.Combine(projectRoot, ".proofshift", "temporary"),
+                    "0.1.0", targetRuntimes, TestContext.Current.CancellationToken);
+                Assert.Equal(System.Text.Json.JsonSerializer.Serialize(repaired.Findings), System.Text.Json.JsonSerializer.Serialize(partitioned.Findings));
+                Assert.Equal(repaired.Run.EvidenceFingerprint, partitioned.Run.EvidenceFingerprint);
+                Assert.Equal(repaired.Ledger.Fingerprint, partitioned.Ledger.Fingerprint);
+                var partitionRecovery = await recoveryService.AssessAndRehearseAsync(configuration, graph, binding, partitioned,
+                    new EffectiveRecoveryPolicy(), targetRuntimes, projectRoot, TestContext.Current.CancellationToken);
+                Assert.Equal(recovery.Assessment.Fingerprint, partitionRecovery.Assessment.Fingerprint);
+                Assert.Equal(recovery.Plan.Fingerprint, partitionRecovery.Plan.Fingerprint);
+                Assert.Equal(recovery.Rehearsal.Fingerprint, partitionRecovery.Rehearsal.Fingerprint);
+                Assert.Equal(recovery.Qualification.Status, partitionRecovery.Qualification.Status);
+                Assert.Equal(System.Text.Json.JsonSerializer.Serialize(recovery.Qualification.Reasons),
+                    System.Text.Json.JsonSerializer.Serialize(partitionRecovery.Qualification.Reasons));
+            }
 
             var recoveryArtifactStore = new FileSystemRecoveryArtifactStore(Path.Combine(projectRoot, ".proofshift", "recovery"));
             var recoveryReceipt = await recoveryArtifactStore.SaveAsync(recovery, TestContext.Current.CancellationToken);

@@ -14,16 +14,30 @@ public sealed class GenericVerificationRuleProvider : IVerificationRuleProvider
         new("target-lineage", definition => new TargetLineageRule(definition),
             new("target-lineage", "1", "Require graph-scoped provenance for every observed target.", VerificationScope.Accounting)),
         new("target-presence", definition => new TargetPresenceRule(definition),
-            new("target-presence", "1", "Compare graph-derived expected and observed target presence.", VerificationScope.Entity)),
+            new("target-presence", "1", "Compare graph-derived expected and observed target presence.", VerificationScope.Entity,
+                partitionExecution: VerificationPartitionExecution.PartitionPartialWithGlobalMerge,
+                partitionKey: new VerificationPartitionKeyDefinition(VerificationPartitionBasis.ArtifactIdentity,
+                    VerificationArtifactRole.ActualTarget))),
         new("unexpected-target", definition => new UnexpectedTargetRule(definition),
-            new("unexpected-target", "1", "Reject observed targets not explained by the migration graph.", VerificationScope.Entity)),
+            new("unexpected-target", "1", "Reject observed targets not explained by the migration graph.", VerificationScope.Entity,
+                partitionExecution: VerificationPartitionExecution.PartitionLocal,
+                partitionKey: new VerificationPartitionKeyDefinition(VerificationPartitionBasis.ArtifactIdentity,
+                    VerificationArtifactRole.ActualTarget))),
         new("attribute-comparison", definition => new AttributeComparisonRule(definition),
             new("attribute-comparison", "1", "Compare configured mapped attribute values against independent target observations.", VerificationScope.Attribute,
                 [new("attribute", RuleOptionKind.FieldReference, "Mapped target field; omitted means all mapped attributes."),
-                 new("targetNode", RuleOptionKind.Text, "Target graph node."), new("semanticType", RuleOptionKind.SemanticTypeReference, "Semantic type scope.")])),
+                 new("targetNode", RuleOptionKind.Text, "Target graph node."), new("semanticType", RuleOptionKind.SemanticTypeReference, "Semantic type scope.")],
+                fieldRequirements: [new RuleFieldRequirement("attribute", VerificationFieldSide.Target,
+                    includeMappedTargetFieldsWhenUnset: true, targetNodeOption: "targetNode")],
+                partitionExecution: VerificationPartitionExecution.PartitionPartialWithGlobalMerge,
+                partitionKey: new VerificationPartitionKeyDefinition(VerificationPartitionBasis.ArtifactIdentity,
+                    VerificationArtifactRole.ActualTarget))),
         new("entity-uniqueness", definition => new EntityUniquenessRule(definition),
             new("entity-uniqueness", "1", "Require unique target identities in the configured graph scope.", VerificationScope.Entity,
-                [new("targetNode", RuleOptionKind.Text, "Target graph node."), new("semanticType", RuleOptionKind.SemanticTypeReference, "Semantic type scope.")]))
+                [new("targetNode", RuleOptionKind.Text, "Target graph node."), new("semanticType", RuleOptionKind.SemanticTypeReference, "Semantic type scope.")],
+                partitionExecution: VerificationPartitionExecution.PartitionLocal,
+                partitionKey: new VerificationPartitionKeyDefinition(VerificationPartitionBasis.ArtifactIdentity,
+                    VerificationArtifactRole.ActualTarget)))
     ];
 }
 
@@ -173,7 +187,7 @@ public sealed class TargetLineageRule(VerificationRuleDefinition definition) : V
     }
 }
 
-public sealed class TargetPresenceRule(VerificationRuleDefinition definition) : VerificationRuleBase(definition)
+public sealed class TargetPresenceRule(VerificationRuleDefinition definition) : VerificationRuleBase(definition), IVerificationPartitionFindingMerger
 {
     public override VerificationScope Scope => VerificationScope.Entity;
 
@@ -200,12 +214,35 @@ public sealed class TargetPresenceRule(VerificationRuleDefinition definition) : 
                 new EvidenceValue(new StringValue("present")), new EvidenceValue(new StringValue("missing")));
         }
 
-        if (observed == 0)
+        if (context.EvaluationPartition is { } partitionIndex)
+        {
+            yield return Finding(context, EvidenceType.Comparison, EvidenceResult.Pass, "TargetPresencePartitionPartial",
+                $"{Id.Value}:partition:{partitionIndex.ToString(CultureInfo.InvariantCulture)}", "Partition-local target-presence summary.",
+                context.BindingReferences, new EvidenceValue(new IntegerValue(observed)), new EvidenceValue(new IntegerValue(missing)));
+        }
+        else if (observed == 0)
             yield return Finding(context, EvidenceType.Comparison, EvidenceResult.Fail, "MissingTarget",
                 $"{Id.Value}:no-materialized-ancestry", "Projection journal contains no materialized target ancestry.");
         else if (missing == 0)
             yield return Finding(context, EvidenceType.Comparison, EvidenceResult.Pass, "TargetPresence",
                 $"{Id.Value}:complete", "Every journal-materialized target artifact is present in physical shadow read-back.");
+    }
+
+    public IReadOnlyCollection<VerificationFinding> MergePartitionFindings(VerificationExecutionContext context,
+        IReadOnlyList<IReadOnlyList<VerificationFinding>> partitionFindings)
+    {
+        var all = partitionFindings.SelectMany(items => items).ToArray();
+        var partials = all.Where(finding => finding.Code == "TargetPresencePartitionPartial").ToArray();
+        var observed = partials.Sum(finding => ((IntegerValue)finding.Expected!.Value).Value);
+        var missing = partials.Sum(finding => ((IntegerValue)finding.Actual!.Value).Value);
+        var failures = all.Where(finding => finding.Code == "MissingTarget" && finding.Result == EvidenceResult.Fail)
+            .OrderBy(finding => finding.StableKey, StringComparer.Ordinal).ToArray();
+        if (observed == 0)
+            return [Finding(context, EvidenceType.Comparison, EvidenceResult.Fail, "MissingTarget",
+                $"{Id.Value}:no-materialized-ancestry", "Projection journal contains no materialized target ancestry.")];
+        if (missing > 0) return failures;
+        return [Finding(context, EvidenceType.Comparison, EvidenceResult.Pass, "TargetPresence",
+            $"{Id.Value}:complete", "Every journal-materialized target artifact is present in physical shadow read-back.")];
     }
 }
 
@@ -265,7 +302,7 @@ public sealed class EntityUniquenessRule(VerificationRuleDefinition definition) 
     }
 }
 
-public sealed class AttributeComparisonRule(VerificationRuleDefinition definition) : VerificationRuleBase(definition)
+public sealed class AttributeComparisonRule(VerificationRuleDefinition definition) : VerificationRuleBase(definition), IVerificationPartitionFindingMerger
 {
     public override VerificationScope Scope => VerificationScope.Attribute;
 
@@ -301,7 +338,13 @@ public sealed class AttributeComparisonRule(VerificationRuleDefinition definitio
                 HashValue(comparison.ExpectedFingerprint), HashValue(comparison.ActualFingerprint));
         }
 
-        if (compared == 0)
+        if (context.EvaluationPartition is { } partitionIndex)
+        {
+            yield return Finding(context, EvidenceType.Comparison, EvidenceResult.Pass, "AttributeComparisonPartitionPartial",
+                $"{Id.Value}:partition:{partitionIndex.ToString(CultureInfo.InvariantCulture)}", "Partition-local attribute-comparison summary.",
+                context.BindingReferences, new EvidenceValue(new IntegerValue(compared)), new EvidenceValue(new IntegerValue(matching)));
+        }
+        else if (compared == 0)
             yield return Finding(context, EvidenceType.Comparison, EvidenceResult.NotApplicable, "AttributeNotApplicable",
                 $"{Id.Value}:no-comparisons", "No expected/actual attributes matched the configured rule scope.");
         else if (matching > 0)
@@ -309,6 +352,25 @@ public sealed class AttributeComparisonRule(VerificationRuleDefinition definitio
                 $"{Id.Value}:population", $"{matching.ToString(CultureInfo.InvariantCulture)} of {compared.ToString(CultureInfo.InvariantCulture)} configured attribute comparisons matched.",
                 context.BindingReferences, new EvidenceValue(new IntegerValue(compared)),
                 new EvidenceValue(new IntegerValue(matching)));
+    }
+
+    public IReadOnlyCollection<VerificationFinding> MergePartitionFindings(VerificationExecutionContext context,
+        IReadOnlyList<IReadOnlyList<VerificationFinding>> partitionFindings)
+    {
+        var all = partitionFindings.SelectMany(items => items).ToArray();
+        var partials = all.Where(finding => finding.Code == "AttributeComparisonPartitionPartial").ToArray();
+        var compared = partials.Sum(finding => ((IntegerValue)finding.Expected!.Value).Value);
+        var matching = partials.Sum(finding => ((IntegerValue)finding.Actual!.Value).Value);
+        var merged = all.Where(finding => finding.Code != "AttributeComparisonPartitionPartial").ToList();
+        if (compared == 0)
+            merged.Add(Finding(context, EvidenceType.Comparison, EvidenceResult.NotApplicable, "AttributeNotApplicable",
+                $"{Id.Value}:no-comparisons", "No expected/actual attributes matched the configured rule scope."));
+        else if (matching > 0)
+            merged.Add(Finding(context, EvidenceType.Comparison, EvidenceResult.Pass, "AttributeComparison",
+                $"{Id.Value}:population", $"{matching.ToString(CultureInfo.InvariantCulture)} of {compared.ToString(CultureInfo.InvariantCulture)} configured attribute comparisons matched.",
+                context.BindingReferences, new EvidenceValue(new IntegerValue(compared)),
+                new EvidenceValue(new IntegerValue(matching))));
+        return merged.OrderBy(finding => finding.StableKey, StringComparer.Ordinal).ToArray();
     }
 }
 

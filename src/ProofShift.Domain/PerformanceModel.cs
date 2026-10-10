@@ -8,7 +8,8 @@ public enum PerformanceStageKind
     Projection,
     Verification,
     Recovery,
-    Reporting
+    Reporting,
+    Processing
 }
 
 public sealed record PerformanceMeasurement(string Name, double Value, string Unit);
@@ -42,4 +43,9 @@ public sealed record PerformanceRun(
     public const string FormatVersion = "proofshift-performance-run-v1";
 
     public long ElapsedMicroseconds => Math.Max(0, (CompletedAt - StartedAt).Ticks / 10);
+
+    public long ProofShiftProcessingMicroseconds => Stages.FirstOrDefault(stage =>
+        stage.Kind == PerformanceStageKind.Processing && stage.Name == "ProofShift processing")?.ElapsedMicroseconds ??
+        Math.Max(0, ElapsedMicroseconds - Stages.Where(stage => stage.Kind == PerformanceStageKind.Fixture)
+            .Sum(stage => stage.ElapsedMicroseconds));
 }

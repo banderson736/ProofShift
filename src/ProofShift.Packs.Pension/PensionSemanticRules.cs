@@ -77,8 +77,11 @@ public abstract class PensionRuleBase(VerificationRuleDefinition definition) : V
     protected string TargetNode => Option("targetNode");
     protected string SemanticType => Option("semanticType");
 
-    protected static string FieldText(VerificationArtifactRecord record, string field) =>
-        record.Values.TryGetValue(field, out var value) ? ValueText(value) : string.Empty;
+    protected static string FieldText(VerificationArtifactRecord record, string field)
+    {
+        record.RequireDeclaredField(field);
+        return record.Values.TryGetValue(field, out var value) ? ValueText(value) : string.Empty;
+    }
 
     protected static string ValueText(ValueNode value) => value switch
     {
@@ -97,6 +100,7 @@ public abstract class PensionRuleBase(VerificationRuleDefinition definition) : V
 
     protected static decimal? DecimalValue(VerificationArtifactRecord record, string field)
     {
+        record.RequireDeclaredField(field);
         if (!record.Values.TryGetValue(field, out var value)) return null;
         return value switch
         {
@@ -109,6 +113,7 @@ public abstract class PensionRuleBase(VerificationRuleDefinition definition) : V
 
     protected static DateOnly? DateValue(VerificationArtifactRecord record, string field)
     {
+        record.RequireDeclaredField(field);
         if (!record.Values.TryGetValue(field, out var value)) return null;
         return value switch
         {

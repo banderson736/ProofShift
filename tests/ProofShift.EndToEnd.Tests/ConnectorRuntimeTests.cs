@@ -6,6 +6,7 @@ using ProofShift.Connectors.Csv;
 using ProofShift.Connectors.Files;
 using ProofShift.Domain;
 using ProofShift.Engine;
+using ProofShift.Snapshots;
 using Xunit;
 
 namespace ProofShift.EndToEnd.Tests;
@@ -59,6 +60,50 @@ public sealed class ConnectorRuntimeTests
         finally
         {
             Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task FilesystemRecordFingerprintIsStableForEquivalentContentAndTimestampAndChangesWithTimestamp()
+    {
+        var firstRoot = CreateTemporaryDirectory();
+        var secondRoot = CreateTemporaryDirectory();
+        var modifiedAt = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var content = Encoding.UTF8.GetBytes("synthetic deterministic payload");
+        var selector = new ArtifactSelector("file-pattern",
+            [new KeyValuePair<string, string>("pattern", "**/*.bin")], ["relativePath"]);
+        try
+        {
+            var firstPath = Path.Combine(firstRoot, "member", "document.bin");
+            var secondPath = Path.Combine(secondRoot, "member", "document.bin");
+            Directory.CreateDirectory(Path.GetDirectoryName(firstPath)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(secondPath)!);
+            await File.WriteAllBytesAsync(firstPath, content, TestContext.Current.CancellationToken);
+            await File.WriteAllBytesAsync(secondPath, content, TestContext.Current.CancellationToken);
+            File.SetLastWriteTimeUtc(firstPath, modifiedAt);
+            File.SetLastWriteTimeUtc(secondPath, modifiedAt);
+
+            var connector = new FilesystemSourceConnector();
+            var first = Assert.Single(await ReadAllAsync(connector.ReadAsync(
+                Context("files", [new KeyValuePair<string, string>("root", firstRoot)]), selector,
+                new ReadOptions(), TestContext.Current.CancellationToken)));
+            var second = Assert.Single(await ReadAllAsync(connector.ReadAsync(
+                Context("files", [new KeyValuePair<string, string>("root", secondRoot)]), selector,
+                new ReadOptions(), TestContext.Current.CancellationToken)));
+
+            Assert.Equal(SnapshotFingerprints.RecordFingerprint(first), SnapshotFingerprints.RecordFingerprint(second));
+            Assert.Equal(new InstantValue(new DateTimeOffset(modifiedAt)), first.Values["modifiedAt"]);
+
+            File.SetLastWriteTimeUtc(secondPath, modifiedAt.AddDays(1));
+            var changed = Assert.Single(await ReadAllAsync(connector.ReadAsync(
+                Context("files", [new KeyValuePair<string, string>("root", secondRoot)]), selector,
+                new ReadOptions(), TestContext.Current.CancellationToken)));
+            Assert.NotEqual(SnapshotFingerprints.RecordFingerprint(first), SnapshotFingerprints.RecordFingerprint(changed));
+        }
+        finally
+        {
+            Directory.Delete(firstRoot, recursive: true);
+            Directory.Delete(secondRoot, recursive: true);
         }
     }
 
