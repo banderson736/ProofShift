@@ -51,17 +51,22 @@ public sealed record VerificationRuleSet
     public DomainList<VerificationRuleDefinition> Definitions { get; }
     public DomainList<IVerificationRule> Rules { get; }
     public DomainList<VerificationOrderingKey> RequiredOrderingKeys { get; }
+    public IReadOnlyDictionary<string, RuleDescriptor> DescriptorsByRuleId { get; }
     public IReadOnlyDictionary<string, string> ProviderVersions { get; }
     public string Fingerprint { get; }
 
     internal VerificationRuleSet(IEnumerable<VerificationRuleDefinition> definitions,
-        IEnumerable<IVerificationRule> rules, IEnumerable<KeyValuePair<string, string>> providerVersions, string fingerprint)
+        IEnumerable<IVerificationRule> rules, IEnumerable<KeyValuePair<string, string>> providerVersions,
+        IReadOnlyDictionary<string, RuleDescriptor> descriptorsByRuleId, string fingerprint)
     {
         Definitions = new DomainList<VerificationRuleDefinition>(definitions.OrderBy(item => item.Id.Value, StringComparer.Ordinal));
         Rules = new DomainList<IVerificationRule>(rules.OrderBy(item => item.Id.Value, StringComparer.Ordinal));
         RequiredOrderingKeys = new DomainList<VerificationOrderingKey>(Rules.SelectMany(rule => rule.RequiredOrderingKeys)
             .Distinct().OrderBy(key => key.SemanticType, StringComparer.Ordinal)
             .ThenBy(key => key.Field, StringComparer.Ordinal).ThenBy(key => key.Role));
+        DescriptorsByRuleId = new System.Collections.ObjectModel.ReadOnlyDictionary<string, RuleDescriptor>(
+            new SortedDictionary<string, RuleDescriptor>(descriptorsByRuleId.ToDictionary(pair => pair.Key,
+                pair => pair.Value, StringComparer.Ordinal), StringComparer.Ordinal));
         ProviderVersions = new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(
             new SortedDictionary<string, string>(providerVersions.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal), StringComparer.Ordinal));
         Fingerprint = fingerprint;
@@ -105,15 +110,18 @@ public sealed class VerificationRuleRegistry
             throw new VerificationRuleException(VerificationIssueCodes.UnknownRuleType, "Verification rule IDs must be unique.");
 
         var rules = new List<IVerificationRule>(configured.Length);
+        var descriptors = new SortedDictionary<string, RuleDescriptor>(StringComparer.Ordinal);
         foreach (var definition in configured)
         {
             if (!_factories.TryGetValue(definition.Type, out var factory))
                 throw new VerificationRuleException(VerificationIssueCodes.UnknownRuleType,
                     $"Verification rule type '{definition.Type}' is not registered.", definition.SourceLocation);
             rules.Add(factory.Create(definition));
+            descriptors.Add(definition.Id.Value, factory.Descriptor);
         }
 
-        return new VerificationRuleSet(configured, rules, _providerVersions, Fingerprint(configured, _providerVersions));
+        return new VerificationRuleSet(configured, rules, _providerVersions, descriptors,
+            Fingerprint(configured, _providerVersions));
     }
 
     private static string Fingerprint(IEnumerable<VerificationRuleDefinition> definitions,

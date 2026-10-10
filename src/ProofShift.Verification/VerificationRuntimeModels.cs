@@ -6,6 +6,12 @@ using ProofShift.Snapshots;
 
 namespace ProofShift.Verification;
 
+internal enum VerificationRuleExecutionMode
+{
+    GlobalRuleReference,
+    PartitionLocalExperimental
+}
+
 public static class VerificationIssueCodes
 {
     public const string ContextMismatch = "PSVERIFY001";
@@ -245,6 +251,12 @@ public interface IVerificationRule
     IAsyncEnumerable<VerificationFinding> EvaluateAsync(VerificationExecutionContext context, CancellationToken cancellationToken);
 }
 
+public interface IVerificationPartitionFindingMerger
+{
+    IReadOnlyCollection<VerificationFinding> MergePartitionFindings(VerificationExecutionContext context,
+        IReadOnlyList<IReadOnlyList<VerificationFinding>> partitionFindings);
+}
+
 public enum VerificationOrderingRole
 {
     Grouping,
@@ -301,6 +313,7 @@ public enum VerificationArtifactRole
 
 public sealed record VerificationArtifactRecord
 {
+    private readonly DomainList<string>? _declaredFields;
     public string NodeKey { get; }
     public VerificationArtifactRole Role { get; }
     public string SemanticType { get; }
@@ -308,10 +321,12 @@ public sealed record VerificationArtifactRecord
     public DomainDictionary<ValueNode> Values { get; }
     public DomainList<RelationshipReference> Relationships { get; }
     public TemporalMetadata? Temporal { get; }
+    public bool HasDeclaredFieldSet => _declaredFields is not null;
 
     public VerificationArtifactRecord(string nodeKey, VerificationArtifactRole role, string semanticType,
         ArtifactReference artifact, IEnumerable<KeyValuePair<string, ValueNode>> values,
-        IEnumerable<RelationshipReference>? relationships = null, TemporalMetadata? temporal = null)
+        IEnumerable<RelationshipReference>? relationships = null, TemporalMetadata? temporal = null,
+        IEnumerable<string>? declaredFields = null)
     {
         NodeKey = string.IsNullOrWhiteSpace(nodeKey) ? throw new ArgumentException("Node key is required.", nameof(nodeKey)) : nodeKey.Trim();
         Role = role;
@@ -320,6 +335,15 @@ public sealed record VerificationArtifactRecord
         Values = new DomainDictionary<ValueNode>(values);
         Relationships = new DomainList<RelationshipReference>(relationships ?? []);
         Temporal = temporal;
+        _declaredFields = declaredFields is null ? null : new DomainList<string>(declaredFields);
+    }
+
+    public void RequireDeclaredField(string field)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(field);
+        if (_declaredFields is not null && !_declaredFields.Contains(field, StringComparer.Ordinal))
+            throw new VerificationRuleException("PSRULE008",
+                $"Rule accessed field '{field}' outside the declared Verification workset for semantic type '{SemanticType}'.");
     }
 }
 
@@ -336,6 +360,8 @@ public interface IVerificationWorkspace : IAsyncDisposable
     long SourceArtifactCount { get; }
     long ExpectedTargetCount { get; }
     long ActualTargetCount { get; }
+
+    void SetRuleEvaluationPartition(int? partitionIndex) { }
 
     Task AddSourceArtifactAsync(string nodeKey, RecordEnvelope record, CancellationToken cancellationToken);
     Task<bool> ContainsSourceArtifactAsync(string nodeKey, ArtifactReference artifact, CancellationToken cancellationToken);
@@ -391,6 +417,14 @@ public sealed record VerificationExecutionContext
     public DomainList<EvidenceReference> BindingReferences { get; }
     public RunId VerificationRunId { get; }
     public IVerificationWorkspace Workspace { get; }
+    public int? EvaluationPartition { get; init; }
+    public int PartitionCount { get; init; } = 1;
+
+    public VerificationExecutionContext ForPartition(int partitionIndex, int partitionCount) => this with
+    {
+        EvaluationPartition = partitionIndex,
+        PartitionCount = partitionCount
+    };
 
     public VerificationExecutionContext(LoadedProjectConfiguration configuration, MigrationGraph graph,
         ProjectionVerificationBinding projection, RunId verificationRunId, IVerificationWorkspace workspace)

@@ -84,6 +84,33 @@ public sealed class VerificationRuleConfigurationTests
     }
 
     [Fact]
+    public void GenericRuleCapabilitiesAreExplicitAndFailClosed()
+    {
+        var registry = new VerificationRuleRegistry([new GenericVerificationRuleProvider()]);
+        var rules = registry.Resolve([
+            new VerificationRuleDefinition(new RuleId("accounting"), "source-artifact-accounting", "1", EvidenceSeverity.Error),
+            new VerificationRuleDefinition(new RuleId("presence"), "target-presence", "1", EvidenceSeverity.Error),
+            new VerificationRuleDefinition(new RuleId("unexpected"), "unexpected-target", "1", EvidenceSeverity.Error),
+            new VerificationRuleDefinition(new RuleId("attributes"), "attribute-comparison", "1", EvidenceSeverity.Error,
+                structuredOptions: [new("attribute", new StringValue("status"))]),
+            new VerificationRuleDefinition(new RuleId("unique"), "entity-uniqueness", "1", EvidenceSeverity.Error)
+        ]);
+        var plan = VerificationExecutionPlan.Create(rules);
+
+        Assert.Equal(VerificationPartitionExecution.Global, Assert.Single(plan.Rules, rule => rule.Rule.Id.Value == "accounting").PartitionExecution);
+        Assert.Equal(VerificationPartitionExecution.PartitionPartialWithGlobalMerge,
+            Assert.Single(plan.Rules, rule => rule.Rule.Id.Value == "presence").PartitionExecution);
+        Assert.Equal(VerificationPartitionExecution.PartitionLocal,
+            Assert.Single(plan.Rules, rule => rule.Rule.Id.Value == "unexpected").PartitionExecution);
+        Assert.Equal(VerificationPartitionExecution.PartitionPartialWithGlobalMerge,
+            Assert.Single(plan.Rules, rule => rule.Rule.Id.Value == "attributes").PartitionExecution);
+        Assert.Equal(VerificationPartitionExecution.PartitionLocal,
+            Assert.Single(plan.Rules, rule => rule.Rule.Id.Value == "unique").PartitionExecution);
+        Assert.All(plan.Rules.Where(rule => rule.PartitionExecution != VerificationPartitionExecution.Global),
+            rule => Assert.Equal(VerificationPartitionBasis.ArtifactIdentity, rule.PartitionKey!.Basis));
+    }
+
+    [Fact]
     public void GeneratedRuleSchemaUsesDescriptorTypesAndRejectsUnregisteredOptionsByConstruction()
     {
         var registry = new VerificationRuleRegistry([new GenericVerificationRuleProvider()]);

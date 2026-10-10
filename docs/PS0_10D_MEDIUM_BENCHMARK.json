@@ -1,0 +1,362 @@
+{
+  "schema": "proofshift-ps010d-medium-benchmark-review-v2",
+  "run": {
+    "scenario": "Pension medium Integrated",
+    "scale": "medium",
+    "startedAt": "2026-10-09T05:49:28.9294373+00:00",
+    "completedAt": "2026-10-09T07:52:57.8166206+00:00",
+    "artifactDirectory": "%TEMP%\\PS-D-M-p8-w4-20261009\\integrated-assurance",
+    "endToEndTests": { "total": 2, "passed": 2, "failed": 0, "skipped": 0 }
+  },
+  "runtime": {
+    "targetFramework": "net10.0",
+    "dotnetSdk": "10.0.303",
+    "microsoftNetCoreApp": "10.0.11",
+    "dockerServer": "29.6.1",
+    "os": "Windows 10.0.26300"
+  },
+  "dataset": {
+    "generatorVersion": "proofshift-pension-generator-v1",
+    "seed": 20261003,
+    "generatedSourceRecords": 411000,
+    "sourceRecordCountsByKind": {
+      "Member": 5000,
+      "Employment": 15000,
+      "Contribution": 250000,
+      "ServiceCredit": 17500,
+      "Beneficiary": 8000,
+      "RetirementElection": 1750,
+      "BenefitPayment": 100000,
+      "Document": 12500,
+      "HistoricalExport": 1250
+    },
+    "checkpointArtifacts": 424750,
+    "projectedTargets": 429750
+  },
+  "acceptedMediumBaseline": {
+    "generatedSourceRecords": 411000,
+    "checkpointArtifacts": 424750,
+    "projectedTargets": 429750,
+    "proofShiftProcessingSeconds": 13234.382,
+    "scenarioTotalSeconds": 13896.496,
+    "peakWorkloadRssBytes": 1091010560,
+    "largestWorkspaceDatabaseBytes": 7637086208,
+    "walBytesAsStatedInAssignment": "approximately 1.08 GB",
+    "aggregateTemporaryWorkspacePeakBytesFromDetailedProfile": 8723311760,
+    "detailedProfileWalHighWaterBytes": 1725085264,
+    "walComparabilityNote": "The assignment cites approximately 1.08 GB WAL, while the detailed historical profile lists 1,725,085,264 B. The current run reports total SQLite WAL from its sampler; treat cross-run WAL delta as directional because the historical scopes differ."
+  },
+  "configuration": {
+    "hash": "392a01e7392732b6b0f3c6c1fbdf7a76c7a07ad991735be99ae72275acf40d93",
+    "graphHash": "908175c558eed0ddbc7b732b001fee40b6dfa10bf1b43fadd0d68bc8bf1f70bb",
+    "checkpointId": "155737650c674f6fae3c7ba4c0f0e155",
+    "checkpointManifestHash": "6cd40709b9ec567c6cb417f5cb6522ccf5743f03d51e97bd4fbcdf56b2d83a07",
+    "sourceFingerprint": "209f04588f63add3a66cfaf0e4ed2eb100ba36abce521198b7b5b20e7de93171",
+    "projectionFingerprint": "075bc88295eb28835381b439bcb4993c852383186d1d31d4d03f26434b81039a",
+    "ruleSetFingerprint": "84f45f128b72462e9b2f837bf7aa973e0f85086b277848440e412923e8e264c5",
+    "projectionRunId": "110693ff-b9d7-424f-be36-ebe0d94d8bbd"
+  },
+  "executionSettings": {
+    "partitionCount": 8,
+    "maxPartitionWorkers": 4,
+    "verificationRuleMode": "GlobalRuleReference",
+    "sharedImmutableExpectedWorkset": true,
+    "deferredSecondaryIndexes": true,
+    "setOrientedLedgerFinalization": true,
+    "canonicalLedgerCount": 1,
+    "ruleEvaluation": "global",
+    "recoveryEvidenceQualification": "global"
+  },
+  "throughput": {
+    "proofShiftProcessingSeconds": 6794.324964,
+    "acceptedMediumProcessingSeconds": 13234.382,
+    "speedup": 1.9479,
+    "reductionPercent": 48.662,
+    "formalLimitSeconds": 6617.191,
+    "formalGate": "FAIL",
+    "overLimitSeconds": 177.134,
+    "overLimitPercent": 2.68,
+    "strongResultLimitSeconds": 6300,
+    "strongResultAchieved": false,
+    "scenarioTotalSeconds": 7408.9816704,
+    "acceptedMediumScenarioTotalSeconds": 13896.496
+  },
+  "verification": {
+    "exclusiveKind4Seconds": 5354.381,
+    "historicalProfileInclusiveSeconds": 7285.392,
+    "historicalComparison": "Not directly comparable: the historical value is an inclusive subtotal of three top-level Verification scopes; the Medium value is the complete non-overlapping exclusive kind=4 category. No speedup percentage is claimed."
+  },
+  "processingAttribution": {
+    "rootInclusiveSeconds": 6794.324964,
+    "childIntervalUnionSeconds": 6794.325733,
+    "rootUnionDifferenceMilliseconds": 0.769,
+    "unattributedProcessingMicroseconds": 0,
+    "unscopedGapIntervalUnionSeconds": 161.645857,
+    "namedIntervalCoveragePercent": 97.6209,
+    "exclusiveStageRows": [
+      { "stage": "Expected-workset build/reuse", "exclusiveSeconds": 1031.590, "percentOfProcessing": 15.183 },
+      { "stage": "Actual-target observation/ingest", "exclusiveSeconds": 800.844, "percentOfProcessing": 11.787 },
+      { "stage": "Journal processing", "exclusiveSeconds": 474.703, "percentOfProcessing": 6.987 },
+      { "stage": "Projection", "exclusiveSeconds": 634.240, "percentOfProcessing": 9.335 },
+      { "stage": "Global rule evaluation", "exclusiveSeconds": 613.909, "percentOfProcessing": 9.036 },
+      { "stage": "Source accounting", "exclusiveSeconds": 274.607, "percentOfProcessing": 4.042 },
+      { "stage": "Target lineage", "exclusiveSeconds": 349.484, "percentOfProcessing": 5.144 },
+      { "stage": "Workspace/index work", "exclusiveSeconds": 271.223, "percentOfProcessing": 3.992 },
+      { "stage": "Ledger staging", "exclusiveSeconds": 245.126, "percentOfProcessing": 3.608 },
+      { "stage": "Ledger derivation", "exclusiveSeconds": 217.675, "percentOfProcessing": 3.204 },
+      { "stage": "Ledger finalization", "exclusiveSeconds": 798.617, "percentOfProcessing": 11.754 },
+      { "stage": "Evidence", "exclusiveSeconds": 0.061, "percentOfProcessing": 0.001 },
+      { "stage": "Recovery", "exclusiveSeconds": 384.495, "percentOfProcessing": 5.659 },
+      { "stage": "Reporting", "exclusiveSeconds": 1.554, "percentOfProcessing": 0.023 },
+      { "stage": "External-target Verification orchestration", "exclusiveSeconds": 190.751, "percentOfProcessing": 2.807 },
+      { "stage": "Verification orchestration remainder", "exclusiveSeconds": 248.161, "percentOfProcessing": 3.652 },
+      { "stage": "Checkpoint", "exclusiveSeconds": 137.553, "percentOfProcessing": 2.025 },
+      { "stage": "Other named processing", "exclusiveSeconds": 26.469, "percentOfProcessing": 0.390 },
+      { "stage": "Unscoped processing gaps", "exclusiveSeconds": 161.646, "percentOfProcessing": 2.379 }
+    ],
+    "concurrencyNote": "Exclusive worker-lane durations can overlap across lanes, so stage-row percentages are accumulated exclusive work and are not additive as wall time. Root attribution uses the measured interval union and explicit unscoped gaps."
+  },
+  "expectedWorksets": {
+    "builds": 2,
+    "compatibleReuses": 4,
+    "attachments": 6,
+    "crossKeyReuse": false
+  },
+  "workers": {
+    "maxSimultaneousWorkers": 4,
+    "averageActiveActualTargetLanes": 2.697,
+    "averageActiveJournalLanes": 3.652,
+    "actualTargetWorkerExecutionSeconds": 1726.475,
+    "journalWorkerExecutionSeconds": 1732.358,
+    "actualTargetQueueWaitAggregateSeconds": 241452.063,
+    "journalQueueWaitAggregateSeconds": 272932.169,
+    "queueWaitInterpretation": "Aggregate per-operation wait duration; not wall-clock delay.",
+    "actualTargetBackpressureAggregateSeconds": 170.769,
+    "journalBackpressureAggregateSeconds": 306.617,
+    "sqliteBusyExceptions": 0,
+    "sqliteBusyRetries": 0
+  },
+  "resources": {
+    "acceptedPeakRssBytes": 1091010560,
+    "mediumPeakRssBytes": 1101176832,
+    "rssIncreaseBytes": 10166272,
+    "rssIncreasePercent": 0.93,
+    "processSamplerPeakWorkingSetBytes": 1097318400,
+    "processCpuTimeDeltaMilliseconds": 6850437.5,
+    "managedHeapPeakBytes": 885302464,
+    "managedHeapAtCompletionBytes": 494208192,
+    "gcCountDelta": { "generationZero": 45950, "generationOne": 4856, "generationTwo": 68 },
+    "expectedCacheHighWaterBytes": 5419405312,
+    "verificationWorkspaceHighWaterBytes": 2709725184,
+    "workspacePlusExpectedSameSampleHighWaterBytes": 5419503616,
+    "largestPartitionDatabaseBytes": 385052672,
+    "sumPartitionDatabasesBytes": 3061403648,
+    "ledgerStagingDatabaseHighWaterBytes": 2826989568,
+    "finalCanonicalLedgerBytes": 12924080128,
+    "totalWalHighWaterBytes": 810115952,
+    "aggregateTemporaryWorkspacePeakBytes": 3380884512,
+    "checkpointBytes": 1001466762,
+    "dedicatedCapacityEstimatorFound": false,
+    "adHocPlanningAllowanceGiB": 20,
+    "diskPreflightFreeGiB": 2399.09,
+    "lowestObservedFreeGiB": 2375.53,
+    "diskFreeAfterRunGiB": 2383.24,
+    "observedPeakVolumeUseGiB": 23.56,
+    "planningAllowanceUnderstatementGiB": 3.56,
+    "diskFailure": false,
+    "peakInterpretation": "Category peaks are sampled independently and are not added unless same-sample aggregation is explicitly named."
+  },
+  "correctness": {
+    "defectiveBusinessDiscrepancies": 149,
+    "correctedBusinessDiscrepancies": 0,
+    "correctedUnaccountedSources": 0,
+    "correctedUnexplainedTargets": 0,
+    "correctedVerificationFailures": 0,
+    "correctedRecoveryFailures": 0,
+    "correctedRecoveryAssessment": "PASSED",
+    "correctedRecoveryRehearsal": "PASSED",
+    "correctedQualification": "QUALIFIED",
+    "falseReverseDeclarations": 2,
+    "falseReverseExpectedOutcome": "Both invalid Reverse declarations are rejected and their scenario remains NOT QUALIFIED.",
+    "falseReverseAssertionsPassed": true,
+    "externalVerificationIndependent": true
+  },
+  "fingerprints": {
+    "executionIndependent": {
+      "configurationHash": "392a01e7392732b6b0f3c6c1fbdf7a76c7a07ad991735be99ae72275acf40d93",
+      "graphHash": "908175c558eed0ddbc7b732b001fee40b6dfa10bf1b43fadd0d68bc8bf1f70bb",
+      "checkpointManifestHash": "6cd40709b9ec567c6cb417f5cb6522ccf5743f03d51e97bd4fbcdf56b2d83a07",
+      "sourceFingerprint": "209f04588f63add3a66cfaf0e4ed2eb100ba36abce521198b7b5b20e7de93171",
+      "projectionFingerprint": "075bc88295eb28835381b439bcb4993c852383186d1d31d4d03f26434b81039a",
+      "ruleSetFingerprint": "84f45f128b72462e9b2f837bf7aa973e0f85086b277848440e412923e8e264c5"
+    },
+    "ledgerSemanticContent": "One canonical ledger was finalized after global verification; exact source/target counts and business findings passed. A separate cross-run ledger fingerprint equality was not claimed by this single run.",
+    "evidenceFingerprint": {
+      "value": "cb4e075916155e722231cde4795890d2dcadff687ca5315203fa9f909cbc7334",
+      "contract": "Canonical semantic-graph content hash; Evidence IDs, EvidenceRecord.RunId and EvaluatedAt are not directly hashed, but current Evidence references include CheckpointId and ProjectionRunId, so provenance-sensitive references can legitimately change it across runs."
+    },
+    "recoveryAssessmentFingerprint": {
+      "value": "907479d12618ba721e11f47eb5aa39ab83639bc74e68132fed793053acbddef0",
+      "contract": "Hashes the assessment semantics and the Verification Evidence fingerprint; it does not directly hash a run ID, but inherits run/context sensitivity from the referenced Evidence fingerprint."
+    },
+    "recoveryEvidenceFingerprint": {
+      "value": "fca19267d86bdd6e52ea81fa18dca730a5e62afc9de701bac6355371ce9ead5b",
+      "contract": "Intentionally provenance/run-bound: the recovery Evidence graph includes RunId, CheckpointId, ProjectionRunId references and the Verification Evidence fingerprint."
+    },
+    "dryRunFingerprint": {
+      "value": "1525268e2def94bde1bae488f3e889c40abb82380412af9a41e69de84c41e1ea",
+      "contract": "Intentionally run-bound aggregate over Verification Evidence, Recovery assessment, plan, rehearsal and Recovery Evidence."
+    },
+    "crossRunEqualityRequired": false,
+    "canonicalizationChanged": false
+  },
+  "workerSaturationStudy": {
+    "partitionCount": 8,
+    "verificationRuleMode": "GlobalRuleReference",
+    "architectureChanged": false,
+    "onlyVariedParameter": "maxPartitionWorkers",
+    "runs100k": [
+      { "workers": 1, "proofShiftProcessingSeconds": 1729.686, "exclusiveKind4Seconds": 1361.684, "peakRssBytes": 426872832 },
+      { "workers": 2, "proofShiftProcessingSeconds": 1513.969, "exclusiveKind4Seconds": 1150.154, "peakRssBytes": 437940224 },
+      { "workers": 4, "proofShiftProcessingSeconds": 1336.970, "exclusiveKind4Seconds": 997.078, "peakRssBytes": 469012480 },
+      { "workers": 6, "proofShiftProcessingSeconds": 1124.355, "exclusiveKind4Seconds": 828.203, "peakRssBytes": 441540608 },
+      { "workers": 8, "proofShiftProcessingSeconds": 1086.520, "exclusiveKind4Seconds": 806.783, "peakRssBytes": 497209344 }
+    ],
+    "selected200k": {
+      "workers": 8,
+      "proofShiftProcessingSeconds": 2451.565,
+      "exclusiveKind4Seconds": 1910.802,
+      "scenarioTotalSeconds": 2718.179,
+      "peakRssBytes": 636911616,
+      "normalizedGrowthFrom100k": {
+        "proofShiftProcessingPercent": 12.82,
+        "exclusiveKind4Percent": 18.42
+      },
+      "comparisonToWorkers4At200k": {
+        "proofShiftProcessingImprovementPercent": 8.62,
+        "exclusiveKind4ImprovementPercent": 8.45
+      },
+      "correctness": "Exact 149 defective / 0 corrected; zero gaps; QUALIFIED; zero SQLite busy exceptions/retries."
+    },
+    "stageInformedMediumProjectionSeconds": {
+      "optimistic": 5037.966,
+      "central": 5779.759,
+      "conservative": 6199.884,
+      "conditionalAuthorizationPassed": true
+    },
+    "scalingTradeoff": "Workers=8 was fastest at 100k and 200k and passed the observed Medium gate, but its normalized 100k-to-200k processing/Verification growth is materially worse than workers=4."
+  },
+  "authorizedWorkers8MediumRerun": {
+    "run": {
+      "scenario": "Pension medium Integrated",
+      "startedAt": "2026-10-09T10:04:33.8988554+00:00",
+      "completedAt": "2026-10-09T11:46:03.2513183+00:00",
+      "artifactDirectory": "%TEMP%\\PS-D-M-p8-w8-20261009\\integrated-assurance",
+      "endToEndTests": { "total": 2, "passed": 2, "failed": 0, "skipped": 0 },
+      "testDuration": "1h 41m 32.857s"
+    },
+    "executionSettings": {
+      "partitionCount": 8,
+      "maxPartitionWorkers": 8,
+      "verificationRuleMode": "GlobalRuleReference",
+      "sharedImmutableExpectedWorkset": true,
+      "deferredSecondaryIndexes": true,
+      "setOrientedLedgerFinalization": true,
+      "canonicalLedgerCount": 1,
+      "ruleEvaluation": "global",
+      "recoveryEvidenceQualification": "global"
+    },
+    "throughput": {
+      "proofShiftProcessingSeconds": 5574.083408,
+      "acceptedMediumProcessingSeconds": 13234.382,
+      "speedup": 2.374,
+      "reductionPercent": 57.884,
+      "formalLimitSeconds": 6617.191,
+      "formalGate": "PASS",
+      "marginUnderFormalLimitSeconds": 1043.108,
+      "strongResultLimitSeconds": 6300,
+      "strongResultAchieved": true,
+      "marginUnderStrongResultSeconds": 725.917,
+      "scenarioTotalSeconds": 6089.4387246,
+      "initialWorkers4ProcessingSeconds": 6794.324964,
+      "improvementVersusWorkers4Percent": 17.96,
+      "stageInformedCentralProjectionSeconds": 5779.759,
+      "stageInformedConservativeProjectionSeconds": 6199.884
+    },
+    "verification": {
+      "exclusiveKind4Seconds": 4423.9598333,
+      "kind4IntervalCount": 1175,
+      "namedIntervalCoveragePercent": 98.5154,
+      "unscopedGapSeconds": 82.753729
+    },
+    "expectedWorksets": {
+      "builds": 2,
+      "compatibleReuses": 4,
+      "attachments": 6,
+      "crossKeyReuse": false
+    },
+    "workers": {
+      "maxSimultaneousWorkers": 8,
+      "averageActiveActualTargetLanes": 5.578,
+      "averageActiveJournalLanes": 7.368,
+      "sqliteBusyExceptions": 0,
+      "sqliteBusyRetries": 0,
+      "queueWaitInterpretation": "Aggregate per-operation wait duration; not wall-clock delay."
+    },
+    "resources": {
+      "acceptedPeakRssBytes": 1091010560,
+      "initialWorkers4PeakRssBytes": 1101176832,
+      "mediumPeakRssBytes": 1119571968,
+      "rssIncreaseVersusWorkers4Bytes": 18399136,
+      "rssIncreaseVersusWorkers4Percent": 1.67,
+      "rssIncreaseVersusAcceptedBytes": 28561408,
+      "rssIncreaseVersusAcceptedPercent": 2.62,
+      "aggregateTemporaryWorkspacePeakBytes": 3380884512,
+      "finalCanonicalLedgerBytes": 12924080128,
+      "processCpuTimeAtCompletionMilliseconds": 5654109.375,
+      "peakInterpretation": "Category peaks are sampled independently and are not added unless same-sample aggregation is explicitly named."
+    },
+    "correctness": {
+      "defectiveBusinessDiscrepancies": 149,
+      "correctedBusinessDiscrepancies": 0,
+      "correctedUnaccountedSources": 0,
+      "correctedUnexplainedTargets": 0,
+      "correctedQualification": "QUALIFIED",
+      "falseReverseDeclarationsRejected": 2,
+      "falseReverseAssertionsPassed": true,
+      "externalVerificationIndependent": true
+    },
+    "fingerprints": {
+      "configurationHash": "392a01e7392732b6b0f3c6c1fbdf7a76c7a07ad991735be99ae72275acf40d93",
+      "graphHash": "908175c558eed0ddbc7b732b001fee40b6dfa10bf1b43fadd0d68bc8bf1f70bb",
+      "sourceFingerprint": "209f04588f63add3a66cfaf0e4ed2eb100ba36abce521198b7b5b20e7de93171",
+      "projectionFingerprint": "075bc88295eb28835381b439bcb4993c852383186d1d31d4d03f26434b81039a",
+      "ruleSetFingerprint": "84f45f128b72462e9b2f837bf7aa973e0f85086b277848440e412923e8e264c5",
+      "inputFingerprintsMatchWorkers4": true,
+      "crossRunEvidenceRecoveryDryRunEqualityClaimed": false
+    },
+    "gate": {
+      "outcome": "A. Workers=8 Medium correctness and formal/strong throughput gates PASSED; PS-0.10D remains In Progress and Large remains blocked.",
+      "largeStarted": false,
+      "ps010eStarted": false,
+      "productionMigrationOrRollback": false,
+      "anotherMediumRunAuthorized": false
+    }
+  },
+  "gate": {
+    "outcome": "A. The authorized workers=8 Medium run passed correctness and formal/strong throughput gates; PS-0.10D remains In Progress and Large remains blocked.",
+    "initialWorkers4Outcome": "B. Historical workers=4 Medium throughput gate FAILED at 6,794.325 s versus 6,617.191 s.",
+    "largeStarted": false,
+    "ps010eStarted": false,
+    "productionMigrationOrRollback": false,
+    "optimizationOrParameterChangesBeforeRun": false,
+    "anotherMediumRunAuthorized": false
+  },
+  "focusedTestsAfterRun": {
+    "Engine": { "passed": 4, "failed": 0, "skipped": 0 },
+    "Verification": { "passed": 43, "failed": 0, "skipped": 0 },
+    "Evidence": { "passed": 5, "failed": 0, "skipped": 0 },
+    "Recovery": { "passed": 8, "failed": 0, "skipped": 0 },
+    "workers8MediumEndToEnd": { "passed": 2, "failed": 0, "skipped": 0 }
+  }
+}

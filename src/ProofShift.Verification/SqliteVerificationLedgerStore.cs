@@ -7,7 +7,13 @@ using Microsoft.Data.Sqlite;
 using ProofShift.Domain;
 using ProofShift.Engine;
 
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("ProofShift.Verification.Tests")]
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("ProofShift.EndToEnd.Tests")]
+
 namespace ProofShift.Verification;
+
+public enum VerificationLedgerState { Pending, Finalizing, Complete, Failed, Cancelled }
+internal enum LedgerFinalizationPhase { TableCopied, IntegrityValidated }
 
 public interface IVerificationLedgerStore : IAsyncDisposable
 {
@@ -36,7 +42,8 @@ public interface IVerificationLedgerStore : IAsyncDisposable
 }
 
 public sealed record VerificationLedgerStoreReceipt(Guid StoreId, string RelativePath, string Fingerprint,
-    long SourceCount, long TargetCount, long DispositionCount, long LineageCount, long JournalEntryCount);
+    long SourceCount, long TargetCount, long DispositionCount, long LineageCount, long JournalEntryCount,
+    string? AuxiliaryFingerprint = null);
 
 public sealed record VerificationLedgerSummary(long SourceCount, long TargetCount, long DispositionCount,
     long UnaccountedDispositionCount, long LineageCount, long JournalEntryCount, string Fingerprint);
@@ -56,24 +63,39 @@ public sealed record VerificationSourceLineageTargets(string SourceNodeKey, Migr
 
 public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
 {
-    private const int WriteBatchSize = 128;
+    private const int WriteBatchSize = 4096;
+    private const int FinalizationBatchSize = 16384;
+    private enum LedgerTable { GraphNodes, Sources, Targets, Dispositions, Lineage, LineageSources, Journal, JournalSourceScope, JournalTargetScope, Metadata, Count }
+    private static readonly string[] LedgerTableNames = ["graph_nodes", "sources", "targets", "dispositions", "lineage", "lineage_sources", "journal", "journal_scope_sources", "journal_scope_targets", "metadata"];
+    private static readonly HashSet<LedgerTable> PayloadTables = [LedgerTable.Dispositions, LedgerTable.Lineage, LedgerTable.Journal];
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private readonly string _root;
     private readonly string _directory;
     private readonly string _databasePath;
-    private readonly SqliteConnection _connection;
+    private SqliteConnection _connection;
     private readonly PerformanceRecorder? _performanceRecorder;
     private SqliteTransaction? _writeTransaction;
     private int _pendingWrites;
     private long _writeMicroseconds;
     private long _writeOperations;
+    private readonly long[] _successfulInsertCommands = new long[(int)LedgerTable.Count];
+    private readonly long[] _insertedRows = new long[(int)LedgerTable.Count];
+    private readonly long[] _serializedPayloadBytes = new long[(int)LedgerTable.Count];
     private bool _completed;
     private bool _disposed;
     private VerificationLedgerStoreReceipt? _receipt;
     private VerificationLedgerSummary? _verifiedSummary;
+    private string? _verifiedAuxiliaryFingerprint;
+    private readonly Dictionary<string, MigrationNodeId> _graphNodes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (string Table, string Sql)> _deferredSecondaryIndexes = new(StringComparer.Ordinal);
+    private long _derivedLineageRow;
+    private long _derivedJournalRow;
+    private string StagingPath => _databasePath + ".staging";
+    public VerificationLedgerState State { get; private set; } = VerificationLedgerState.Pending;
+    internal Action<LedgerFinalizationPhase>? FinalizationObserver { get; set; }
 
-    public VerificationLedgerStoreReceipt Receipt => _receipt ??
-        throw new InvalidOperationException("Verification ledger has not been completed.");
+    public VerificationLedgerStoreReceipt Receipt => State == VerificationLedgerState.Complete && _receipt is { } receipt
+        ? receipt : throw new InvalidOperationException("Verification ledger has not been completed.");
 
     private SqliteVerificationLedgerStore(string root, string directory, string databasePath, SqliteConnection connection,
         PerformanceRecorder? performanceRecorder = null)
@@ -92,13 +114,15 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
         if (runId.Value == Guid.Empty) throw new ArgumentException("Verification run ID must not be empty.", nameof(runId));
         var root = Path.GetFullPath(Path.Combine(projectDirectory, ".proofshift", "verification-ledgers"));
         var directory = Path.Combine(root, runId.Value.ToString("N", CultureInfo.InvariantCulture));
+        if (Directory.Exists(directory))
+            throw new IOException("Verification ledger run directory already exists.");
         Directory.CreateDirectory(directory);
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         var path = Path.Combine(directory, "ledger.sqlite");
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = path,
+            DataSource = path + ".staging",
             Mode = SqliteOpenMode.ReadWriteCreate,
             Cache = SqliteCacheMode.Private,
             Pooling = false
@@ -178,9 +202,20 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
                 );
                 CREATE INDEX journal_scope_by_edge_idx ON journal_scope(edge_id,is_target,node_id,artifact_id);
                 CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                INSERT INTO metadata(key,value) VALUES('state','Pending');
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            return new SqliteVerificationLedgerStore(root, directory, path, connection, performanceRecorder);
+            var store = new SqliteVerificationLedgerStore(root, directory, path, connection, performanceRecorder);
+            command.CommandText = "SELECT name,tbl_name,sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL ORDER BY name";
+            await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    store._deferredSecondaryIndexes.Add(reader.GetString(0), (reader.GetString(1), reader.GetString(2)));
+            foreach (var name in store._deferredSecondaryIndexes.Keys)
+            {
+                command.CommandText = $"DROP INDEX \"{name.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
+                await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+            return store;
         }
         catch
         {
@@ -218,13 +253,22 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
             var store = new SqliteVerificationLedgerStore(root, directory, path, connection)
             {
                 _completed = true,
-                _receipt = receipt
+                _receipt = receipt,
+                State = VerificationLedgerState.Complete
             };
             var summary = await store.ReadSummaryAsync(cancellationToken).ConfigureAwait(false);
             if (summary.Fingerprint != receipt.Fingerprint || summary.SourceCount != receipt.SourceCount ||
                 summary.TargetCount != receipt.TargetCount || summary.DispositionCount != receipt.DispositionCount ||
                 summary.LineageCount != receipt.LineageCount || summary.JournalEntryCount != receipt.JournalEntryCount)
                 throw new InvalidDataException("Verification ledger contents do not match their receipt.");
+            if (receipt.AuxiliaryFingerprint is not null)
+            {
+                await using var stateCommand = connection.CreateCommand();
+                stateCommand.CommandText = "SELECT value FROM metadata WHERE key='state'";
+                if (await stateCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string != nameof(VerificationLedgerState.Complete) ||
+                    receipt.AuxiliaryFingerprint != store._verifiedAuxiliaryFingerprint)
+                    throw new InvalidDataException("Verification ledger auxiliary contents do not match their receipt.");
+            }
             store._verifiedSummary = summary;
             return store;
         }
@@ -236,9 +280,12 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
     }
 
     public Task RegisterSourceAsync(string nodeKey, MigrationNodeId nodeId, ArtifactReference artifact,
-        CancellationToken cancellationToken) => RegisterArtifactAsync("sources", nodeKey, nodeId, artifact, cancellationToken);
+        CancellationToken cancellationToken) => StageAsync(() => RegisterArtifactAsync("sources", nodeKey, nodeId, artifact, cancellationToken));
 
-    public async Task RegisterGraphNodeAsync(string nodeKey, MigrationNodeId nodeId, CancellationToken cancellationToken)
+    public Task RegisterGraphNodeAsync(string nodeKey, MigrationNodeId nodeId, CancellationToken cancellationToken) =>
+        StageAsync(() => RegisterGraphNodeCoreAsync(nodeKey, nodeId, cancellationToken));
+
+    private async Task RegisterGraphNodeCoreAsync(string nodeKey, MigrationNodeId nodeId, CancellationToken cancellationToken)
     {
         var writeStarted = Stopwatch.GetTimestamp();
         ValidateWritable();
@@ -248,13 +295,15 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
         command.CommandText = "INSERT INTO graph_nodes(node_key,node_id) VALUES($key,$id)";
         command.Parameters.AddWithValue("$key", Required(nodeKey, nameof(nodeKey)));
         command.Parameters.AddWithValue("$id", nodeId.Value.ToString("D", CultureInfo.InvariantCulture));
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        var insertedRows = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        RecordInsert(LedgerTable.GraphNodes, insertedRows);
+        _graphNodes.Add(Required(nodeKey, nameof(nodeKey)), nodeId);
         await CompleteWriteAsync(cancellationToken).ConfigureAwait(false);
         RecordWrite(writeStarted);
     }
 
     public Task RegisterTargetAsync(string nodeKey, MigrationNodeId nodeId, ArtifactReference artifact,
-        CancellationToken cancellationToken) => RegisterArtifactAsync("targets", nodeKey, nodeId, artifact, cancellationToken);
+        CancellationToken cancellationToken) => StageAsync(() => RegisterArtifactAsync("targets", nodeKey, nodeId, artifact, cancellationToken));
 
     private async Task RegisterArtifactAsync(string table, string nodeKey, MigrationNodeId nodeId,
         ArtifactReference artifact, CancellationToken cancellationToken)
@@ -270,12 +319,16 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
         command.Parameters.AddWithValue("$nodeId", nodeId.Value.ToString("D", CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("$nodeKey", Required(nodeKey, nameof(nodeKey)));
         AddArtifactParameters(command, artifact);
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        var insertedRows = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        RecordInsert(table == "sources" ? LedgerTable.Sources : LedgerTable.Targets, insertedRows);
         await CompleteWriteAsync(cancellationToken).ConfigureAwait(false);
         RecordWrite(writeStarted);
     }
 
-    public async Task AppendDispositionAsync(ArtifactDispositionRecord disposition, CancellationToken cancellationToken)
+    public Task AppendDispositionAsync(ArtifactDispositionRecord disposition, CancellationToken cancellationToken) =>
+        StageAsync(() => AppendDispositionCoreAsync(disposition, cancellationToken));
+
+    private async Task AppendDispositionCoreAsync(ArtifactDispositionRecord disposition, CancellationToken cancellationToken)
     {
         var writeStarted = Stopwatch.GetTimestamp();
         ValidateWritable();
@@ -296,36 +349,18 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
         command.Parameters.AddWithValue("$node", document.SourceNodeId);
         command.Parameters.AddWithValue("$id", disposition.Source.Id.Value);
         command.Parameters.AddWithValue("$disposition", document.Disposition);
-        command.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(document, JsonOptions));
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        var payload = JsonSerializer.Serialize(document, JsonOptions);
+        command.Parameters.AddWithValue("$payload", payload);
+        var insertedRows = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        RecordInsert(LedgerTable.Dispositions, insertedRows, Encoding.UTF8.GetByteCount(payload));
         await CompleteWriteAsync(cancellationToken).ConfigureAwait(false);
         RecordWrite(writeStarted);
     }
 
-    private async Task AddJournalScopeAsync(SqliteTransaction transaction, string edgeId, bool target,
-        string nodeKey, string artifactId, CancellationToken cancellationToken)
-    {
-        await using var command = _connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = "INSERT OR IGNORE INTO journal_scope(edge_id,is_target,node_key,node_id,artifact_id) SELECT $edge,$target,$key,node_id,$artifact FROM graph_nodes WHERE node_key=$key";
-        command.Parameters.AddWithValue("$edge", edgeId);
-        command.Parameters.AddWithValue("$target", target ? 1 : 0);
-        command.Parameters.AddWithValue("$key", nodeKey);
-        command.Parameters.AddWithValue("$artifact", artifactId);
-        if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1 &&
-            await GraphNodeExistsAsync(nodeKey, cancellationToken).ConfigureAwait(false) is false)
-            throw new InvalidDataException("Verification journal scope references a graph node that was not registered.");
-    }
+    public Task AppendLineageAsync(LineageRecord lineage, CancellationToken cancellationToken) =>
+        StageAsync(() => AppendLineageCoreAsync(lineage, cancellationToken));
 
-    private async Task<bool> GraphNodeExistsAsync(string nodeKey, CancellationToken cancellationToken)
-    {
-        await using var command = _connection.CreateCommand();
-        command.CommandText = "SELECT 1 FROM graph_nodes WHERE node_key=$key LIMIT 1";
-        command.Parameters.AddWithValue("$key", nodeKey);
-        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null;
-    }
-
-    public async Task AppendLineageAsync(LineageRecord lineage, CancellationToken cancellationToken)
+    private async Task AppendLineageCoreAsync(LineageRecord lineage, CancellationToken cancellationToken)
     {
         var writeStarted = Stopwatch.GetTimestamp();
         ValidateWritable();
@@ -339,9 +374,14 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
             var node = string.CompareOrdinal(left.NodeId, right.NodeId);
             return node != 0 ? node : string.CompareOrdinal(left.Artifact.Id, right.Artifact.Id);
         });
+        for (var index = 1; index < sources.Length; index++)
+            if (sources[index - 1].NodeId == sources[index].NodeId &&
+                sources[index - 1].Artifact.Id == sources[index].Artifact.Id)
+                throw new SqliteException("Duplicate graph-scoped lineage source binding.", 19);
         var document = new LineageDocument(ToDocument(lineage.Target), targetNodeId.Value.ToString("D", CultureInfo.InvariantCulture),
             sources, lineage.Path.Select(edge => edge.Value.ToString("D", CultureInfo.InvariantCulture)).ToArray(),
             lineage.PlanHash, lineage.Basis.ToString());
+        var payload = JsonSerializer.Serialize(document, JsonOptions);
         var transaction = GetWriteTransaction();
         await using (var command = _connection.CreateCommand())
         {
@@ -352,25 +392,18 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
             command.Parameters.AddWithValue("$system", lineage.Target.SystemId.Value);
             command.Parameters.AddWithValue("$endpoint", lineage.Target.EndpointId.Value);
             command.Parameters.AddWithValue("$type", lineage.Target.ArtifactType);
-            command.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(document, JsonOptions));
-            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        }
-        foreach (var source in sources)
-        {
-            await using var command = _connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandText = "INSERT INTO lineage_sources(target_node_id,target_id,source_node_id,source_id) VALUES($targetNode,$targetId,$sourceNode,$sourceId)";
-            command.Parameters.AddWithValue("$targetNode", document.TargetNodeId);
-            command.Parameters.AddWithValue("$targetId", lineage.Target.Id.Value);
-            command.Parameters.AddWithValue("$sourceNode", source.NodeId);
-            command.Parameters.AddWithValue("$sourceId", source.Artifact.Id);
-            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            command.Parameters.AddWithValue("$payload", payload);
+            var insertedRows = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            RecordInsert(LedgerTable.Lineage, insertedRows, Encoding.UTF8.GetByteCount(payload));
         }
         await CompleteWriteAsync(cancellationToken).ConfigureAwait(false);
         RecordWrite(writeStarted);
     }
 
-    public async Task AppendJournalEntryAsync(VerificationJournalEntry entry, CancellationToken cancellationToken)
+    public Task AppendJournalEntryAsync(VerificationJournalEntry entry, CancellationToken cancellationToken) =>
+        StageAsync(() => AppendJournalEntryCoreAsync(entry, cancellationToken));
+
+    private async Task AppendJournalEntryCoreAsync(VerificationJournalEntry entry, CancellationToken cancellationToken)
     {
         var writeStarted = Stopwatch.GetTimestamp();
         ValidateWritable();
@@ -380,6 +413,12 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
             entry.Sources.Select(source => new ScopedArtifactDocument(source.NodeKey, ToDocument(source.Artifact)))
                 .OrderBy(source => source.NodeId, StringComparer.Ordinal).ThenBy(source => source.Artifact.Id, StringComparer.Ordinal).ToArray(),
             entry.EdgeId.Value.ToString("D", CultureInfo.InvariantCulture), entry.EdgeName, entry.EdgeVersion, entry.FailureCode);
+        if (document.Result is "produced" or "excluded")
+        {
+            if (document.Sources.Any(source => !_graphNodes.ContainsKey(source.NodeId)) ||
+                (document.Target is not null && document.TargetNode is not null && !_graphNodes.ContainsKey(document.TargetNode)))
+                throw new InvalidDataException("Verification journal scope references a graph node that was not registered.");
+        }
         var transaction = GetWriteTransaction();
         await using var command = _connection.CreateCommand();
         command.Transaction = transaction;
@@ -388,17 +427,10 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
         command.Parameters.AddWithValue("$result", document.Result);
         command.Parameters.AddWithValue("$node", (object?)document.TargetNode ?? DBNull.Value);
         command.Parameters.AddWithValue("$target", (object?)document.Target?.Id ?? DBNull.Value);
-        command.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(document, JsonOptions));
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        if (document.Result is "produced" or "excluded")
-        {
-            foreach (var source in document.Sources)
-                await AddJournalScopeAsync(transaction, document.EdgeId, false, source.NodeId, source.Artifact.Id,
-                    cancellationToken).ConfigureAwait(false);
-            if (document.Target is not null && document.TargetNode is not null)
-                await AddJournalScopeAsync(transaction, document.EdgeId, true, document.TargetNode, document.Target.Id,
-                    cancellationToken).ConfigureAwait(false);
-        }
+        var payload = JsonSerializer.Serialize(document, JsonOptions);
+        command.Parameters.AddWithValue("$payload", payload);
+        var insertedRows = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        RecordInsert(LedgerTable.Journal, insertedRows, Encoding.UTF8.GetByteCount(payload));
         await CompleteWriteAsync(cancellationToken).ConfigureAwait(false);
         RecordWrite(writeStarted);
     }
@@ -406,39 +438,276 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
     public async Task<VerificationLedgerSummary> CompleteAsync(CancellationToken cancellationToken)
     {
         ValidateWritable();
+        try
+        {
+            await FinalizeAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            await FailAsync(exception).ConfigureAwait(false);
+            throw;
+        }
+        return _verifiedSummary!;
+    }
+
+    private async Task FinalizeAsync(CancellationToken cancellationToken)
+    {
+        await EnsureDerivedFactsAsync(cancellationToken).ConfigureAwait(false);
         await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
-        var sourceCount = await CountAsync("sources", cancellationToken).ConfigureAwait(false);
-        var targetCount = await CountAsync("targets", cancellationToken).ConfigureAwait(false);
-        var dispositionCount = await CountAsync("dispositions", cancellationToken).ConfigureAwait(false);
-        var unaccountedCount = await CountValueAsync("SELECT COUNT(*) FROM dispositions WHERE disposition IN ('Unaccounted','Failed')", cancellationToken).ConfigureAwait(false);
-        var lineageCount = await CountAsync("lineage", cancellationToken).ConfigureAwait(false);
-        var journalCount = await CountAsync("journal", cancellationToken).ConfigureAwait(false);
-        var fingerprint = await ComputeFingerprintAsync(cancellationToken).ConfigureAwait(false);
+        await EnsureStagingIndexesAsync(null, cancellationToken).ConfigureAwait(false);
+        using var finalizationStage = _performanceRecorder?.StartStage(PerformanceStageKind.Verification, "verification ledger durable finalization");
+        finalizationStage?.AddMeasurement("stagingLifecycleSqlExecutionOperations", 2, "commands");
+        finalizationStage?.AddMeasurement("durableLifecycleSqlExecutionOperations", 3, "commands");
+        State = VerificationLedgerState.Finalizing;
+        await SetStateAsync(_connection, State, cancellationToken).ConfigureAwait(false);
+        var expected = await GetCountsAsync(cancellationToken).ConfigureAwait(false);
+        var expectedCoverage = await ValidateCoverageAsync(cancellationToken).ConfigureAwait(false);
+        var schemas = new List<string>();
+        var secondaryIndexes = new List<string>();
+        await using (var schemaCommand = _connection.CreateCommand())
+        {
+            schemaCommand.CommandText = "SELECT type,sql FROM sqlite_master WHERE sql IS NOT NULL AND type IN ('table','index') ORDER BY type DESC,name";
+            await using var reader = await schemaCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (reader.GetString(0) == "index") secondaryIndexes.Add(reader.GetString(1));
+                else schemas.Add(reader.GetString(1));
+            }
+        }
+        var finalConnection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _databasePath, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false, Cache = SqliteCacheMode.Private
+        }.ToString());
+        try
+        {
+            await finalConnection.OpenAsync(cancellationToken).ConfigureAwait(false);
+            await using (var schemaCommand = finalConnection.CreateCommand())
+            {
+                schemaCommand.CommandText = "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;" + string.Join(";", schemas);
+                await schemaCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+            await SetStateAsync(finalConnection, State, cancellationToken).ConfigureAwait(false);
+            await using (var attach = finalConnection.CreateCommand())
+            {
+                attach.CommandText = "ATTACH DATABASE $path AS staging";
+                attach.Parameters.AddWithValue("$path", StagingPath);
+                await attach.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+            foreach (var table in new[] { "graph_nodes", "sources", "targets", "dispositions", "lineage", "lineage_sources", "journal", "journal_scope" })
+            {
+                using var stage = _performanceRecorder?.StartStage(PerformanceStageKind.Verification, $"verification ledger finalize {table}");
+                var upper = await CountValueAsync($"SELECT COALESCE(MAX(rowid),0) FROM {table}", cancellationToken).ConfigureAwait(false);
+                long rows = 0;
+                long operations = 0;
+                long maximumWalBytes = 0;
+                long maximumRowsPerOperation = 0;
+                for (long lower = 0; lower < upper; lower += FinalizationBatchSize)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await using var transaction = finalConnection.BeginTransaction();
+                    await using var copy = finalConnection.CreateCommand();
+                    copy.Transaction = transaction;
+                    copy.CommandText = $"INSERT INTO {table} SELECT * FROM staging.{table} WHERE rowid>$lower AND rowid<=$upper ORDER BY rowid";
+                    copy.Parameters.AddWithValue("$lower", lower);
+                    copy.Parameters.AddWithValue("$upper", Math.Min(upper, lower + FinalizationBatchSize));
+                    var copiedRows = await copy.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                    rows += copiedRows;
+                    maximumRowsPerOperation = Math.Max(maximumRowsPerOperation, copiedRows);
+                    operations++;
+                    await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                    maximumWalBytes = Math.Max(maximumWalBytes, File.Exists(_databasePath + "-wal") ? new FileInfo(_databasePath + "-wal").Length : 0);
+                }
+                stage?.AddMeasurement("stagedRows", await CountValueAsync($"SELECT COUNT(*) FROM {table}", cancellationToken).ConfigureAwait(false), "rows");
+                stage?.AddMeasurement("finalizedRows", rows, "rows");
+                stage?.AddMeasurement("sqlExecutionOperations", operations, "commands");
+                stage?.AddMeasurement("maximumRowsPerOperation", maximumRowsPerOperation, "rows");
+                stage?.AddMeasurement("durableWalBytesObserved", maximumWalBytes, "bytes");
+                FinalizationObserver?.Invoke(LedgerFinalizationPhase.TableCopied);
+            }
+            using (var indexStage = _performanceRecorder?.StartStage(PerformanceStageKind.Verification, "verification ledger destination secondary index build"))
+            {
+                foreach (var sql in secondaryIndexes)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await using var command = finalConnection.CreateCommand();
+                    command.CommandText = sql;
+                    await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                }
+                indexStage?.AddMeasurement("secondaryIndexBuilds", secondaryIndexes.Count, "indexes");
+            }
+            await using (var detach = finalConnection.CreateCommand())
+            {
+                detach.CommandText = "DETACH DATABASE staging";
+                await detach.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            await TrySetFailureStateAsync(finalConnection, cancellationToken.IsCancellationRequested ? VerificationLedgerState.Cancelled : VerificationLedgerState.Failed,
+                CancellationToken.None).ConfigureAwait(false);
+            await finalConnection.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+        await _connection.DisposeAsync().ConfigureAwait(false);
+        _connection = finalConnection;
+        var actual = await GetCountsAsync(cancellationToken).ConfigureAwait(false);
+        if (expected != actual || expectedCoverage != await ValidateCoverageAsync(cancellationToken).ConfigureAwait(false))
+            throw new InvalidDataException("Verification ledger finalization changed semantic facts or coverage.");
+        await using (var integrity = _connection.CreateCommand())
+        {
+            integrity.CommandText = "PRAGMA quick_check";
+            if (!string.Equals(await integrity.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string, "ok", StringComparison.Ordinal))
+                throw new InvalidDataException("Verification ledger SQLite integrity validation failed.");
+        }
+        FinalizationObserver?.Invoke(LedgerFinalizationPhase.IntegrityValidated);
+        cancellationToken.ThrowIfCancellationRequested();
+        var sourceCount = actual.SourceCount;
+        var targetCount = actual.TargetCount;
+        var dispositionCount = actual.DispositionCount;
+        var unaccountedCount = actual.UnaccountedDispositionCount;
+        var lineageCount = actual.LineageCount;
+        var journalCount = actual.JournalEntryCount;
+        var fingerprint = actual.Fingerprint;
+        var auxiliaryFingerprint = await ComputeFingerprintAsync(cancellationToken, auxiliary: true).ConfigureAwait(false);
+        _verifiedAuxiliaryFingerprint = auxiliaryFingerprint;
+        using var metadataStage = _performanceRecorder?.StartStage(PerformanceStageKind.Verification, "verification ledger finalize metadata");
         await using (var transaction = await _connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false))
         {
             await using var command = _connection.CreateCommand();
             command.Transaction = (SqliteTransaction)transaction;
-            command.CommandText = "INSERT INTO metadata(key,value) VALUES('complete','true'),('fingerprint',$fingerprint),('sourceCount',$sources),('targetCount',$targets),('dispositionCount',$dispositions),('unaccountedCount',$unaccounted),('lineageCount',$lineage),('journalCount',$journal)";
+            command.CommandText = "INSERT INTO metadata(key,value) VALUES('complete','true'),('fingerprint',$fingerprint),('sourceCount',$sources),('targetCount',$targets),('dispositionCount',$dispositions),('unaccountedCount',$unaccounted),('lineageCount',$lineage),('journalCount',$journal),('auxiliaryFingerprint',$auxiliary)";
             command.Parameters.AddWithValue("$fingerprint", fingerprint);
+            command.Parameters.AddWithValue("$auxiliary", auxiliaryFingerprint);
             command.Parameters.AddWithValue("$sources", sourceCount.ToString(CultureInfo.InvariantCulture));
             command.Parameters.AddWithValue("$targets", targetCount.ToString(CultureInfo.InvariantCulture));
             command.Parameters.AddWithValue("$dispositions", dispositionCount.ToString(CultureInfo.InvariantCulture));
             command.Parameters.AddWithValue("$unaccounted", unaccountedCount.ToString(CultureInfo.InvariantCulture));
             command.Parameters.AddWithValue("$lineage", lineageCount.ToString(CultureInfo.InvariantCulture));
             command.Parameters.AddWithValue("$journal", journalCount.ToString(CultureInfo.InvariantCulture));
-            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            var insertedRows = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            RecordInsert(LedgerTable.Metadata, insertedRows);
+            await using var stateCommand = _connection.CreateCommand();
+            stateCommand.Transaction = (SqliteTransaction)transaction;
+            stateCommand.CommandText = "UPDATE metadata SET value='Complete' WHERE key='state'";
+            await stateCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
+        metadataStage?.AddMeasurement("finalizedRows", 10, "rows");
+        metadataStage?.AddMeasurement("sqlExecutionOperations", 2, "commands");
         _completed = true;
+        State = VerificationLedgerState.Complete;
         var relativePath = Path.GetRelativePath(_root, _databasePath).Replace(Path.DirectorySeparatorChar, '/');
         _receipt = new VerificationLedgerStoreReceipt(Guid.Parse(Path.GetFileName(_directory)), relativePath,
-            fingerprint, sourceCount, targetCount, dispositionCount, lineageCount, journalCount);
+            fingerprint, sourceCount, targetCount, dispositionCount, lineageCount, journalCount, auxiliaryFingerprint);
         _verifiedSummary = new VerificationLedgerSummary(sourceCount, targetCount, dispositionCount, unaccountedCount,
             lineageCount, journalCount, fingerprint);
-        _performanceRecorder?.RecordMeasuredStage(PerformanceStageKind.Verification, "verification ledger writes",
-            Interlocked.Read(ref _writeMicroseconds), Interlocked.Read(ref _writeOperations),
-            measurements: [new PerformanceMeasurement("boundedWriteOperations", Interlocked.Read(ref _writeOperations), "operations")]);
-        return _verifiedSummary;
+        finalizationStage?.AddMeasurement("stagingDatabaseBytes", File.Exists(StagingPath) ? new FileInfo(StagingPath).Length : 0, "bytes");
+        finalizationStage?.AddMeasurement("durableDatabaseBytes", new FileInfo(_databasePath).Length, "bytes");
+        finalizationStage?.AddMeasurement("durableWalBytes", File.Exists(_databasePath + "-wal") ? new FileInfo(_databasePath + "-wal").Length : 0, "bytes");
+        foreach (var suffix in new[] { "", "-wal", "-shm" })
+        {
+            try { File.Delete(StagingPath + suffix); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        if (_performanceRecorder is not null)
+        {
+            var measurements = new List<PerformanceMeasurement>
+            {
+                new("boundedWriteOperations", Interlocked.Read(ref _writeOperations), "operations"),
+                new("ledgerApiWriteCalls", Interlocked.Read(ref _writeOperations), "calls")
+            };
+            for (var index = 0; index < LedgerTableNames.Length; index++)
+            {
+                var table = LedgerTableNames[index];
+                measurements.Add(new PerformanceMeasurement($"successfulInsertCommands.{table}",
+                    Interlocked.Read(ref _successfulInsertCommands[index]), "commands"));
+                measurements.Add(new PerformanceMeasurement($"insertedRows.{table}",
+                    Interlocked.Read(ref _insertedRows[index]), "rows"));
+                if (PayloadTables.Contains((LedgerTable)index))
+                    measurements.Add(new PerformanceMeasurement($"serializedPayloadBytes.{table}",
+                        Interlocked.Read(ref _serializedPayloadBytes[index]), "bytes"));
+            }
+            _performanceRecorder.RecordMeasuredStage(PerformanceStageKind.Verification, "verification ledger staging writes",
+                Interlocked.Read(ref _writeMicroseconds), Interlocked.Read(ref _writeOperations), measurements: measurements);
+        }
+    }
+
+    private static async Task SetStateAsync(SqliteConnection connection, VerificationLedgerState state, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "INSERT INTO metadata(key,value) VALUES('state',$state) ON CONFLICT(key) DO UPDATE SET value=excluded.value";
+        command.Parameters.AddWithValue("$state", state.ToString());
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task TrySetFailureStateAsync(SqliteConnection connection, VerificationLedgerState state, CancellationToken cancellationToken)
+    {
+        if (connection.State != System.Data.ConnectionState.Open) return;
+        try { await SetStateAsync(connection, state, cancellationToken).ConfigureAwait(false); }
+        catch (SqliteException) { }
+    }
+
+    private async Task StageAsync(Func<Task> action)
+    {
+        ValidateWritable();
+        try { await action().ConfigureAwait(false); }
+        catch (Exception exception)
+        {
+            await FailAsync(exception).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private async Task FailAsync(Exception exception)
+    {
+        State = exception is OperationCanceledException ? VerificationLedgerState.Cancelled : VerificationLedgerState.Failed;
+        _completed = false;
+        _receipt = null;
+        _verifiedSummary = null;
+        _verifiedAuxiliaryFingerprint = null;
+        if (_writeTransaction is { } pending)
+        {
+            _writeTransaction = null;
+            try { await pending.RollbackAsync(CancellationToken.None).ConfigureAwait(false); }
+            finally { await pending.DisposeAsync().ConfigureAwait(false); }
+        }
+        await TrySetFailureStateAsync(_connection, State, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private async Task EnsureDerivedFactsAsync(CancellationToken cancellationToken)
+    {
+        if (_completed || State != VerificationLedgerState.Pending) return;
+        await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
+        await DeriveAsync("lineage", _derivedLineageRow, false).ConfigureAwait(false);
+        await DeriveAsync("journal", _derivedJournalRow, true).ConfigureAwait(false);
+
+        async Task DeriveAsync(string table, long previous, bool journal)
+        {
+            var upper = await CountValueAsync($"SELECT COALESCE(MAX(rowid),0) FROM {table}", cancellationToken).ConfigureAwait(false);
+            using var stage = _performanceRecorder?.StartStage(PerformanceStageKind.Verification, $"verification ledger staging derive {table}");
+            for (var lower = previous; lower < upper; lower += FinalizationBatchSize)
+            {
+                await using var transaction = _connection.BeginTransaction();
+                foreach (var kind in journal ? new[] { LedgerTable.JournalSourceScope, LedgerTable.JournalTargetScope } : new[] { LedgerTable.LineageSources })
+                {
+                    await using var command = _connection.CreateCommand();
+                    command.Transaction = transaction;
+                    command.CommandText = kind switch
+                    {
+                        LedgerTable.LineageSources => "INSERT INTO lineage_sources SELECT l.target_node_id,l.target_id,json_extract(s.value,'$.nodeId'),json_extract(s.value,'$.artifact.id') FROM lineage l,json_each(l.payload,'$.sources') s WHERE l.rowid>$lower AND l.rowid<=$upper",
+                        LedgerTable.JournalSourceScope => "INSERT OR IGNORE INTO journal_scope SELECT j.edge_id,0,g.node_key,g.node_id,json_extract(s.value,'$.artifact.id') FROM journal j,json_each(j.payload,'$.sources') s JOIN graph_nodes g ON g.node_key=json_extract(s.value,'$.nodeId') WHERE j.rowid>$lower AND j.rowid<=$upper AND j.result IN ('produced','excluded') ORDER BY j.rowid,s.key",
+                        _ => "INSERT OR IGNORE INTO journal_scope SELECT j.edge_id,1,g.node_key,g.node_id,j.target_id FROM journal j JOIN graph_nodes g ON g.node_key=j.target_node WHERE j.rowid>$lower AND j.rowid<=$upper AND j.result IN ('produced','excluded') AND j.target_id IS NOT NULL ORDER BY j.rowid"
+                    };
+                    command.Parameters.AddWithValue("$lower", lower);
+                    command.Parameters.AddWithValue("$upper", Math.Min(upper, lower + FinalizationBatchSize));
+                    RecordInsert(kind, await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false));
+                }
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            if (journal) _derivedJournalRow = upper;
+            else _derivedLineageRow = upper;
+        }
     }
 
     public async Task<VerificationLedgerSummary> ReadSummaryAsync(CancellationToken cancellationToken)
@@ -454,6 +723,17 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
         }
         if (!metadata.TryGetValue("complete", out var complete) || complete != "true")
             throw new InvalidDataException("Verification ledger is incomplete.");
+        if (metadata.TryGetValue("state", out var state) && state != nameof(VerificationLedgerState.Complete))
+            throw new InvalidDataException("Verification ledger is not finalized.");
+        if (metadata.ContainsKey("state") || metadata.ContainsKey("auxiliaryFingerprint"))
+        {
+            if (!metadata.TryGetValue("state", out var finalizedState) || finalizedState != nameof(VerificationLedgerState.Complete) ||
+                !metadata.TryGetValue("auxiliaryFingerprint", out var auxiliary))
+                throw new InvalidDataException("Verification ledger auxiliary integrity validation failed.");
+            _verifiedAuxiliaryFingerprint = await ComputeFingerprintAsync(cancellationToken, auxiliary: true).ConfigureAwait(false);
+            if (auxiliary != _verifiedAuxiliaryFingerprint)
+                throw new InvalidDataException("Verification ledger auxiliary integrity validation failed.");
+        }
         var actual = await GetCountsAsync(cancellationToken).ConfigureAwait(false);
         if (actual.Fingerprint != metadata["fingerprint"] || actual.SourceCount != ParseCount("sourceCount") ||
             actual.TargetCount != ParseCount("targetCount") || actual.DispositionCount != ParseCount("dispositionCount") ||
@@ -469,6 +749,7 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
     public async Task<VerificationLedgerCoverageResult> ValidateCoverageAsync(CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
+        await EnsureDerivedFactsAsync(cancellationToken).ConfigureAwait(false);
         await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
         var missingDispositions = await CountValueAsync("SELECT COUNT(*) FROM sources s LEFT JOIN dispositions d ON d.source_node_id=s.node_id AND d.source_id=s.artifact_id WHERE d.source_id IS NULL", cancellationToken).ConfigureAwait(false);
         var unexpectedDispositions = await CountValueAsync("SELECT COUNT(*) FROM dispositions d LEFT JOIN sources s ON s.node_id=d.source_node_id AND s.artifact_id=d.source_id WHERE s.artifact_id IS NULL", cancellationToken).ConfigureAwait(false);
@@ -511,10 +792,12 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
     public async IAsyncEnumerable<VerificationSourceLineageTargets> ReadLineageTargetsBySourceAsync(
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        await EnsureDerivedFactsAsync(cancellationToken).ConfigureAwait(false);
         await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
+        await EnsureStagingIndexesAsync("lineage_sources", cancellationToken).ConfigureAwait(false);
         await using var readConnection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = _databasePath,
+            DataSource = _completed ? _databasePath : StagingPath,
             Mode = SqliteOpenMode.ReadOnly,
             Cache = SqliteCacheMode.Private,
             Pooling = false
@@ -571,6 +854,7 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
+        await EnsureStagingIndexesAsync("journal", cancellationToken).ConfigureAwait(false);
         await using var command = _connection.CreateCommand();
         command.CommandText = "SELECT payload FROM journal WHERE edge_id=$edge ORDER BY result,target_node,target_id,payload";
         command.Parameters.AddWithValue("$edge", edgeId.Value.ToString("D", CultureInfo.InvariantCulture));
@@ -585,6 +869,7 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
     public async IAsyncEnumerable<VerificationJournalScope> ReadJournalScopeAsync(MigrationEdgeId edgeId, bool targets,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        await EnsureDerivedFactsAsync(cancellationToken).ConfigureAwait(false);
         await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
         await using var command = _connection.CreateCommand();
         command.CommandText = "SELECT node_key,node_id,artifact_id FROM journal_scope WHERE edge_id=$edge AND is_target=$target ORDER BY node_id,artifact_id";
@@ -603,6 +888,7 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
         CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
+        await EnsureDerivedFactsAsync(cancellationToken).ConfigureAwait(false);
         await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
         await using var command = _connection.CreateCommand();
         command.CommandText = "SELECT is_target,COUNT(*) FROM journal_scope WHERE edge_id=$edge GROUP BY is_target";
@@ -621,6 +907,7 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
     public async IAsyncEnumerable<VerificationJournalScope> ReadDistinctJournalScopeAsync(MigrationEdgeId edgeId,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        await EnsureDerivedFactsAsync(cancellationToken).ConfigureAwait(false);
         await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
         await using var command = _connection.CreateCommand();
         command.CommandText = "SELECT node_key,node_id,artifact_id FROM journal_scope WHERE edge_id=$edge GROUP BY node_key,node_id,artifact_id ORDER BY node_id,artifact_id";
@@ -650,7 +937,9 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
     public async IAsyncEnumerable<LineageRecord> FindLineageBySourceAsync(MigrationNodeId sourceNodeId, ArtifactId sourceId,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        await EnsureDerivedFactsAsync(cancellationToken).ConfigureAwait(false);
         await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
+        await EnsureStagingIndexesAsync("lineage_sources", cancellationToken).ConfigureAwait(false);
         await using var command = _connection.CreateCommand();
         command.CommandText = "SELECT l.payload FROM lineage l JOIN lineage_sources s ON s.target_node_id=l.target_node_id AND s.target_id=l.target_id WHERE s.source_node_id=$node AND s.source_id=$source ORDER BY l.target_node_id,l.target_id";
         command.Parameters.AddWithValue("$node", sourceNodeId.Value.ToString("D", CultureInfo.InvariantCulture));
@@ -684,6 +973,7 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
     {
         ThrowIfDisposed();
         await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
+        await EnsureStagingIndexesAsync("journal", cancellationToken).ConfigureAwait(false);
         await using var command = _connection.CreateCommand();
         command.CommandText = "SELECT 1 FROM journal WHERE edge_id=$edge AND result=$result LIMIT 1";
         command.Parameters.AddWithValue("$edge", edgeId.Value.ToString("D", CultureInfo.InvariantCulture));
@@ -703,9 +993,17 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
             await ComputeFingerprintAsync(cancellationToken).ConfigureAwait(false));
     }
 
-    private async Task<string> ComputeFingerprintAsync(CancellationToken cancellationToken)
+    private async Task<string> ComputeFingerprintAsync(CancellationToken cancellationToken, bool auxiliary = false)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        if (auxiliary)
+        {
+            Append("proofshift-verification-ledger-auxiliary-v1");
+            await AppendRowsAsync("graph_nodes", "node_key", cancellationToken).ConfigureAwait(false);
+            await AppendRowsAsync("lineage_sources", "target_node_id,target_id,source_node_id,source_id", cancellationToken).ConfigureAwait(false);
+            await AppendRowsAsync("journal_scope", "edge_id,is_target,node_id,artifact_id", cancellationToken).ConfigureAwait(false);
+            return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+        }
         Append("proofshift-verification-ledger-v1");
         await AppendRowsAsync("sources", "node_id,artifact_id", cancellationToken).ConfigureAwait(false);
         await AppendRowsAsync("targets", "node_id,artifact_id", cancellationToken).ConfigureAwait(false);
@@ -752,6 +1050,24 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
         return (long)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L);
     }
 
+    private async Task EnsureStagingIndexesAsync(string? table, CancellationToken cancellationToken)
+    {
+        var required = _deferredSecondaryIndexes.Where(pair => table is null || pair.Value.Table == table).ToArray();
+        if (required.Length == 0) return;
+        await FlushWritesAsync(cancellationToken).ConfigureAwait(false);
+        using var stage = _performanceRecorder?.StartStage(PerformanceStageKind.Verification, "verification ledger staging secondary index build");
+        foreach (var (name, definition) in required)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await using var command = _connection.CreateCommand();
+            command.CommandText = definition.Sql;
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            _deferredSecondaryIndexes.Remove(name);
+            stage?.AddMeasurement($"indexBuilt.{name}", 1, "indexes");
+        }
+        stage?.AddMeasurement("secondaryIndexBuilds", required.Length, "indexes");
+    }
+
     private SqliteTransaction GetWriteTransaction()
     {
         ValidateWritable();
@@ -762,6 +1078,14 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
     {
         Interlocked.Add(ref _writeMicroseconds, checked((long)Math.Round(Stopwatch.GetElapsedTime(startedTimestamp).TotalMicroseconds)));
         Interlocked.Increment(ref _writeOperations);
+    }
+
+    private void RecordInsert(LedgerTable table, int insertedRows, int payloadBytes = 0)
+    {
+        var index = (int)table;
+        Interlocked.Increment(ref _successfulInsertCommands[index]);
+        Interlocked.Add(ref _insertedRows[index], insertedRows);
+        Interlocked.Add(ref _serializedPayloadBytes[index], payloadBytes);
     }
 
     private async Task CompleteWriteAsync(CancellationToken cancellationToken)
@@ -784,6 +1108,7 @@ public sealed class SqliteVerificationLedgerStore : IVerificationLedgerStore
     {
         ThrowIfDisposed();
         if (_completed) throw new InvalidOperationException("Verification ledger is already complete.");
+        if (State != VerificationLedgerState.Pending) throw new InvalidOperationException("Verification ledger cannot accept writes after finalization begins.");
     }
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);

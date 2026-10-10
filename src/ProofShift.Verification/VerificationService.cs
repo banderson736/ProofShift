@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -27,9 +28,115 @@ public sealed class VerificationService
 {
     private const string SystemRuleId = "proofshift.verification.materialized-state";
     private readonly IMaterializedSnapshotStore _snapshotStore;
+    private readonly VerificationExpectedWorksetScope? _expectedWorksets;
+    private readonly int _partitionCount;
+    private readonly VerificationRuleExecutionMode _executionMode;
+    private readonly int _maxPartitionWorkers;
 
-    public VerificationService(IMaterializedSnapshotStore snapshotStore) =>
+    public VerificationService(IMaterializedSnapshotStore snapshotStore, VerificationExpectedWorksetScope? expectedWorksets = null,
+        int partitionCount = 1, int maxPartitionWorkers = 1)
+        : this(snapshotStore, expectedWorksets, partitionCount, VerificationRuleExecutionMode.GlobalRuleReference,
+            maxPartitionWorkers)
+    {
+    }
+
+    internal VerificationService(IMaterializedSnapshotStore snapshotStore,
+        VerificationExpectedWorksetScope? expectedWorksets, int partitionCount,
+        VerificationRuleExecutionMode executionMode, int maxPartitionWorkers = 1)
+    {
         _snapshotStore = snapshotStore ?? throw new ArgumentNullException(nameof(snapshotStore));
+        _expectedWorksets = expectedWorksets;
+        if (partitionCount is not (1 or 4 or 8)) throw new ArgumentOutOfRangeException(nameof(partitionCount));
+        if (!Enum.IsDefined(executionMode)) throw new ArgumentOutOfRangeException(nameof(executionMode));
+        if (maxPartitionWorkers is not (1 or 2 or 4 or 6 or 8) || maxPartitionWorkers > partitionCount)
+            throw new ArgumentOutOfRangeException(nameof(maxPartitionWorkers),
+            "Partition worker count must be 1, 2, 4, 6, or 8 and cannot exceed the partition count.");
+        _partitionCount = partitionCount;
+        _executionMode = executionMode;
+        _maxPartitionWorkers = maxPartitionWorkers;
+    }
+
+    internal static VerificationRuleWorkset ApplyExecutionMode(VerificationRuleWorkset plannedWorkset,
+        VerificationRuleExecutionMode executionMode)
+    {
+        ArgumentNullException.ThrowIfNull(plannedWorkset);
+        return executionMode switch
+        {
+            VerificationRuleExecutionMode.GlobalRuleReference => plannedWorkset with
+            {
+                PartitionExecution = VerificationPartitionExecution.Global
+            },
+            VerificationRuleExecutionMode.PartitionLocalExperimental => plannedWorkset,
+            _ => throw new ArgumentOutOfRangeException(nameof(executionMode), executionMode,
+                "Unsupported Verification execution mode.")
+        };
+    }
+
+    private async Task PopulateExpectedStateAsync(LoadedProjectConfiguration configuration, MigrationGraph graph,
+        ILoadedCheckpoint checkpoint, VerificationExecutionPlan plan, SqliteVerificationWorkspace workspace,
+        SqliteVerificationLedgerStore ledger, string runtimeVersion, PerformanceRecorder? recorder, string stageName,
+        CancellationToken cancellationToken)
+    {
+        if (_expectedWorksets is null)
+        {
+            await BuildExpectedStateAsync(workspace, graph, checkpoint, ledger, recorder, stageName, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        var manifest = checkpoint.Manifest;
+        var key = new VerificationExpectedWorksetKey(manifest.Id.Value.ToString("N", CultureInfo.InvariantCulture),
+            manifest.ManifestHash!, manifest.SourceFingerprint!, configuration.ConfigurationHash, graph.GraphHash,
+            plan.ExpectedRequirementsFingerprint, runtimeVersion);
+        var expected = await _expectedWorksets.GetOrBuildAsync(key, plan, (builder, token) =>
+            BuildExpectedStateAsync(builder, graph, checkpoint, null, recorder, "expected workset source and expected ingest", token),
+            recorder, cancellationToken).ConfigureAwait(false);
+        using (var attachStage = recorder?.StartStage(PerformanceStageKind.Verification, "expected workset attach"))
+            await workspace.AttachExpectedAsync(expected, key, cancellationToken).ConfigureAwait(false);
+        using var registration = recorder?.StartStage(PerformanceStageKind.Verification, "shared source ledger registration");
+        var nodes = graph.Nodes.ToDictionary(node => node.Name, node => node.Id, StringComparer.Ordinal);
+        await foreach (var source in workspace.ReadArtifactRecordsAsync(VerificationArtifactRole.Source, null, null, cancellationToken)
+            .WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            await ledger.RegisterSourceAsync(source.NodeKey, nodes[source.NodeKey], source.Artifact, cancellationToken).ConfigureAwait(false);
+            registration?.AddArtifacts();
+        }
+    }
+
+    private static async Task BuildExpectedStateAsync(SqliteVerificationWorkspace workspace, MigrationGraph graph,
+        ILoadedCheckpoint checkpoint, SqliteVerificationLedgerStore? ledger, PerformanceRecorder? recorder,
+        string stageName, CancellationToken cancellationToken)
+    {
+        foreach (var sourceNode in graph.Nodes.Where(node => node.Type == MigrationNodeType.Source).OrderBy(node => node.Name, StringComparer.Ordinal))
+        {
+            using var stage = recorder?.StartStage(PerformanceStageKind.Verification, stageName, nodeKey: sourceNode.Name);
+            long sources = 0;
+            long expected = 0;
+            await foreach (var source in checkpoint.ReadAsync(sourceNode.Name, sourceNode.Selector, cancellationToken)
+                .WithCancellation(cancellationToken).ConfigureAwait(false))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                ValidateRecordForNode(source, sourceNode);
+                await workspace.AddSourceArtifactAsync(sourceNode.Name, source, cancellationToken).ConfigureAwait(false);
+                if (ledger is not null) await ledger.RegisterSourceAsync(sourceNode.Name, sourceNode.Id, source.Artifact, cancellationToken).ConfigureAwait(false);
+                sources++;
+                stage?.AddArtifacts();
+                foreach (var edge in graph.Edges.Where(edge => edge.Sources.Contains(sourceNode.Id)).OrderBy(edge => edge.Id.Value))
+                {
+                    if (edge.Operation.Type is MigrationOperationType.Exclude or MigrationOperationType.Relationship) continue;
+                    if (edge.Sources.Count != 1) throw ContextMismatch("Verification cannot replay a multi-source edge under current graph semantics.");
+                    foreach (var targetNode in edge.Targets.Select(id => graph.Nodes.Single(node => node.Id == id)).OrderBy(node => node.Name, StringComparer.Ordinal))
+                    {
+                        await workspace.AddExpectedTargetAsync(targetNode.Name, GraphTransformationRuntime.Transform(source, edge, targetNode),
+                            sourceNode.Name, source, edge, cancellationToken).ConfigureAwait(false);
+                        expected++;
+                        stage?.AddArtifacts();
+                    }
+                }
+            }
+            stage?.AddMeasurement("sourceRecords", sources, "records");
+            stage?.AddMeasurement("expectedTargets", expected, "records");
+        }
+        ValidateExternalSourceCoverage(checkpoint.Manifest, workspace.SourceArtifactCount);
+    }
 
     public Task<VerificationResult> VerifyAsync(
         LoadedProjectConfiguration configuration,
@@ -63,6 +170,7 @@ public sealed class VerificationService
         ArgumentNullException.ThrowIfNull(targets);
         using var verificationStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification, "verification");
         var startedAt = DateTimeOffset.UtcNow;
+        var executionPlan = CreateExecutionPlan(ruleSet, graph, performanceRecorder, _executionMode);
         var targetRuntimes = targets.OrderBy(target => target.NodeKey, StringComparer.Ordinal).ToArray();
         var graphNodes = graph.Nodes.ToDictionary(node => node.Name, StringComparer.Ordinal);
         var nodeIds = graph.Nodes.ToDictionary(node => node.Name, node => node.Id, StringComparer.Ordinal);
@@ -85,48 +193,14 @@ public sealed class VerificationService
         using (var workspaceCreateStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
             "verification workspace create"))
             workspace = await SqliteVerificationWorkspace.CreateAsync(temporaryDirectory,
-                performanceRecorder, cancellationToken).ConfigureAwait(false);
+                performanceRecorder, executionPlan, cancellationToken).ConfigureAwait(false);
         await using var workspaceLifetime = workspace;
+        await workspace.ConfigurePartitionsAsync(_partitionCount, cancellationToken, _maxPartitionWorkers).ConfigureAwait(false);
         var sourceNodes = graph.Nodes.Where(node => node.Type == MigrationNodeType.Source)
             .OrderBy(node => node.Name, StringComparer.Ordinal).ToArray();
 
-        foreach (var sourceNode in sourceNodes)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            using var ingestStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
-                "verification workspace source and expected ingest", nodeKey: sourceNode.Name);
-            long sourceRecordCount = 0;
-            long expectedTargetCount = 0;
-            await foreach (var source in checkpoint.ReadAsync(sourceNode.Name, sourceNode.Selector, cancellationToken)
-                .WithCancellation(cancellationToken).ConfigureAwait(false))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                ValidateRecordForNode(source, sourceNode);
-                await workspace.AddSourceArtifactAsync(sourceNode.Name, source, cancellationToken).ConfigureAwait(false);
-                await ledgerStore.RegisterSourceAsync(sourceNode.Name, sourceNode.Id, source.Artifact, cancellationToken).ConfigureAwait(false);
-                sourceRecordCount++;
-                ingestStage?.AddArtifacts();
-
-                foreach (var edge in graph.Edges.Where(edge => edge.Sources.Contains(sourceNode.Id))
-                    .OrderBy(edge => edge.Id.Value))
-                {
-                    if (edge.Operation.Type is MigrationOperationType.Exclude or MigrationOperationType.Relationship) continue;
-                    if (edge.Sources.Count != 1)
-                        throw ContextMismatch("Verification cannot replay an edge with multiple source nodes under PS-0.5 projection semantics.");
-                    foreach (var targetNode in edge.Targets.Select(id => graph.Nodes.Single(node => node.Id == id))
-                        .OrderBy(node => node.Name, StringComparer.Ordinal))
-                    {
-                        var expected = GraphTransformationRuntime.Transform(source, edge, targetNode);
-                        await workspace.AddExpectedTargetAsync(targetNode.Name, expected, sourceNode.Name, source, edge,
-                            cancellationToken).ConfigureAwait(false);
-                        expectedTargetCount++;
-                        ingestStage?.AddArtifacts();
-                    }
-                }
-            }
-            ingestStage?.AddMeasurement("sourceRecords", sourceRecordCount, "records");
-            ingestStage?.AddMeasurement("expectedTargets", expectedTargetCount, "records");
-        }
+        await PopulateExpectedStateAsync(configuration, graph, checkpoint, executionPlan, workspace, ledgerStore,
+            proofShiftVersion, performanceRecorder, "verification workspace source and expected ingest", cancellationToken).ConfigureAwait(false);
 
         ValidateSourceRecordCoverage(checkpoint.Manifest, workspace.SourceArtifactCount);
         long producedEntries = 0;
@@ -134,6 +208,10 @@ public sealed class VerificationService
             "projection journal validation"))
         {
             long validatedJournalEntries = 0;
+            double workspaceAppendMicroseconds = 0;
+            double ledgerAppendMicroseconds = 0;
+            var measureJournalTiming = journalStage is not null;
+            var journalProcessingStarted = measureJournalTiming ? Stopwatch.GetTimestamp() : 0;
             await foreach (var journalEntry in ReadJournalAsync(journalPath, binding.ProjectionRunId, cancellationToken)
                 .ConfigureAwait(false))
             {
@@ -157,8 +235,14 @@ public sealed class VerificationService
                     var pendingEntry = new VerificationJournalEntry(journalEntry.Result,
                         journalEntry.TargetNode, journalEntry.Target, scopedSources, journalEntry.EdgeId,
                         journalEntry.EdgeName, journalEntry.EdgeVersion, journalEntry.FailureCode);
-                    await workspace.AddJournalEntryAsync(pendingEntry, cancellationToken).ConfigureAwait(false);
+                    var appendStarted = measureJournalTiming ? Stopwatch.GetTimestamp() : 0;
+                    await workspace.QueueJournalEntryAsync(pendingEntry, cancellationToken).ConfigureAwait(false);
+                    if (measureJournalTiming)
+                        workspaceAppendMicroseconds += Stopwatch.GetElapsedTime(appendStarted).TotalMicroseconds;
+                    appendStarted = measureJournalTiming ? Stopwatch.GetTimestamp() : 0;
                     await ledgerStore.AppendJournalEntryAsync(pendingEntry, cancellationToken).ConfigureAwait(false);
+                    if (measureJournalTiming)
+                        ledgerAppendMicroseconds += Stopwatch.GetElapsedTime(appendStarted).TotalMicroseconds;
                     validatedJournalEntries++;
                     continue;
                 }
@@ -192,11 +276,29 @@ public sealed class VerificationService
                 var verifiedJournalEntry = new VerificationJournalEntry(journalEntry.Result,
                     journalEntry.TargetNode, journalEntry.Target, scopedSources, journalEntry.EdgeId,
                     journalEntry.EdgeName, journalEntry.EdgeVersion, journalEntry.FailureCode);
-                await workspace.AddJournalEntryAsync(verifiedJournalEntry, cancellationToken).ConfigureAwait(false);
+                var verifiedAppendStarted = measureJournalTiming ? Stopwatch.GetTimestamp() : 0;
+                await workspace.QueueJournalEntryAsync(verifiedJournalEntry, cancellationToken).ConfigureAwait(false);
+                if (measureJournalTiming)
+                    workspaceAppendMicroseconds += Stopwatch.GetElapsedTime(verifiedAppendStarted).TotalMicroseconds;
+                verifiedAppendStarted = measureJournalTiming ? Stopwatch.GetTimestamp() : 0;
                 await ledgerStore.AppendJournalEntryAsync(verifiedJournalEntry, cancellationToken).ConfigureAwait(false);
+                if (measureJournalTiming)
+                    ledgerAppendMicroseconds += Stopwatch.GetElapsedTime(verifiedAppendStarted).TotalMicroseconds;
                 validatedJournalEntries++;
             }
-            journalStage?.AddArtifacts(validatedJournalEntries);
+            if (journalStage is not null)
+            await workspace.FlushPartitionWorkAsync(cancellationToken).ConfigureAwait(false);
+            if (journalStage is not null)
+            {
+                journalStage.AddArtifacts(validatedJournalEntries);
+                var journalProcessingMicroseconds = Stopwatch.GetElapsedTime(journalProcessingStarted).TotalMicroseconds;
+                var journalReadAndValidationMicroseconds = Math.Max(0,
+                    journalProcessingMicroseconds - workspaceAppendMicroseconds - ledgerAppendMicroseconds);
+                journalStage.AddMeasurement("workspaceAppendElapsedMicroseconds", workspaceAppendMicroseconds, "microseconds");
+                journalStage.AddMeasurement("ledgerAppendElapsedMicroseconds", ledgerAppendMicroseconds, "microseconds");
+                journalStage.AddMeasurement("journalReadAndValidationElapsedMicroseconds",
+                    journalReadAndValidationMicroseconds, "microseconds");
+            }
         }
 
         var journalValidation = await workspace.ValidateJournalEntriesAsync(cancellationToken).ConfigureAwait(false);
@@ -231,12 +333,13 @@ public sealed class VerificationService
                         actual.Artifact.ArtifactType, actual.Artifact.Identity) != actual.Artifact.Id.Value)
                     throw ContextMismatch("Shadow target connector returned an artifact identity inconsistent with its selector.");
                 targetFingerprint.Add(node.Name, actual);
-                await workspace.AddTargetObservationAsync(node.Name, actual, cancellationToken).ConfigureAwait(false);
+                await workspace.QueueTargetObservationAsync(node.Name, actual, cancellationToken).ConfigureAwait(false);
                 await ledgerStore.RegisterTargetAsync(node.Name, node.Id, actual.Artifact, cancellationToken).ConfigureAwait(false);
                 observedCount++;
             }
             readStage?.AddArtifacts(observedCount);
         }
+        await workspace.FlushPartitionWorkAsync(cancellationToken).ConfigureAwait(false);
         var actualFingerprint = targetFingerprint.Finish();
 
         var findings = new List<VerificationFinding>();
@@ -255,57 +358,72 @@ public sealed class VerificationService
             new EvidenceValue(new StringValue($"sha256:{actualFingerprint.Fingerprint}:{actualFingerprint.RecordCount.ToString(CultureInfo.InvariantCulture)}"))));
 
         var context = new VerificationExecutionContext(configuration, graph, binding, verificationRunId, workspace);
-        foreach (var rule in ruleSet.Rules)
+        foreach (var workset in executionPlan.Rules)
         {
+            var rule = workset.Rule;
+            var runtimeWorkset = ApplyExecutionMode(workset, _executionMode);
             cancellationToken.ThrowIfCancellationRequested();
             using var ruleStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
                 "verification rule", ruleId: rule.Id.Value);
-            long findingCount = 0;
-            try
-            {
-                await foreach (var finding in rule.EvaluateAsync(context, cancellationToken)
-                    .WithCancellation(cancellationToken).ConfigureAwait(false))
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    findings.Add(finding);
-                    findingCount++;
-                }
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception exception)
-            {
-                throw new VerificationRuleException(VerificationIssueCodes.RuleExecutionFailure,
-                    $"Verification rule '{rule.Id.Value}' failed during execution: {exception.GetType().Name}.");
-            }
-            finally
-            {
-                ruleStage?.AddArtifacts(findingCount);
-            }
+            var ruleFindings = await EvaluateRuleFindingsAsync(runtimeWorkset, context, workspace, performanceRecorder, _partitionCount,
+                external: false, cancellationToken).ConfigureAwait(false);
+            findings.AddRange(ruleFindings);
+            ruleStage?.AddArtifacts(ruleFindings.Count);
+            ruleStage?.AddMeasurement($"declaredExecutionMode.{workset.PartitionExecution}", 1, "rules");
+            ruleStage?.AddMeasurement($"executionMode.{runtimeWorkset.PartitionExecution}", 1, "rules");
+            ruleStage?.AddMeasurement("partitionCountTouched",
+                runtimeWorkset.PartitionExecution == VerificationPartitionExecution.Global ? 1 : _partitionCount, "partitions");
         }
 
         long lineageCount = 0;
         using (var lineageStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification, "lineage analysis"))
         {
-            await foreach (var item in workspace.ReadLineageAsync(graph.GraphHash, nodeIds, cancellationToken)
-                .WithCancellation(cancellationToken).ConfigureAwait(false))
+            var measureRead = performanceRecorder is not null;
+            double readMicroseconds = 0;
+            double ledgerAppendMicroseconds = 0;
+            long ledgerAppendOperations = 0;
+            await using var lineages = workspace.ReadLineageAsync(graph.GraphHash, nodeIds, cancellationToken)
+                .GetAsyncEnumerator(cancellationToken);
+            while (true)
             {
+                var readStarted = measureRead ? Stopwatch.GetTimestamp() : 0;
+                var hasRecord = await lineages.MoveNextAsync().ConfigureAwait(false);
+                if (measureRead) readMicroseconds += Stopwatch.GetElapsedTime(readStarted).TotalMicroseconds;
+                if (!hasRecord) break;
+                var item = lineages.Current;
+                readStarted = measureRead ? Stopwatch.GetTimestamp() : 0;
                 await ledgerStore.AppendLineageAsync(item, cancellationToken).ConfigureAwait(false);
+                if (measureRead)
+                    ledgerAppendMicroseconds += Stopwatch.GetElapsedTime(readStarted).TotalMicroseconds;
+                ledgerAppendOperations++;
                 lineageCount++;
             }
             lineageStage?.AddArtifacts(lineageCount);
+            RecordReadStage(performanceRecorder, "SQLite projection lineage stream", readMicroseconds, lineageCount);
+            RecordLedgerAppendStage(performanceRecorder, "verification ledger lineage writes",
+                ledgerAppendMicroseconds, ledgerAppendOperations);
         }
         long dispositionCount = 0;
         using (var dispositionStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification, "source disposition analysis"))
         {
+            var measureRead = performanceRecorder is not null;
+            double readMicroseconds = 0;
+            long sourceFactsRead = 0;
+            double ledgerAppendMicroseconds = 0;
+            long ledgerAppendOperations = 0;
             await using var lineageTargets = ledgerStore.ReadLineageTargetsBySourceAsync(cancellationToken)
                 .GetAsyncEnumerator(cancellationToken);
             var hasLineageTargets = await lineageTargets.MoveNextAsync().ConfigureAwait(false);
-            await foreach (var source in workspace.ReadSourceFactsAsync(cancellationToken)
-                .WithCancellation(cancellationToken).ConfigureAwait(false))
+            await using var sourceFacts = workspace.ReadSourceFactsAsync(cancellationToken)
+                .GetAsyncEnumerator(cancellationToken);
+            while (true)
             {
+                var readStarted = measureRead ? Stopwatch.GetTimestamp() : 0;
+                var hasSource = await sourceFacts.MoveNextAsync().ConfigureAwait(false);
+                if (measureRead) readMicroseconds += Stopwatch.GetElapsedTime(readStarted).TotalMicroseconds;
+                if (!hasSource) break;
+                var source = sourceFacts.Current;
+                sourceFactsRead++;
                 while (hasLineageTargets && CompareSourceKey(lineageTargets.Current.SourceNodeKey,
                     lineageTargets.Current.SourceId.Value, source.NodeKey, source.Artifact.Id.Value) < 0)
                     hasLineageTargets = await lineageTargets.MoveNextAsync().ConfigureAwait(false);
@@ -331,10 +449,18 @@ public sealed class VerificationService
                 };
                 var dispositionRecord = new ArtifactDispositionRecord(source.Artifact, disposition, targetArtifacts, reason,
                     nodeIds[source.NodeKey], targetNodeIds);
+                var appendStarted = measureRead ? Stopwatch.GetTimestamp() : 0;
                 await ledgerStore.AppendDispositionAsync(dispositionRecord, cancellationToken).ConfigureAwait(false);
+                if (measureRead)
+                    ledgerAppendMicroseconds += Stopwatch.GetElapsedTime(appendStarted).TotalMicroseconds;
+                ledgerAppendOperations++;
                 dispositionCount++;
             }
             dispositionStage?.AddArtifacts(dispositionCount);
+            RecordReadStage(performanceRecorder, "SQLite source disposition facts stream", readMicroseconds,
+                sourceFactsRead);
+            RecordLedgerAppendStage(performanceRecorder, "verification ledger disposition writes",
+                ledgerAppendMicroseconds, ledgerAppendOperations);
         }
 
         var ledgerCoverage = await ledgerStore.ValidateCoverageAsync(cancellationToken).ConfigureAwait(false);
@@ -468,6 +594,7 @@ public sealed class VerificationService
         using var externalVerificationStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
             "external target verification");
         var startedAt = DateTimeOffset.UtcNow;
+        var executionPlan = CreateExecutionPlan(ruleSet, graph, performanceRecorder, _executionMode);
         var targetRuntimes = targets.OrderBy(target => target.NodeKey, StringComparer.Ordinal).ToArray();
         ValidateExternalObservation(configuration, graph, observation);
         ValidateExternalTargetRuntimes(configuration, graph, observation, targetRuntimes);
@@ -485,46 +612,13 @@ public sealed class VerificationService
         using (var workspaceCreateStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
             "external verification workspace create"))
             workspace = await SqliteVerificationWorkspace.CreateAsync(temporaryDirectory,
-                performanceRecorder, cancellationToken).ConfigureAwait(false);
+                performanceRecorder, executionPlan, cancellationToken).ConfigureAwait(false);
         await using var workspaceLifetime = workspace;
+        await workspace.ConfigurePartitionsAsync(_partitionCount, cancellationToken, _maxPartitionWorkers).ConfigureAwait(false);
         var sourceNodes = graph.Nodes.Where(node => node.Type == MigrationNodeType.Source)
             .OrderBy(node => node.Name, StringComparer.Ordinal).ToArray();
-        foreach (var sourceNode in sourceNodes)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            using var ingestStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
-                "external source and expected-target ingest", nodeKey: sourceNode.Name);
-            long sourceCount = 0;
-            long expectedCount = 0;
-            await foreach (var source in checkpoint.ReadAsync(sourceNode.Name, sourceNode.Selector, cancellationToken)
-                .WithCancellation(cancellationToken).ConfigureAwait(false))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                ValidateRecordForNode(source, sourceNode);
-                await workspace.AddSourceArtifactAsync(sourceNode.Name, source, cancellationToken).ConfigureAwait(false);
-                await ledgerStore.RegisterSourceAsync(sourceNode.Name, sourceNode.Id, source.Artifact, cancellationToken).ConfigureAwait(false);
-                sourceCount++;
-                ingestStage?.AddArtifacts();
-                foreach (var edge in graph.Edges.Where(edge => edge.Sources.Contains(sourceNode.Id))
-                    .OrderBy(edge => edge.Id.Value))
-                {
-                    if (edge.Operation.Type is MigrationOperationType.Exclude or MigrationOperationType.Relationship) continue;
-                    if (edge.Sources.Count != 1)
-                        throw ContextMismatch("External verification cannot replay a multi-source edge under current graph semantics.");
-                    foreach (var targetNode in edge.Targets.Select(id => graph.Nodes.Single(node => node.Id == id))
-                        .OrderBy(node => node.Name, StringComparer.Ordinal))
-                    {
-                        var expected = GraphTransformationRuntime.Transform(source, edge, targetNode);
-                        await workspace.AddExpectedTargetAsync(targetNode.Name, expected, sourceNode.Name, source, edge,
-                            cancellationToken).ConfigureAwait(false);
-                        expectedCount++;
-                        ingestStage?.AddArtifacts();
-                    }
-                }
-            }
-            ingestStage?.AddMeasurement("sourceRecords", sourceCount, "records");
-            ingestStage?.AddMeasurement("expectedTargets", expectedCount, "records");
-        }
+        await PopulateExpectedStateAsync(configuration, graph, checkpoint, executionPlan, workspace, ledgerStore,
+            proofShiftVersion, performanceRecorder, "external source and expected-target ingest", cancellationToken).ConfigureAwait(false);
         ValidateExternalSourceCoverage(checkpoint.Manifest, workspace.SourceArtifactCount);
 
         using var targetFingerprint = MaterializedTargetFingerprint.CreateBuilder(graph.GraphHash);
@@ -544,12 +638,13 @@ public sealed class VerificationService
                         actual.Artifact.ArtifactType, actual.Artifact.Identity) != actual.Artifact.Id.Value)
                     throw ContextMismatch("Externally populated target connector returned an identity inconsistent with its configured selector.");
                 targetFingerprint.Add(node.Name, actual);
-                await workspace.AddTargetObservationAsync(node.Name, actual, cancellationToken).ConfigureAwait(false);
+                await workspace.QueueTargetObservationAsync(node.Name, actual, cancellationToken).ConfigureAwait(false);
                 await ledgerStore.RegisterTargetAsync(node.Name, node.Id, actual.Artifact, cancellationToken).ConfigureAwait(false);
                 observedCount++;
             }
             targetReadStage?.AddArtifacts(observedCount);
         }
+        await workspace.FlushPartitionWorkAsync(cancellationToken).ConfigureAwait(false);
         var observedTarget = targetFingerprint.Finish();
         var context = new VerificationExecutionContext(configuration, graph, observation, runId, workspace);
         var findings = new List<VerificationFinding>
@@ -563,32 +658,21 @@ public sealed class VerificationService
                 new EvidenceValue(new StringValue($"sha256:{observedTarget.Fingerprint}:{observedTarget.RecordCount.ToString(CultureInfo.InvariantCulture)}")),
                 ruleId: new RuleId("proofshift.verification.external-target-observation"), ruleVersion: "1")
         };
-        foreach (var rule in ruleSet.Rules)
+        foreach (var workset in executionPlan.Rules)
         {
+            var rule = workset.Rule;
+            var runtimeWorkset = ApplyExecutionMode(workset, _executionMode);
             cancellationToken.ThrowIfCancellationRequested();
             using var ruleStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
                 "external verification rule", ruleId: rule.Id.Value);
-            long findingCount = 0;
-            try
-            {
-                await foreach (var finding in rule.EvaluateAsync(context, cancellationToken)
-                    .WithCancellation(cancellationToken).ConfigureAwait(false))
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    findings.Add(finding);
-                    findingCount++;
-                }
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-            catch (Exception exception)
-            {
-                throw new VerificationRuleException(VerificationIssueCodes.RuleExecutionFailure,
-                    $"Verification rule '{rule.Id.Value}' failed during external target evaluation: {exception.GetType().Name}.");
-            }
-            finally
-            {
-                ruleStage?.AddArtifacts(findingCount);
-            }
+            var ruleFindings = await EvaluateRuleFindingsAsync(runtimeWorkset, context, workspace, performanceRecorder, _partitionCount,
+                external: true, cancellationToken).ConfigureAwait(false);
+            findings.AddRange(ruleFindings);
+            ruleStage?.AddArtifacts(ruleFindings.Count);
+            ruleStage?.AddMeasurement($"declaredExecutionMode.{workset.PartitionExecution}", 1, "rules");
+            ruleStage?.AddMeasurement($"executionMode.{runtimeWorkset.PartitionExecution}", 1, "rules");
+            ruleStage?.AddMeasurement("partitionCountTouched",
+                runtimeWorkset.PartitionExecution == VerificationPartitionExecution.Global ? 1 : _partitionCount, "partitions");
         }
 
         var nodeIds = graph.Nodes.ToDictionary(node => node.Name, node => node.Id, StringComparer.Ordinal);
@@ -596,25 +680,55 @@ public sealed class VerificationService
         using (var lineageStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
             "external target lineage analysis"))
         {
-            await foreach (var item in workspace.ReadGraphDerivedLineageAsync(graph.GraphHash, nodeIds, cancellationToken)
-                .WithCancellation(cancellationToken).ConfigureAwait(false))
+            var measureRead = performanceRecorder is not null;
+            double readMicroseconds = 0;
+            double ledgerAppendMicroseconds = 0;
+            long ledgerAppendOperations = 0;
+            await using var lineages = workspace.ReadGraphDerivedLineageAsync(graph.GraphHash, nodeIds, cancellationToken)
+                .GetAsyncEnumerator(cancellationToken);
+            while (true)
             {
+                var readStarted = measureRead ? Stopwatch.GetTimestamp() : 0;
+                var hasRecord = await lineages.MoveNextAsync().ConfigureAwait(false);
+                if (measureRead) readMicroseconds += Stopwatch.GetElapsedTime(readStarted).TotalMicroseconds;
+                if (!hasRecord) break;
+                var item = lineages.Current;
+                readStarted = measureRead ? Stopwatch.GetTimestamp() : 0;
                 await ledgerStore.AppendLineageAsync(item, cancellationToken).ConfigureAwait(false);
+                if (measureRead)
+                    ledgerAppendMicroseconds += Stopwatch.GetElapsedTime(readStarted).TotalMicroseconds;
+                ledgerAppendOperations++;
                 externalLineageCount++;
             }
             lineageStage?.AddArtifacts(externalLineageCount);
+            RecordReadStage(performanceRecorder, "SQLite graph-derived lineage stream", readMicroseconds,
+                externalLineageCount);
+            RecordLedgerAppendStage(performanceRecorder, "verification ledger lineage writes",
+                ledgerAppendMicroseconds, ledgerAppendOperations);
         }
         var edgeMap = graph.Edges.ToDictionary(edge => edge.Id);
-        var sourceFacts = workspace.ReadGraphDerivedSourceFactsAsync(cancellationToken);
         long externalDispositionCount = 0;
         using (var dispositionStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
             "external source disposition analysis"))
         {
+            var measureRead = performanceRecorder is not null;
+            double readMicroseconds = 0;
+            long sourceFactsRead = 0;
+            double ledgerAppendMicroseconds = 0;
+            long ledgerAppendOperations = 0;
             await using var lineageTargets = ledgerStore.ReadLineageTargetsBySourceAsync(cancellationToken)
                 .GetAsyncEnumerator(cancellationToken);
             var hasLineageTargets = await lineageTargets.MoveNextAsync().ConfigureAwait(false);
-            await foreach (var source in sourceFacts.WithCancellation(cancellationToken).ConfigureAwait(false))
+            await using var sourceFacts = workspace.ReadGraphDerivedSourceFactsAsync(cancellationToken)
+                .GetAsyncEnumerator(cancellationToken);
+            while (true)
             {
+                var readStarted = measureRead ? Stopwatch.GetTimestamp() : 0;
+                var hasSource = await sourceFacts.MoveNextAsync().ConfigureAwait(false);
+                if (measureRead) readMicroseconds += Stopwatch.GetElapsedTime(readStarted).TotalMicroseconds;
+                if (!hasSource) break;
+                var source = sourceFacts.Current;
+                sourceFactsRead++;
                 var sourceNodeId = nodeIds[source.NodeKey];
                 while (hasLineageTargets && CompareSourceKey(lineageTargets.Current.SourceNodeKey,
                     lineageTargets.Current.SourceId.Value, source.NodeKey, source.Artifact.Id.Value) < 0)
@@ -637,10 +751,18 @@ public sealed class VerificationService
                 var dispositionRecord = new ArtifactDispositionRecord(source.Artifact, disposition,
                     mapped.Select(item => item.Target).ToArray(), reason, sourceNodeId,
                     mapped.Select(item => item.TargetNodeId).ToArray());
+                var appendStarted = measureRead ? Stopwatch.GetTimestamp() : 0;
                 await ledgerStore.AppendDispositionAsync(dispositionRecord, cancellationToken).ConfigureAwait(false);
+                if (measureRead)
+                    ledgerAppendMicroseconds += Stopwatch.GetElapsedTime(appendStarted).TotalMicroseconds;
+                ledgerAppendOperations++;
                 externalDispositionCount++;
             }
             dispositionStage?.AddArtifacts(externalDispositionCount);
+            RecordReadStage(performanceRecorder, "SQLite graph-derived source disposition facts stream",
+                readMicroseconds, sourceFactsRead);
+            RecordLedgerAppendStage(performanceRecorder, "verification ledger disposition writes",
+                ledgerAppendMicroseconds, ledgerAppendOperations);
         }
         var externalLedgerCoverage = await ledgerStore.ValidateCoverageAsync(cancellationToken).ConfigureAwait(false);
         if (externalLedgerCoverage.MissingDispositions > 0 || externalLedgerCoverage.UnaccountedDispositions > 0)
@@ -1031,6 +1153,150 @@ public sealed class VerificationService
 
     private static VerificationRuleException ContextMismatch(string message) =>
         new(VerificationIssueCodes.ContextMismatch, message);
+
+    private static void RecordReadStage(PerformanceRecorder? performanceRecorder, string name,
+        double elapsedMicroseconds, long recordsReturned)
+    {
+        if (performanceRecorder is null) return;
+        performanceRecorder.RecordMeasuredStage(PerformanceStageKind.Verification, name,
+            checked((long)Math.Round(elapsedMicroseconds)), artifactCount: recordsReturned,
+            measurements:
+            [
+                new PerformanceMeasurement("queryExecutions", 1, "queries"),
+                new PerformanceMeasurement("recordsReturned", recordsReturned, "records")
+            ]);
+    }
+
+    private static VerificationExecutionPlan CreateExecutionPlan(VerificationRuleSet ruleSet, MigrationGraph graph,
+        PerformanceRecorder? performanceRecorder,
+        VerificationRuleExecutionMode executionMode = VerificationRuleExecutionMode.GlobalRuleReference)
+    {
+        using var planStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
+            "verification execution plan");
+        var plan = VerificationExecutionPlan.Create(ruleSet, graph);
+        planStage?.AddArtifacts(plan.Rules.Count);
+        planStage?.AddMeasurement("configuredRules", plan.Rules.Count, "rules");
+        planStage?.AddMeasurement("requiredSemanticTypes", plan.Rules.SelectMany(rule => rule.RequiredSemanticTypes)
+            .Distinct(StringComparer.Ordinal).Count(), "types");
+        planStage?.AddMeasurement("requiredSourceFields", plan.Rules.SelectMany(rule => rule.RequiredSourceFields)
+            .Distinct(StringComparer.Ordinal).Count(), "fields");
+        planStage?.AddMeasurement("requiredTargetFields", plan.Rules.SelectMany(rule => rule.RequiredTargetFields)
+            .Distinct(StringComparer.Ordinal).Count(), "fields");
+        planStage?.AddMeasurement("groupingKeys", plan.Rules.SelectMany(rule => rule.GroupingKeys).Distinct().Count(), "keys");
+        planStage?.AddMeasurement("orderingKeys", plan.Rules.SelectMany(rule => rule.OrderingKeys).Distinct().Count(), "keys");
+        planStage?.AddMeasurement("lookupKeys", plan.Rules.SelectMany(rule => rule.LookupKeys).Distinct().Count(), "keys");
+        foreach (var mode in Enum.GetValues<VerificationPartitionExecution>())
+        {
+            planStage?.AddMeasurement($"rules.{mode}", plan.Rules.Count(rule => rule.PartitionExecution == mode), "rules");
+            planStage?.AddMeasurement($"runtimeRules.{mode}", plan.Rules.Count(rule =>
+                ApplyExecutionMode(rule, executionMode).PartitionExecution == mode), "rules");
+        }
+        planStage?.AddMeasurement($"runtimeExecutionMode.{executionMode}", 1, "modes");
+        planStage?.AddMeasurement("requiredIndexes", plan.RequiredIndexes.Count, "indexes");
+        foreach (var index in plan.RequiredIndexes)
+            planStage?.AddMeasurement($"requiredIndex.{index.Name}", 1, "indexes");
+        return plan;
+    }
+
+    private static async Task<IReadOnlyCollection<VerificationFinding>> EvaluateRuleFindingsAsync(
+        VerificationRuleWorkset workset, VerificationExecutionContext context, SqliteVerificationWorkspace workspace,
+        PerformanceRecorder? performanceRecorder,
+        int partitionCount, bool external, CancellationToken cancellationToken)
+    {
+        var partitioned = workset.PartitionExecution != VerificationPartitionExecution.Global;
+        var partitionFindings = new List<IReadOnlyList<VerificationFinding>>(partitioned ? partitionCount : 1);
+        try
+        {
+            var evaluations = partitioned ? partitionCount : 1;
+            for (var partitionIndex = 0; partitionIndex < evaluations; partitionIndex++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                workspace.SetRuleEvaluationPartition(partitioned ? partitionIndex : null);
+                workspace.SetRuleScanContext(partitioned
+                    ? $"{workset.Rule.Id.Value}/partition-{partitionIndex:D3}"
+                    : workset.Rule.Id.Value);
+                using var partitionStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
+                    partitioned ? "partition-local rule evaluation" : "global rule evaluation", ruleId: workset.Rule.Id.Value);
+                partitionStage?.AddMeasurement("executionMode", (double)workset.PartitionExecution, "enum");
+                partitionStage?.AddMeasurement("partitionIndex", partitioned ? partitionIndex : -1, "partition");
+                var findings = new List<VerificationFinding>();
+                var ruleContext = partitioned ? context.ForPartition(partitionIndex, partitionCount) : context;
+                await foreach (var finding in workset.Rule.EvaluateAsync(ruleContext, cancellationToken)
+                    .WithCancellation(cancellationToken).ConfigureAwait(false))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    findings.Add(finding);
+                }
+                partitionStage?.AddArtifacts(findings.Count);
+                partitionStage?.AddMeasurement("findingsEmitted", findings.Count, "findings");
+                partitionFindings.Add(findings);
+            }
+
+            return workset.PartitionExecution switch
+            {
+                VerificationPartitionExecution.Global => partitionFindings[0],
+                VerificationPartitionExecution.PartitionLocal => MergeLocalFindings(workset.Rule, partitionFindings),
+                VerificationPartitionExecution.PartitionPartialWithGlobalMerge when workset.Rule is IVerificationPartitionFindingMerger merger =>
+                    merger.MergePartitionFindings(context, partitionFindings),
+                _ => throw new VerificationRuleException("PSRULE012",
+                    $"Rule '{workset.Rule.Id.Value}' does not implement its declared partition merge contract.")
+            };
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            var scope = external ? "during external target evaluation" : "during execution";
+            throw new VerificationRuleException(VerificationIssueCodes.RuleExecutionFailure,
+                $"Verification rule '{workset.Rule.Id.Value}' failed {scope}: {exception.GetType().Name}.");
+        }
+        finally
+        {
+            workspace.SetRuleScanContext(null);
+            workspace.SetRuleEvaluationPartition(null);
+        }
+    }
+
+    private static VerificationFinding[] MergeLocalFindings(IVerificationRule rule,
+        IReadOnlyList<IReadOnlyList<VerificationFinding>> partitionFindings)
+    {
+        var merged = new Dictionary<string, VerificationFinding>(StringComparer.Ordinal);
+        var allFindings = partitionFindings.SelectMany(items => items).ToArray();
+        var hasFailure = allFindings.Any(finding => finding.Result == EvidenceResult.Fail);
+        foreach (var finding in allFindings.OrderBy(item => item.StableKey, StringComparer.Ordinal))
+        {
+            if (hasFailure && finding.Result == EvidenceResult.Pass) continue;
+            if (!merged.TryGetValue(finding.StableKey, out var existing))
+            {
+                merged.Add(finding.StableKey, finding);
+                continue;
+            }
+            if (!SameFinding(existing, finding))
+                throw new VerificationRuleException("PSRULE012",
+                    $"Rule '{rule.Id.Value}' produced conflicting findings for stable key '{finding.StableKey}' across partitions.");
+        }
+        return merged.Values.ToArray();
+    }
+
+    private static bool SameFinding(VerificationFinding left, VerificationFinding right) =>
+        left.RuleId == right.RuleId && left.RuleVersion == right.RuleVersion && left.Type == right.Type &&
+        left.Result == right.Result && left.Severity == right.Severity && left.Code == right.Code &&
+        left.Explanation == right.Explanation && left.StableKey == right.StableKey &&
+        left.Inputs.SequenceEqual(right.Inputs) && Equals(left.Expected, right.Expected) && Equals(left.Actual, right.Actual);
+
+    private static void RecordLedgerAppendStage(PerformanceRecorder? performanceRecorder, string name,
+        double elapsedMicroseconds, long appendOperations)
+    {
+        if (performanceRecorder is null) return;
+        performanceRecorder.RecordMeasuredStage(PerformanceStageKind.Verification, name,
+            checked((long)Math.Round(elapsedMicroseconds)), artifactCount: appendOperations,
+            measurements:
+            [
+                new PerformanceMeasurement("ledgerAppendOperations", appendOperations, "operations")
+            ]);
+    }
 
     private sealed record ParsedJournalEntry(string Result, string? TargetNode, ArtifactReference? Target,
         IReadOnlyCollection<ArtifactReference> Sources, MigrationEdgeId EdgeId, string EdgeName, string EdgeVersion,

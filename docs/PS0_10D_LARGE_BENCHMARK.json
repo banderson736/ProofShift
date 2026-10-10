@@ -1,0 +1,185 @@
+{
+  "schema": "proofshift-ps010d-large-benchmark-review-v1",
+  "run": {
+    "scenario": "Pension large-acceptance Integrated",
+    "scale": "large-acceptance",
+    "startedAt": "2026-10-09T16:28:24.4839541+00:00",
+    "completedAt": "2026-10-10T00:56:26.9004153+00:00",
+    "artifactDirectory": "%TEMP%\\PSD-L15\\integrated-assurance",
+    "capacityEstimate": "%TEMP%\\PSD-L15-capacity.json",
+    "endToEndTests": { "total": 2, "passed": 2, "failed": 0, "skipped": 0 },
+    "testDuration": "8h 28m 08.157s"
+  },
+  "runtime": {
+    "targetFramework": "net10.0",
+    "os": "Windows",
+    "logicalProcessors": 32,
+    "note": "SDK, runtime and Docker versions are those recorded for the Medium record; no toolchain change occurred between runs."
+  },
+  "dataset": {
+    "generatorVersion": "proofshift-pension-generator-v1",
+    "seed": 20261003,
+    "generatedSourceRecords": 1500000,
+    "sourceRecordCountsByKind": {
+      "Member": 18248,
+      "Employment": 54745,
+      "Contribution": 912409,
+      "ServiceCredit": 63869,
+      "Beneficiary": 29197,
+      "RetirementElection": 6387,
+      "BenefitPayment": 364963,
+      "Document": 45620,
+      "HistoricalExport": 4562
+    },
+    "csvRecords": 50182,
+    "binaryDocuments": 45620,
+    "historicalExports": 4562,
+    "checkpointArtifacts": 1550182,
+    "projectedTargets": 1568430,
+    "checkpointBytes": 3654988648,
+    "statement": "Exactly 1,500,000 generated source records were processed by the full physical pipeline. No larger scale is claimed."
+  },
+  "configuration": {
+    "configurationHash": "392a01e7392732b6b0f3c6c1fbdf7a76c7a07ad991735be99ae72275acf40d93",
+    "correctedGraphHash": "908175c558eed0ddbc7b732b001fee40b6dfa10bf1b43fadd0d68bc8bf1f70bb",
+    "defectiveGraphHash": "2b55b3f849e74427e92a819aeac3d224de2f392980b058d94340a0aefdac97e0",
+    "sourceFingerprint": "01deafd72c9aecc24d14d289b79e634961b410b2c456c7e0fa15fc5850b66d79",
+    "correctedProjectionFingerprint": "320fde5b4fd0f2ec37fee268b53a5c3d96f8e37e72729a9ccc89c8df86b92682",
+    "defectiveProjectionFingerprint": "c179f57c7e4132654f6bac002049003342ceb36ecb363f1690409e834d2a24d9",
+    "ruleSetFingerprint": "84f45f128b72462e9b2f837bf7aa973e0f85086b277848440e412923e8e264c5",
+    "note": "Graph, configuration and rule-set hashes match the Medium run; source/projection fingerprints differ because the corpus is larger."
+  },
+  "executionSettings": {
+    "partitionCount": 8,
+    "maxPartitionWorkers": 8,
+    "verificationRuleMode": "GlobalRuleReference",
+    "workersChangedMidRun": false,
+    "sharedImmutableExpectedWorkset": true,
+    "deferredSecondaryIndexes": true,
+    "setOrientedLedgerFinalization": true,
+    "canonicalLedgerCount": 1,
+    "externalVerificationIndependent": true
+  },
+  "timings": {
+    "proofShiftProcessingSeconds": 28143.783108,
+    "scenarioTotalSeconds": 30482.581750,
+    "completeExclusiveKind4VerificationSeconds": 23186.709128,
+    "checkpointSeconds": 548.615766,
+    "generationSeconds": 6.011476,
+    "recordsPerSecondProcessing": 53.297,
+    "processingSecondsPer100kRecords": 1876.252,
+    "verificationSecondsPer100kRecords": 1545.781,
+    "notAnSla": true
+  },
+  "scaling": {
+    "workers": 8,
+    "points": [
+      { "scale": "100k", "records": 100000, "processingSeconds": 1086.520, "processingPer100k": 1086.520, "verificationSeconds": 806.783, "verificationPer100k": 806.783, "peakRssBytes": 497209344 },
+      { "scale": "200k", "records": 200000, "processingSeconds": 2451.565, "processingPer100k": 1225.783, "verificationSeconds": 1910.802, "verificationPer100k": 955.401, "peakRssBytes": 636911616 },
+      { "scale": "Medium", "records": 411000, "processingSeconds": 5574.083, "processingPer100k": 1356.200, "verificationSeconds": 4423.960, "verificationPer100k": 1076.389, "peakRssBytes": 1119571968 },
+      { "scale": "Large", "records": 1500000, "processingSeconds": 28143.783, "processingPer100k": 1876.252, "verificationSeconds": 23186.709, "verificationPer100k": 1545.781, "peakRssBytes": 3494281216 }
+    ],
+    "largeVsMediumNormalizedProcessingPercent": 38.35,
+    "largeVsMediumNormalizedVerificationPercent": 43.61,
+    "interpretation": "Superlinear. Absolute processing remained practical (about 7.8 hours for 1.5M generated records on this host) and scratch grew approximately linearly, but per-record cost rose 38% from Medium to Large. This is not a linear curve and no SLA is claimed."
+  },
+  "processingAttribution": {
+    "rootInclusiveSeconds": 28143.783108,
+    "unscopedGapSeconds": 782.840,
+    "namedIntervalCoveragePercent": 97.2184,
+    "exclusiveStageRows": [
+      { "stage": "Expected-workset build/reuse", "seconds": 4020.737, "percent": 14.29 },
+      { "stage": "Journal processing (includes staged journal scope derivation)", "seconds": 3529.806, "percent": 12.54 },
+      { "stage": "Target lineage", "seconds": 2933.673, "percent": 10.42 },
+      { "stage": "Actual-target observation/ingest", "seconds": 2638.286, "percent": 9.37 },
+      { "stage": "Global rule evaluation", "seconds": 2538.724, "percent": 9.02 },
+      { "stage": "Ledger finalization", "seconds": 2528.501, "percent": 8.98 },
+      { "stage": "Projection", "seconds": 2248.042, "percent": 7.99 },
+      { "stage": "Verification orchestration remainder", "seconds": 1836.267, "percent": 6.52 },
+      { "stage": "Recovery", "seconds": 1400.584, "percent": 4.98 },
+      { "stage": "Ledger staging", "seconds": 1267.342, "percent": 4.50 },
+      { "stage": "Workspace/index", "seconds": 1141.881, "percent": 4.06 },
+      { "stage": "Source accounting", "seconds": 1125.282, "percent": 4.00 },
+      { "stage": "Explicit unscoped", "seconds": 782.840, "percent": 2.78 },
+      { "stage": "Checkpoint", "seconds": 548.586, "percent": 1.95 },
+      { "stage": "Other named", "seconds": 23.476, "percent": 0.08 },
+      { "stage": "Reporting", "seconds": 1.519, "percent": 0.01 },
+      { "stage": "Evidence", "seconds": 0.060, "percent": 0.0002 }
+    ],
+    "classifierNote": "Classification is by stage-name pattern. Ledger derivation is folded into journal/lineage categories at this classification and is not separately tabulated. Lane-overlapping exclusive seconds are not additive wall time."
+  },
+  "expectedWorksets": { "builds": 2, "compatibleReuses": 4, "crossKeyReuse": false },
+  "workers": {
+    "maxSimultaneousWorkers": 8,
+    "averageActiveActualTargetLanes": 5.182,
+    "averageActiveJournalLanes": 7.517,
+    "actualTargetWorkerExecutionSeconds": 11742.023,
+    "actualTargetWorkerIdleSeconds": 6386.455,
+    "journalWorkerExecutionSeconds": 13075.800,
+    "journalWorkerIdleSeconds": 840.892,
+    "actualTargetQueueWaitAggregateSeconds": 1345908.295,
+    "journalQueueWaitAggregateSeconds": 1810144.299,
+    "queueWaitInterpretation": "Aggregate per-operation wait; not wall-clock delay.",
+    "sqliteBusyExceptions": 0,
+    "sqliteBusyRetries": 0,
+    "workerFailures": 0
+  },
+  "resources": {
+    "peakWorkloadRssBytes": 3494281216,
+    "peakManagedHeapBytes": 3160449576,
+    "managedHeapAtCompletionBytes": 1757810488,
+    "gcCountDelta": { "generationZero": 167861, "generationOne": 18507, "generationTwo": 246 },
+    "processCpuTimeMilliseconds": 29438828.125,
+    "rssPeakContext": "Observed during in-memory corrected/defective fixture generation and external fixture load (about 3.45 GiB), before Verification; RSS fell to about 2.14 GiB once fixtures were collected and stayed flat through Verification while scratch grew to tens of GiB. This is a harness-fixture effect, not evidence of Verification working-set growth, but RSS did rise from Medium (1.12 GB) and is reported as such.",
+    "expectedCacheHighWaterBytes": 19787104256,
+    "verificationWorkspaceHighWaterBytes": 9893675008,
+    "largestPartitionDatabaseBytes": 1406144512,
+    "sumPartitionDatabasesBytes": 11220717568,
+    "ledgerStagingDatabaseHighWaterBytes": 10322001920,
+    "finalCanonicalLedgerBytes": 47213477888,
+    "totalWalHighWaterBytes": 5873138952,
+    "aggregateTemporaryWorkspacePeakBytes": 12365309856,
+    "sameSampleNamedScratchPeakBytes": 88540426240,
+    "scratchGrowthVsMedium": "Ledger 3.65x and expected cache 3.65x for 3.65x records: approximately linear.",
+    "peakInterpretation": "Category peaks are sampled independently and must not be added. Only sameSampleNamedScratchPeakBytes is a same-sample aggregate."
+  },
+  "scratchEstimateVersusObserved": {
+    "estimatedRequiredGiB": 107.84,
+    "safetyMarginPercent": 25,
+    "freeBeforeRunGiB": 2351.97,
+    "observedSameSampleNamedScratchGiB": 82.46,
+    "estimateExceededByObserved": false,
+    "freeAfterRunGiB": 2292.8,
+    "lowestFreeDuringRun": "Not captured by the sampler; spot samples during monitoring stayed above 2,343 GiB early in Verification. No out-of-disk condition occurred.",
+    "disposableScratchCleanup": "temporaryWorkspaceBytesAfterRun = 194,202 B; final benchmark artifacts retained."
+  },
+  "correctness": {
+    "defectiveBusinessDiscrepancies": 149,
+    "correctedBusinessDiscrepancies": 0,
+    "correctedUnaccountedSources": 0,
+    "correctedUnexplainedTargets": 0,
+    "correctedQualification": "QUALIFIED",
+    "defectiveQualification": "NOT QUALIFIED",
+    "falseReverseScenarioNotQualified": true,
+    "exact149Preserved": true,
+    "minimumCorrectnessFallbackUsed": false,
+    "persistedEvidenceRecords": 248,
+    "evidenceArtifactBytes": 635868,
+    "recoveryArtifactBytes": 97900,
+    "recoveryAssessmentAndRehearsal": "PASSED (asserted by the passing E2E scenario; corrected Recovery failures 0)"
+  },
+  "fingerprints": {
+    "correctedEvidenceFingerprint": "af6829027a770b35453433efc64eaf9bfae1aab02535365a4a4db87cf8d87dc9",
+    "correctedRecoveryAssessmentFingerprint": "318e79493d202ca7b533a44040485106a52813a560ef9473f02410d2817b6d0c",
+    "correctedDryRunFingerprint": "4c2c8cf2b3f5254105efb66fd06b4f517b516c792ea4637fbf5082c868c4c116",
+    "contract": "Configuration, graph, rule-set, source/checkpoint and projection identities are execution-independent. Evidence, Recovery assessment, Recovery Evidence and DryRun fingerprints are provenance/run-bound. No canonicalization changed."
+  },
+  "gate": {
+    "outcome": "Large full-pipeline gate PASSED at exactly 1,500,000 generated source records; PS-0.10D remains In Progress pending remaining validation, vendor, commit and remote CI gates.",
+    "largeStarted": true,
+    "secondLargeRunAuthorized": false,
+    "twoMillionPlusStarted": false,
+    "ps010eStarted": false,
+    "productionMigrationOrRollback": false
+  }
+}
