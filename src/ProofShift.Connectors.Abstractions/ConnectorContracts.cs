@@ -19,6 +19,16 @@ public static class ConnectorIssueCodes
     public const string MissingConfiguration = "PSCONN013";
     public const string PartitioningUnsupported = "PSCONN014";
     public const string ArtifactChangedDuringCapture = "PSCONN015";
+    public const string RemoteAuthenticationFailed = "PSCONN025";
+    public const string RemoteAuthorizationFailed = "PSCONN026";
+    public const string RemoteHostKeyMismatch = "PSCONN027";
+    public const string RemoteScopeEscape = "PSCONN028";
+    public const string RemoteVersionUnavailable = "PSCONN029";
+    public const string RemoteTransientFailure = "PSCONN030";
+    public const string UnsupportedColumnarSchema = "PSCONN031";
+    public const string CorruptColumnarFile = "PSCONN032";
+    public const string RemoteIntegrityMismatch = "PSCONN033";
+    public const string InsecureRemoteConfiguration = "PSCONN034";
 }
 
 public static class StableArtifactIdentity
