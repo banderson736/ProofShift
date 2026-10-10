@@ -24,7 +24,7 @@ jobs:
         run: |
           for project in tests/*/*.csproj; do
             case "$project" in
-              *ProofShift.Connectors.Oracle.Tests*|*ProofShift.Connectors.Db2.Tests*) continue ;;
+              *ProofShift.Connectors.Oracle.Tests*|*ProofShift.Connectors.Db2.Tests*|*ProofShift.Connectors.RemoteStorage.Tests*) continue ;;
             esac
             dotnet test --project "$project" --no-restore
           done
@@ -70,3 +70,21 @@ jobs:
           echo "LD_LIBRARY_PATH=$driver_library${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
       - name: Test Db2 Community integration
         run: dotnet test --project tests/ProofShift.Connectors.Db2.Tests/ProofShift.Connectors.Db2.Tests.csproj --no-restore
+
+  remote-storage-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Pre-pull pinned fixture images (test-only, not redistributed)
+        run: |
+          docker pull quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+          docker pull mcr.microsoft.com/azure-storage/azurite:3.35.0
+          docker pull atmoz/sftp:alpine
+      - name: Restore
+        run: dotnet restore tests/ProofShift.Connectors.RemoteStorage.Tests/ProofShift.Connectors.RemoteStorage.Tests.csproj
+      - name: Test S3-compatible, Azure Blob, SFTP, Parquet and cross-provider assurance
+        run: dotnet test --project tests/ProofShift.Connectors.RemoteStorage.Tests/ProofShift.Connectors.RemoteStorage.Tests.csproj --no-restore

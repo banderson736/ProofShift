@@ -20,6 +20,21 @@ These runtimes are used only for synthetic development, automated tests and inte
 - Runtime purpose: Db2 LUW source discovery, inspection, streamed reads, checkpoint capture/replay and read-only target observation. No Db2 shadow writing is provided. z/OS, IBM i and Db2 Connect-dependent targets are excluded.
 - The CI test pulls the official image at runtime and visibly accepts the vendor-required setting. The image is not bundled or uploaded as an artifact.
 
+## Remote storage and Parquet (PS-0.10E)
+
+All fixtures run in Docker through Testcontainers and are pulled at test time; none is bundled, published or uploaded. Images and SDKs are pinned.
+
+| Purpose | Fixture | Pin | SDK / library (license) |
+| --- | --- | --- | --- |
+| S3-compatible object storage | MinIO | `quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e` | `AWSSDK.S3` 4.0.104.2 (Apache-2.0) |
+| Azure Blob Storage | Azurite | `mcr.microsoft.com/azure-storage/azurite:3.35.0` | `Azure.Storage.Blobs` 12.30.1, `Azure.Identity` 1.21.0 (MIT) |
+| SFTP | `atmoz/sftp:alpine` (OpenSSH) | tag (digest recorded in CI logs) | `SSH.NET` 2026.0.0 (MIT) |
+| Parquet | none (files); fixtures written by Apache Arrow `pyarrow==18.1.0` (Apache-2.0) via `scripts/generate-parquet-fixtures.py` | committed fixtures under `tests/ProofShift.Connectors.RemoteStorage.Tests/fixtures/parquet` | `Parquet.Net` 6.1.0 (MIT) |
+
+MinIO is AGPL-licensed software used only as a disposable test dependency; it is not linked, bundled or redistributed. Real Amazon S3, real Azure and a production SFTP server were **not** exercised: S3 behavior is verified against MinIO and Azure behavior against Azurite, which differ from the real services in documented ways (for example Azurite reports a bad shared key as an authorization failure and does not enforce every service limit). The remote-storage CI job is required and has no skip-on-unavailable path beyond the repository-wide Docker-unavailable skip convention.
+
+Connector validation is against the repository's MinIO, Azurite 3.35.0 and OpenSSH-backed SFTP test environments. SFTP directory traversal streams entries into bounded chunks and externally merges sorted runs to preserve global UTF-8 ordering; the exercised integration forces multiple runs and checks entry/metadata-buffer limits. This is not a constant-memory or unlimited-directory-size claim, nor AWS-certified, Azure-certified or production-SFTP-certified validation. Azurite may classify invalid shared-key credentials as authorization rather than a distinct authentication failure; ProofShift retains redacted diagnostics and fail-closed handling for either classification.
+
 ## CI
 
 `ci.yml` runs core tests separately from required `oracle-integration` and `db2-integration` jobs. Oracle is built at test time through the official Oracle source repository and official Free download endpoint. Db2 uses the pinned Community image and explicit test-time license acceptance. Neither vendor suite is part of a skip-on-unavailable path.
@@ -40,8 +55,16 @@ Capabilities below reflect the CLI connector catalog. Target observation is perf
 | JSON (`json`) | Yes | Yes | Yes | Yes | No |
 | NDJSON (`ndjson`) | Yes | Yes | Yes | Yes | No |
 | XML (`xml`) | Yes | Yes | Yes | Yes | No |
+| S3 / S3-compatible (`s3`) | Yes | Yes | Yes | Yes | No |
+| Azure Blob (`azure-blob`) | Yes | Yes | Yes | Yes | No |
+| SFTP (`sftp`) | Yes | Yes | Yes | Yes | No |
+| Parquet (`parquet`, over filesystem / S3 / Azure Blob / SFTP) | Yes | Yes | Yes | Yes | No |
 
 Connector-owned JSON Schemas and strict CLI validation are covered for Oracle, Db2, fixed-width, JSON, NDJSON and XML. Authoring tests cover closed endpoint/selector properties, required settings and alternatives, selector kind, enum/range values, fixed-width boundaries and actionable configuration paths.
+
+### Parquet Row-Group Scale Probe
+
+The direct `Uneven_row_groups_are_read_at_scale_without_claiming_constant_memory` test read the Arrow-written `uneven-row-groups.parquet` fixture through the filesystem transport: 14,409,454 bytes, 320,000 rows, 21 row groups, largest group 120,000 rows (12 times each 10,000-row group), and 6.207 seconds elapsed in the recorded focused run. Process RSS was 65,421,312 bytes at test start, 139,280,384 bytes at test end, and 140,316,672 bytes process-lifetime peak. At the tested scale, no evidence of whole-input materialization was observed. RSS peak is a process high-water mark, not a continuous test-only sample; this observation is not a constant-memory or production-scale guarantee.
 
 ## Reader Measurements
 

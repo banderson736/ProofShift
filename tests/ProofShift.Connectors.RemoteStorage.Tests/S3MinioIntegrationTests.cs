@@ -57,10 +57,15 @@ public sealed class S3MinioIntegrationTests(MinioFixture minio) : IClassFixture<
     private static string Sha(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 
     private ConnectorContext Context(string bucket, string prefix = "", int pageSize = 1000, string accessKey = MinioFixture.AccessKey,
-        string secretKey = MinioFixture.SecretKey) => CheckpointHarness.Context("s3",
-        [new("bucket", bucket), new("prefix", prefix), new("serviceUrl", minio.ServiceUrl), new("allowInsecureHttp", "true"),
-            new("region", "us-east-1"), new("authentication", "static"), new("pageSize", pageSize.ToString(System.Globalization.CultureInfo.InvariantCulture))],
-        new Dictionary<string, string> { ["accessKeyId"] = accessKey, ["secretAccessKey"] = secretKey });
+        string secretKey = MinioFixture.SecretKey, string? sessionToken = null)
+    {
+        var secrets = new Dictionary<string, string> { ["accessKeyId"] = accessKey, ["secretAccessKey"] = secretKey };
+        if (sessionToken is not null) secrets["sessionToken"] = sessionToken;
+        return CheckpointHarness.Context("s3",
+            [new("bucket", bucket), new("prefix", prefix), new("serviceUrl", minio.ServiceUrl), new("allowInsecureHttp", "true"),
+                new("region", "us-east-1"), new("authentication", "static"), new("pageSize", pageSize.ToString(System.Globalization.CultureInfo.InvariantCulture))],
+            secrets);
+    }
 
     private static ArtifactSelector Selector(string pattern) => new("object-pattern", [new("pattern", pattern)], ["relativePath"]);
 
@@ -131,12 +136,18 @@ public sealed class S3MinioIntegrationTests(MinioFixture minio) : IClassFixture<
         Assert.NotEqual(SourceInspectionStatus.Valid, missing.Status);
 
         const string badSecret = "Synthetic-Wrong-Secret-Value-123";
+        const string badSessionToken = "Synthetic-Wrong-Session-Token-456";
         var bucket = await NewBucketAsync();
         await PutAsync(bucket, "x.txt", "x"u8.ToArray());
-        var bad = await connector.InspectAsync(Context(bucket, accessKey: "no-such-user", secretKey: badSecret), Selector("**/*"), TestContext.Current.CancellationToken);
+        var missingObject = await connector.InspectAsync(Context(bucket), Selector("not-present.txt"), TestContext.Current.CancellationToken);
+        Assert.Equal(SourceInspectionStatus.Invalid, missingObject.Status);
+        Assert.Equal(ConnectorIssueCodes.SourceObjectNotFound, Assert.Single(missingObject.Issues).Code);
+        var bad = await connector.InspectAsync(Context(bucket, accessKey: "no-such-user", secretKey: badSecret, sessionToken: badSessionToken),
+            Selector("**/*"), TestContext.Current.CancellationToken);
         var issue = Assert.Single(bad.Issues);
         Assert.Equal(ConnectorIssueCodes.RemoteAuthenticationFailed, issue.Code);
         Assert.DoesNotContain(badSecret, issue.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(badSessionToken, issue.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("no-such-user", issue.Message, StringComparison.Ordinal);
     }
 
@@ -221,6 +232,26 @@ public sealed class S3MinioIntegrationTests(MinioFixture minio) : IClassFixture<
         await foreach (var record in new S3SourceConnector().ReadAsync(context, Selector("*.bin"), new ReadOptions(), TestContext.Current.CancellationToken))
             records.Add(record);
         Assert.Equal(Sha(large), Assert.Single(records).Provenance.SourceHash);
+
+        var settings = new Dictionary<string, string>
+        {
+            ["bucket"] = bucket, ["prefix"] = "big", ["serviceUrl"] = minio.ServiceUrl, ["allowInsecureHttp"] = "true",
+            ["region"] = "us-east-1", ["authentication"] = "static", ["accessKeyId"] = "secret:PS_TEST_S3_KEY",
+            ["secretAccessKey"] = "secret:PS_TEST_S3_SECRET"
+        };
+        var replay = await CheckpointHarness.CaptureAndReplayAsync(new S3SourceConnector(), "s3", settings,
+            new Dictionary<string, string> { ["PS_TEST_S3_KEY"] = MinioFixture.AccessKey, ["PS_TEST_S3_SECRET"] = MinioFixture.SecretKey },
+            Selector("*.bin"), "File.Artifact", async () =>
+            {
+                using var admin = minio.Admin();
+                await admin.DeleteObjectAsync(bucket, "big/large.bin", TestContext.Current.CancellationToken);
+                await admin.DeleteBucketAsync(bucket, TestContext.Current.CancellationToken);
+            }, TestContext.Current.CancellationToken);
+        Assert.Equal(CheckpointStatus.Complete, replay.Capture.Status);
+        Assert.False(replay.Capture.Checkpoint!.CrossSystemAtomic);
+        var replayed = Assert.Single(replay.Records);
+        Assert.Equal(Sha(large), replayed.Provenance.SourceHash);
+        Assert.Equal(large, replay.Binaries["large.bin"]);
     }
 
     [Fact]

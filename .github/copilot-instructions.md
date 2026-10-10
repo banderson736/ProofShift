@@ -3,6 +3,10 @@ PS-0.10C Enterprise Connector & Data-Format Coverage is Accepted after GitHub Ac
 
 You are working in **ProofShift**, a migration assurance and evidence platform for high-risk system modernization.
 
+## Current Assignment
+
+PS-0.10E Test Discovery and Acceptance Reconciliation is explicitly assigned as of 2026-10-09 and remains In Progress and unaccepted. This current assignment supersedes historical statements below that PS-0.10E is unassigned or prohibited. Preserve Parquet semantics; do not add connectors/types, start PS-0.10F, perform production migration/rollback, or push before the local acceptance matrix is complete. The final RemoteStorage project passes 53/53 with zero failures/skips; bounded SFTP enumeration is covered by unit and OpenSSH integration tests. Oracle and Db2 integration tests are required existing gates, not feature expansion. See docs/PS0_10E_ACCEPTANCE_MATRIX.md.
+
 ## Mandatory context
 
 Before architectural or implementation work, read:

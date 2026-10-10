@@ -8,4 +8,7 @@
     <ProjectReference Include="../ProofShift.Connectors.Abstractions/ProofShift.Connectors.Abstractions.csproj" />
     <ProjectReference Include="../ProofShift.Connectors.RemoteObjects/ProofShift.Connectors.RemoteObjects.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="ProofShift.Connectors.RemoteStorage.Tests" />
+  </ItemGroup>
 </Project>

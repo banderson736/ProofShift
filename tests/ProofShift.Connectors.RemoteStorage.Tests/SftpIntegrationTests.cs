@@ -113,6 +113,58 @@ public sealed class SftpIntegrationTests(SftpFixture sftp) : IClassFixture<SftpF
     }
 
     [Fact]
+    public async Task Many_small_objects_use_bounded_spills_and_keep_global_order_across_chunk_sizes()
+    {
+        var run = await NewRootAsync();
+        var keys = Enumerable.Range(0, 48).Select(index => $"chunk-{index:D2}.dat")
+            .Concat(["a-file.txt", "a.dir.txt", "a/child.txt", "aa.txt", "z.txt", ".leading.txt",
+                "space name.txt", "#hash.txt", "percent%.txt", "plus+.txt", "ünï.txt"])
+            .ToArray();
+        var root = $"/home/{SftpFixture.User}/upload/{run}";
+        var commands = new List<string> { $"mkdir -p '{root}/a'" };
+        commands.AddRange(keys.Select(key => $"printf 'synthetic' > '{root}/{key}'"));
+        await sftp.ShellAsync(string.Join("; ", commands));
+
+        var scratchRoot = Path.Combine(Path.GetTempPath(), $"proofshift-sftp-integration-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(scratchRoot);
+        SftpEnumerationMetrics? metrics = null;
+        var options = new SftpEnumerationOptions(8, 512, 3, scratchRoot, value => metrics = value);
+        var context = Context(root: $"/upload/{run}");
+        var store = new SftpStoreFactory(options).Create(context);
+        RemoteObjectInfo[] listed;
+        await using (store)
+        {
+            var items = new List<RemoteObjectInfo>();
+            await foreach (var item in store.ListAsync("", TestContext.Current.CancellationToken)) items.Add(item);
+            listed = items.ToArray();
+        }
+
+        var expected = keys.OrderBy(key => key, Comparer<string>.Create(RemoteKeyRules.CompareUtf8)).ToArray();
+        Assert.Equal(expected, listed.Select(item => item.Key));
+        Assert.Equal(keys.Length, listed.Select(item => item.Key).Distinct(StringComparer.Ordinal).Count());
+        Assert.InRange(metrics!.PeakBufferedEntries, 1, 8);
+        Assert.InRange(metrics.PeakBufferedMetadataBytes, 1, 512);
+        Assert.True(metrics.InitialRunCount > 1);
+        Assert.True(metrics.GeneratedRunCount > metrics.InitialRunCount);
+        Assert.InRange(metrics.PeakOpenRuns, 1, 3);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(scratchRoot));
+
+        var baselineDiscovery = await new RemoteObjectSourceConnector("sftp", new SftpStoreFactory(options))
+            .DiscoverAsync(context, [], TestContext.Current.CancellationToken);
+        SftpEnumerationMetrics? alternateMetrics = null;
+        var alternateOptions = new SftpEnumerationOptions(13, 1024, 3, scratchRoot, value => alternateMetrics = value);
+        var discovery = new RemoteObjectSourceConnector("sftp", new SftpStoreFactory(alternateOptions));
+        var discovered = await discovery.DiscoverAsync(context, [], TestContext.Current.CancellationToken);
+        Assert.True(PhysicalDiscovery.Verify(discovered));
+        Assert.Equal(baselineDiscovery.Fingerprint, discovered.Fingerprint);
+        Assert.Equal(expected.Length, listed.Length);
+        Assert.NotNull(alternateMetrics);
+        Assert.InRange(alternateMetrics!.PeakBufferedEntries, 1, 13);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(scratchRoot));
+        Directory.Delete(scratchRoot);
+    }
+
+    [Fact]
     public async Task Wrong_host_key_and_wrong_password_fail_closed_with_distinct_redacted_diagnostics()
     {
         var connector = new SftpSourceConnector();
@@ -192,6 +244,15 @@ public sealed class SftpIntegrationTests(SftpFixture sftp) : IClassFixture<SftpF
                 new("authentication", "password"), new("password", "inline-password-value")], new Dictionary<string, string>())));
         Assert.Equal(ConnectorIssueCodes.InsecureRemoteConfiguration, inline.Code);
         Assert.DoesNotContain("inline-password-value", inline.Message, StringComparison.Ordinal);
+        const string privateKeyMarker = "SYNTHETIC-PRIVATE-KEY-MATERIAL";
+        const string passphraseMarker = "SYNTHETIC-PRIVATE-KEY-PASSPHRASE";
+        var privateKeyFailure = Assert.Throws<ConnectorConfigurationException>(() => factory.Create(CheckpointHarness.Context("sftp",
+            [new("host", "sftp.example.invalid"), new("username", "synthetic"), new("remoteRoot", "/root"),
+                new("hostKeyFingerprint", "SHA256:" + new string('A', 43)), new("authentication", "private-key")],
+            new Dictionary<string, string> { ["privateKey"] = privateKeyMarker, ["privateKeyPassphrase"] = passphraseMarker })));
+        Assert.Equal(ConnectorIssueCodes.MissingConfiguration, privateKeyFailure.Code);
+        Assert.DoesNotContain(privateKeyMarker, privateKeyFailure.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(passphraseMarker, privateKeyFailure.Message, StringComparison.Ordinal);
         Assert.Throws<ConnectorConfigurationException>(() => factory.Create(CheckpointHarness.Context("sftp",
             [new("host", "h"), new("username", "u"), new("remoteRoot", "/r/../etc"), new("hostKeyFingerprint", "SHA256:" + new string('A', 43)), new("authentication", "password")],
             new Dictionary<string, string> { ["password"] = "p" })));

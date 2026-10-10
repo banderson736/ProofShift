@@ -92,6 +92,7 @@ public sealed class CrossProviderAssuranceTests(MinioFixture minio, AzuriteFixtu
 
     private static string Canonical(RecordEnvelope record) => string.Join('|', record.Values.OrderBy(pair => pair.Key, StringComparer.Ordinal)
         .Select(pair => pair.Key + "=" + (pair.Value is BinaryReferenceValue binary ? $"bin:{binary.ContentLength}:{binary.Sha256}" : pair.Value.ToString())));
+    private static string SemanticHash(RecordEnvelope record) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Canonical(record)))).ToLowerInvariant();
 
     [Fact]
     public async Task Same_parquet_delivered_over_every_transport_yields_identical_records_hashes_and_identities()
@@ -101,6 +102,7 @@ public sealed class CrossProviderAssuranceTests(MinioFixture minio, AzuriteFixtu
         var selector = new ArtifactSelector("parquet", [new("path", "rich.parquet")], ["id"]);
         List<string>? baseline = null;
         List<string>? baselineIds = null;
+        List<string>? baselineSemanticHashes = null;
         foreach (var delivery in deliveries)
         {
             var records = new List<RecordEnvelope>();
@@ -110,10 +112,13 @@ public sealed class CrossProviderAssuranceTests(MinioFixture minio, AzuriteFixtu
             Assert.All(records, record => Assert.NotEqual("", record.Provenance.Metadata["scope"]));
             var canonical = records.Select(Canonical).ToList();
             var ids = records.Select(record => record.Artifact.Id.Value).ToList();
+            var semanticHashes = records.Select(SemanticHash).ToList();
             baseline ??= canonical;
             baselineIds ??= ids;
+            baselineSemanticHashes ??= semanticHashes;
             Assert.Equal(baseline, canonical);
             Assert.Equal(baselineIds, ids);
+            Assert.Equal(baselineSemanticHashes, semanticHashes);
             Assert.True(records[0].Provenance.Metadata["transport"] == (delivery.Name == "filesystem" ? "filesystem" : delivery.Name), delivery.Name);
         }
     }
@@ -189,6 +194,17 @@ public sealed class CrossProviderAssuranceTests(MinioFixture minio, AzuriteFixtu
             Assert.Equal(3, capture.Checkpoint.Endpoints.Count);
             Assert.All(capture.Checkpoint.Endpoints, endpoint => Assert.Equal(SourceConsistencyGuarantee.Observed, endpoint.SourceConsistency));
             Assert.Equal(1 + 1 + 7, capture.CapturedArtifacts);
+
+            using (var admin = minio.Admin())
+            {
+                await admin.DeleteObjectAsync(s3Text.Endpoint["bucket"], "d/note.txt", TestContext.Current.CancellationToken);
+                await admin.DeleteBucketAsync(s3Text.Endpoint["bucket"], TestContext.Current.CancellationToken);
+            }
+
+            var azureContainer = azurite.Admin().GetBlobContainerClient(azureParquet.Endpoint["container"]);
+            await azureContainer.DeleteIfExistsAsync(cancellationToken: TestContext.Current.CancellationToken);
+            var sftpRoot = sftpText.Endpoint["remoteRoot"];
+            await sftp.ShellAsync($"rm -f /home/{SftpFixture.User}{sftpRoot}/note.txt");
 
             await using var loaded = await store.OpenCompleteAsync(capture.Id.Value.ToString("N"), TestContext.Current.CancellationToken);
             var replay = new CheckpointSourceArtifactStreamProvider(loaded);

@@ -1,7 +1,15 @@
+using System.Diagnostics;
+using System.Reflection;
 using System.Security.Cryptography;
+using System.Text.Json;
+using Parquet;
+using Parquet.Schema;
 using ProofShift.Connectors.Abstractions;
+using ProofShift.Connectors.AzureBlob;
 using ProofShift.Connectors.Parquet;
 using ProofShift.Connectors.RemoteObjects;
+using ProofShift.Connectors.S3;
+using ProofShift.Connectors.Sftp;
 using ProofShift.Domain;
 
 namespace ProofShift.Connectors.RemoteStorage.Tests;
@@ -91,6 +99,92 @@ public sealed class ParquetConnectorTests : IDisposable
         var forged = new BinaryReferenceValue(binary.Reference.Replace("parquet-cell-v1:", "parquet-cell-v1:AA"), 4, binary.Sha256);
         await Assert.ThrowsAsync<ConnectorReadException>(async () => await Connector().OpenBinaryReadAsync(
             Context(), Selector("rich.parquet"), withBinary.Artifact, forged, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task UUID_values_round_trip_as_invariant_guid_strings()
+    {
+        var unannotated = await ReadAsync("uuid.parquet");
+        var binary = Assert.IsType<BinaryReferenceValue>(unannotated[0].Values["guid"]);
+        Assert.Equal(16L, binary.ContentLength);
+        await using (var stream = await Connector().OpenBinaryReadAsync(Context(), Selector("uuid.parquet"),
+            unannotated[0].Artifact, binary, TestContext.Current.CancellationToken))
+        {
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer, TestContext.Current.CancellationToken);
+            Assert.Equal(Convert.FromHexString("12345678123442348234123456789abc"), buffer.ToArray());
+        }
+
+        var idField = new DataField<long>("id");
+        var guidField = new DataField<Guid>("guid");
+        var schema = new ParquetSchema(idField, guidField);
+        var annotatedPath = Path.Combine(_root, "uuid-annotated.parquet");
+        await using (var output = File.Create(annotatedPath))
+        await using (var writer = await ParquetWriter.CreateAsync(schema, output))
+        {
+            using var rowGroup = writer.CreateRowGroup();
+            await rowGroup.WriteAsync<long>(idField, new ReadOnlyMemory<long>([1, 2]));
+            await rowGroup.WriteAsync<Guid>(guidField, new ReadOnlyMemory<Guid>(
+            [
+                Guid.Parse("12345678-1234-4234-8234-123456789abc"),
+                Guid.Parse("ffffffff-ffff-4fff-8fff-ffffffffffff")
+            ]));
+        }
+
+        var records = await ReadAsync("uuid-annotated.parquet");
+        Assert.Equal(2, records.Count);
+        Assert.Equal(new StringValue("12345678-1234-4234-8234-123456789abc"), records[0].Values["guid"]);
+        Assert.Equal(new StringValue("ffffffff-ffff-4fff-8fff-ffffffffffff"), records[1].Values["guid"]);
+    }
+
+    [Fact]
+    public async Task Fixed_length_binary_columns_remain_binary_without_utf8_coercion()
+    {
+        var records = await ReadAsync("fixedlen.parquet");
+        var first = Assert.IsType<BinaryReferenceValue>(records[0].Values["blob"]);
+        Assert.Equal(4L, first.ContentLength);
+        await using (var stream = await Connector().OpenBinaryReadAsync(Context(), Selector("fixedlen.parquet"), records[0].Artifact, first, TestContext.Current.CancellationToken))
+        {
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer, TestContext.Current.CancellationToken);
+            Assert.Equal([0x00, 0x01, 0xfe, 0xff], buffer.ToArray());
+        }
+
+        var second = Assert.IsType<BinaryReferenceValue>(records[1].Values["blob"]);
+        Assert.Equal(4L, second.ContentLength);
+        await using (var stream = await Connector().OpenBinaryReadAsync(Context(), Selector("fixedlen.parquet"), records[1].Artifact, second, TestContext.Current.CancellationToken))
+        {
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer, TestContext.Current.CancellationToken);
+            Assert.Equal([0xff, 0x00, 0x00, 0x00], buffer.ToArray());
+        }
+    }
+
+    [Fact]
+    public async Task Time_of_day_columns_fail_closed_with_a_schema_diagnostic()
+    {
+        var exception = await Assert.ThrowsAsync<ConnectorReadException>(async () => await ReadAsync("time.parquet"));
+        Assert.Equal(ConnectorIssueCodes.UnsupportedColumnarSchema, exception.Code);
+        var inspection = await Connector().InspectAsync(Context(), Selector("time.parquet"), TestContext.Current.CancellationToken);
+        Assert.Equal(SourceInspectionStatus.Invalid, inspection.Status);
+        Assert.Equal(ConnectorIssueCodes.UnsupportedColumnarSchema, inspection.Issues.Single().Code);
+    }
+
+    [Fact]
+    public void Legacy_INT96_columns_fail_closed_by_schema_classification()
+    {
+        var method = typeof(ParquetSourceConnector).GetMethod("Classify", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var field = new DateTimeDataField("legacy_ts", DateTimeFormat.Impala, true, DateTimeTimeUnit.Micros, true, false, null);
+        var exception = Assert.Throws<TargetInvocationException>(() => method.Invoke(null, [field]));
+        var inner = Assert.IsType<ConnectorReadException>(exception.InnerException);
+        Assert.Equal(ConnectorIssueCodes.UnsupportedColumnarSchema, inner.Code);
+    }
+
+    [Fact]
+    public async Task Oversized_uint64_values_fail_closed_without_wrapping()
+    {
+        var exception = await Assert.ThrowsAsync<ConnectorReadException>(async () => await ReadAsync("uint64-overflow.parquet"));
+        Assert.Equal(ConnectorIssueCodes.UnsupportedPhysicalType, exception.Code);
     }
 
     [Fact]
@@ -185,6 +279,58 @@ public sealed class ParquetConnectorTests : IDisposable
     }
 
     [Fact]
+    public async Task Uneven_row_groups_are_read_at_scale_without_claiming_constant_memory()
+    {
+        var path = Path.Combine(_root, "uneven-row-groups.parquet");
+        var rowGroupRows = new List<long>();
+        await using (var stream = File.OpenRead(path))
+        await using (var reader = await ParquetReader.CreateAsync(stream,
+            new ParquetOptions { UseDateOnlyTypeForDates = true, TreatByteArrayAsString = false },
+            leaveStreamOpen: false, TestContext.Current.CancellationToken))
+        {
+            for (var index = 0; index < reader.RowGroupCount; index++)
+            {
+                using var group = reader.OpenRowGroupReader(index);
+                rowGroupRows.Add(group.RowCount);
+            }
+        }
+
+        Assert.Equal(21, rowGroupRows.Count);
+        Assert.Equal(320_000, rowGroupRows.Sum());
+        Assert.Equal(120_000, rowGroupRows.Max());
+        Assert.Equal(12, rowGroupRows.Max() / rowGroupRows.Min());
+
+        using var process = Process.GetCurrentProcess();
+        process.Refresh();
+        var startingRss = process.WorkingSet64;
+        var stopwatch = Stopwatch.StartNew();
+        long count = 0;
+        await foreach (var record in Connector().ReadAsync(Context(), Selector("uneven-row-groups.parquet"),
+            new ReadOptions(), TestContext.Current.CancellationToken))
+        {
+            Assert.Equal(count, ((IntegerValue)record.Values["id"]).Value);
+            count++;
+        }
+
+        stopwatch.Stop();
+        process.Refresh();
+        Assert.Equal(320_000, count);
+        var fileBytes = new FileInfo(path).Length;
+        await File.WriteAllTextAsync(Path.Combine(Path.GetTempPath(), $"ProofShift-PS010E-parquet-row-group-{Environment.ProcessId}.json"),
+            JsonSerializer.Serialize(new
+            {
+                fileBytes,
+                rowCount = count,
+                rowGroupCount = rowGroupRows.Count,
+                largestRowGroup = rowGroupRows.Max(),
+                elapsedSeconds = stopwatch.Elapsed.TotalSeconds,
+                startingRssBytes = startingRss,
+                endingRssBytes = process.WorkingSet64,
+                processPeakRssBytes = process.PeakWorkingSet64
+            }), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task Discovery_reports_schema_row_groups_and_a_structural_fingerprint_that_detects_drift()
     {
         var connector = Connector();
@@ -241,9 +387,9 @@ public sealed class ParquetConnectorTests : IDisposable
     [Fact]
     public void Schema_and_capabilities_describe_every_installed_transport()
     {
-        var connector = Connector();
+        var connector = new ParquetSourceConnector([new LocalFileStoreFactory(), new S3StoreFactory(), new AzureBlobStoreFactory(), new SftpStoreFactory()]);
         Assert.Equal("parquet", connector.ConfigurationSchema.SelectorKind);
-        Assert.Contains("filesystem", connector.ConfigurationSchema.EndpointProperties["transport"], StringComparison.Ordinal);
+        Assert.Equal("enum:azure-blob,filesystem,s3,sftp", connector.ConfigurationSchema.EndpointProperties["transport"]);
         Assert.True(connector.Capabilities.StructuredRead);
         Assert.True(connector.Capabilities.RangeRead);
         Assert.False(connector.Capabilities.ShadowWrite);

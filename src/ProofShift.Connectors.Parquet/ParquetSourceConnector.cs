@@ -320,12 +320,19 @@ public sealed class ParquetSourceConnector : ICheckpointSourceConnector, ISource
             return Kind.Decimal;
         }
 
+        if (field is TimeDataField)
+            throw new ConnectorReadException(ConnectorIssueCodes.UnsupportedColumnarSchema,
+                $"Column '{field.Name}' uses a time-of-day Parquet logical type, which is not supported.");
+
         if (field is DateTimeDataField dateTime)
         {
             if (dateTime.DateTimeFormat == DateTimeFormat.Impala)
                 throw new ConnectorReadException(ConnectorIssueCodes.UnsupportedColumnarSchema,
                     $"Column '{field.Name}' is a legacy INT96 timestamp with ambiguous time zone semantics.");
             if (dateTime.DateTimeFormat == DateTimeFormat.Date) return Kind.Date;
+            if (dateTime.DateTimeFormat is not (DateTimeFormat.DateAndTime or DateTimeFormat.DateAndTimeMicros or DateTimeFormat.Timestamp))
+                throw new ConnectorReadException(ConnectorIssueCodes.UnsupportedColumnarSchema,
+                    $"Column '{field.Name}' uses a time-of-day or otherwise unsupported Parquet timestamp format.");
             if (dateTime.Unit == DateTimeTimeUnit.Nanos)
                 throw new ConnectorReadException(ConnectorIssueCodes.UnsupportedColumnarSchema,
                     $"Column '{field.Name}' uses nanosecond precision, which exceeds the supported exact model.");

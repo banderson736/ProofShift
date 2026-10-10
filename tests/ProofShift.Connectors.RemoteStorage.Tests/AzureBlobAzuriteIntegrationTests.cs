@@ -121,6 +121,13 @@ public sealed class AzureBlobAzuriteIntegrationTests(AzuriteFixture azurite) : I
         // Azure reports signature failures as AuthenticationFailed; Azurite reports AuthorizationFailure. Both fail closed.
         Assert.Contains(issue.Code, new[] { ConnectorIssueCodes.RemoteAuthenticationFailed, ConnectorIssueCodes.RemoteAuthorizationFailed });
         Assert.DoesNotContain(wrongKey, issue.Message, StringComparison.Ordinal);
+        const string badSas = "?sv=synthetic&sig=AZURE-SYNTHETIC-SAS-SECRET";
+        var badSasResult = await connector.InspectAsync(Context(container.Name, authentication: "sas", sas: badSas),
+            Selector("*"), TestContext.Current.CancellationToken);
+        var sasIssue = Assert.Single(badSasResult.Issues);
+        Assert.Contains(sasIssue.Code, new[] { ConnectorIssueCodes.RemoteAuthenticationFailed, ConnectorIssueCodes.RemoteAuthorizationFailed });
+        Assert.DoesNotContain(badSas, sasIssue.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("AZURE-SYNTHETIC-SAS-SECRET", sasIssue.Message, StringComparison.Ordinal);
         var missing = await connector.InspectAsync(Context("ps-missing-container"), Selector("*"), TestContext.Current.CancellationToken);
         Assert.NotEqual(SourceInspectionStatus.Valid, missing.Status);
     }

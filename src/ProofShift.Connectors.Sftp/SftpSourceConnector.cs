@@ -14,6 +14,13 @@ public sealed class SftpSourceConnector() : RemoteObjectSourceConnector("sftp", 
 
 public sealed class SftpStoreFactory : IRemoteObjectStoreFactory
 {
+    private readonly SftpEnumerationOptions _enumerationOptions;
+
+    public SftpStoreFactory() : this(SftpEnumerationOptions.Default) { }
+
+    internal SftpStoreFactory(SftpEnumerationOptions enumerationOptions) =>
+        _enumerationOptions = enumerationOptions ?? throw new ArgumentNullException(nameof(enumerationOptions));
+
     public string Transport => "sftp";
     public RemoteStoreCapabilities Capabilities { get; } = new(true, false, false);
 
@@ -73,15 +80,35 @@ public sealed class SftpStoreFactory : IRemoteObjectStoreFactory
         }
 
         var info = new ConnectionInfo(host, port, username, methods.ToArray()) { Timeout = TimeSpan.FromSeconds(30) };
-        return new SftpObjectStore(new SftpClient(info), root.TrimEnd('/'), fingerprint, host, port);
+        return new SftpObjectStore(new SftpClient(info), root.TrimEnd('/'), fingerprint, host, port, _enumerationOptions);
     }
 }
 
-public sealed class SftpObjectStore(SftpClient client, string root, string expectedFingerprint, string host, int port) : IRemoteObjectStore
+public sealed class SftpObjectStore : IRemoteObjectStore
 {
+    private readonly SftpClient client;
+    private readonly string root;
+    private readonly string expectedFingerprint;
+    private readonly string host;
+    private readonly int port;
+    private readonly SftpEnumerationOptions enumerationOptions;
     private readonly HashSet<string> _verifiedDirectories = new(StringComparer.Ordinal);
     private bool _hostKeyMismatch;
     private int _disposed;
+
+    public SftpObjectStore(SftpClient client, string root, string expectedFingerprint, string host, int port)
+        : this(client, root, expectedFingerprint, host, port, SftpEnumerationOptions.Default) { }
+
+    internal SftpObjectStore(SftpClient client, string root, string expectedFingerprint, string host, int port,
+        SftpEnumerationOptions enumerationOptions)
+    {
+        this.client = client ?? throw new ArgumentNullException(nameof(client));
+        this.root = root;
+        this.expectedFingerprint = expectedFingerprint;
+        this.host = host;
+        this.port = port;
+        this.enumerationOptions = enumerationOptions;
+    }
 
     public string Provider => "sftp";
     public string ScopeIdentity => $"sftp://{host}:{port.ToString(CultureInfo.InvariantCulture)}{root}/";
@@ -123,43 +150,62 @@ public sealed class SftpObjectStore(SftpClient client, string root, string expec
         await Task.Yield();
         EnsureConnected();
         var startDirectory = keyPrefix.Length == 0 ? "" : keyPrefix[..(keyPrefix.LastIndexOf('/') + 1)].TrimEnd('/');
-        var pending = new Stack<string>();
-        pending.Push(startDirectory);
-        var results = new List<RemoteObjectInfo>();
-        while (pending.Count > 0)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var directory = pending.Pop();
-            var path = directory.Length == 0 ? root : root + "/" + directory;
-            List<Renci.SshNet.Sftp.ISftpFile> entries;
-            try
-            {
-                entries = (await client.ListDirectoryAsync(path, cancellationToken).ToListAsync(cancellationToken).ConfigureAwait(false)).ToList();
-            }
-            catch (Exception exception) when (exception is SshException or IOException)
-            {
-                throw Map(exception);
-            }
+        await foreach (var item in SftpObjectEnumeration.SortAsync(EnumerateDirectoryAsync(startDirectory, keyPrefix, cancellationToken),
+            enumerationOptions, cancellationToken).ConfigureAwait(false))
+            yield return item;
+    }
 
-            foreach (var entry in entries.Where(entry => entry.Name is not ("." or "..")))
+    private async IAsyncEnumerable<RemoteObjectInfo> EnumerateDirectoryAsync(string directory, string keyPrefix,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var path = directory.Length == 0 ? root : root + "/" + directory;
+        IAsyncEnumerator<Renci.SshNet.Sftp.ISftpFile> entries;
+        try
+        {
+            entries = client.ListDirectoryAsync(path, cancellationToken).GetAsyncEnumerator(cancellationToken);
+        }
+        catch (Exception exception) when (exception is SshException or IOException)
+        {
+            throw Map(exception);
+        }
+
+        try
+        {
+            while (true)
             {
-                if (entry.IsSymbolicLink) continue; // never followed: a link cannot make an object appear outside the root
+                cancellationToken.ThrowIfCancellationRequested();
+                bool hasEntry;
+                try
+                {
+                    hasEntry = await entries.MoveNextAsync().ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is SshException or IOException)
+                {
+                    throw Map(exception);
+                }
+
+                if (!hasEntry) yield break;
+                var entry = entries.Current;
+                if (entry.Name is "." or ".." || entry.IsSymbolicLink) continue;
                 var relative = directory.Length == 0 ? entry.Name : directory + "/" + entry.Name;
                 if (entry.IsDirectory)
                 {
-                    pending.Push(relative);
+                    RemoteKeyRules.ValidateRelativeKey(relative);
+                    await foreach (var child in EnumerateDirectoryAsync(relative, keyPrefix, cancellationToken).ConfigureAwait(false))
+                        yield return child;
                     continue;
                 }
 
                 if (!entry.IsRegularFile || !relative.StartsWith(keyPrefix, StringComparison.Ordinal)) continue;
-                results.Add(new RemoteObjectInfo(RemoteKeyRules.ValidateRelativeKey(relative), entry.Length,
-                    new DateTimeOffset(DateTime.SpecifyKind(entry.LastWriteTimeUtc, DateTimeKind.Utc))));
+                yield return new RemoteObjectInfo(RemoteKeyRules.ValidateRelativeKey(relative), entry.Length,
+                    new DateTimeOffset(DateTime.SpecifyKind(entry.LastWriteTimeUtc, DateTimeKind.Utc)));
             }
         }
-
-        // SFTP directory order is server-defined; sort to the contractual UTF-8 byte order.
-        results.Sort((a, b) => RemoteKeyRules.CompareUtf8(a.Key, b.Key));
-        foreach (var result in results) yield return result;
+        finally
+        {
+            await entries.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     public Task<RemoteObjectInfo> StatAsync(string key, string? versionId, CancellationToken cancellationToken)
