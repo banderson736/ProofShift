@@ -1,6 +1,6 @@
 # ADR 0023: Sequential Partition-Local Verification Scratch
 
-- Status: Experimental PS-0.10D investigation; sequential local-rule path rejected; bounded scratch-write and authorized workers=8 Medium gates passed; milestone remains In Progress
+- Status: Accepted as part of PS-0.10D (merged as 091e7e3); deterministic partitioned scratch and bounded workers retained, sequential local-rule path rejected
 - Date: 2026-10-07
 
 ## Context
@@ -131,4 +131,4 @@ Exact semantics remained 149 defective / 0 corrected discrepancies, zero correct
 
 ## Large Full-Pipeline Result (2026-10-10)
 
-The single authorized p8/workers=8 `GlobalRuleReference` Large run (exactly 1,500,000 generated source records) passed after a path-bound scratch-capacity preflight (estimate 107.84 GiB; observed same-sample scratch 82.46 GiB). Processing was 28,143.783 s, complete exclusive Verification 23,186.709 s, 149 defective / 0 corrected, zero unaccounted/unexplained, `QUALIFIED`, zero SQLite busy/retries, final ledger 47,213,477,888 B. Normalized processing is +38.35% versus Medium (superlinear; no SLA). The architecture was unchanged; PS-0.10D remains In Progress pending remaining validation, vendor, commit and remote CI gates. See [Large record](../PS0_10D_LARGE_BENCHMARK.json).
+The single authorized p8/workers=8 `GlobalRuleReference` Large run (exactly 1,500,000 generated source records) passed after a path-bound scratch-capacity preflight (estimate 107.84 GiB; observed same-sample scratch 82.46 GiB). Processing was 28,143.783 s, complete exclusive Verification 23,186.709 s, 149 defective / 0 corrected, zero unaccounted/unexplained, `QUALIFIED`, zero SQLite busy/retries, final ledger 47,213,477,888 B. Normalized processing is +38.35% versus Medium (superlinear; no SLA). The architecture was unchanged; PS-0.10D was subsequently Accepted after CI run 38014590907 (candidate `6d52272`) and merge `091e7e3`. See [Large record](../PS0_10D_LARGE_BENCHMARK.json).

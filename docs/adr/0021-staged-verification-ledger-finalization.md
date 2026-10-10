@@ -1,6 +1,6 @@
 # ADR 0021: Staged Verification Ledger Finalization
 
-- Status: Experimental PS-0.10D candidate; retention depends on measured gates
+- Status: Accepted as part of PS-0.10D (merged as 091e7e3)
 - Date: 2026-10-07
 
 ## Context

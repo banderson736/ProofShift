@@ -1,10 +1,10 @@
 # PS-0.10D Initial Profile and Experiments
 
-**Status:** In progress; PS-0.10D is not accepted.
+**Status:** Accepted. Candidate commit `6d522728c3d02c7f1f1d83e3c6e1d624e27d8b3d` passed GitHub Actions run 38014590907 and was merged to `main` by PR #1 (merge commit `091e7e3`). This report is the retained measurement record.
 
 **As of:** 2026-10-09
 
-**Current status summary (supersedes any earlier "Medium failed" wording below, which is retained as history):** the authoritative Medium result is workers=8, ProofShift processing 5,574.083 s versus the accepted 13,234.382 s baseline (2.374x speedup), 1,043.108 s under the 6,617.191 s formal maximum and 725.917 s under the 6,300 s strong-result threshold: **PASS**. The earlier workers=4 Medium run (6,794.325 s) remains a valid historical gate failure. The single authorized Large run then completed the full physical pipeline at exactly 1,500,000 generated source records (see "Authorized Large Full-Pipeline Run" at the end). PS-0.10D remains **In Progress** and unaccepted until the remaining validation, vendor, commit and remote CI gates pass and the final report is reviewed.
+**Current status summary (supersedes any earlier "Medium failed" wording below, which is retained as history):** the authoritative Medium result is workers=8, ProofShift processing 5,574.083 s versus the accepted 13,234.382 s baseline (2.374x speedup), 1,043.108 s under the 6,617.191 s formal maximum and 725.917 s under the 6,300 s strong-result threshold: **PASS**. The earlier workers=4 Medium run (6,794.325 s) remains a valid historical gate failure. The single authorized Large run then completed the full physical pipeline at exactly 1,500,000 generated source records (see "Authorized Large Full-Pipeline Run" at the end). PS-0.10D was subsequently **Accepted** after the validation, vendor, commit and remote CI gates passed and the PR was merged (see "Final Acceptance Closure"). The in-progress and "not accepted" wording in the historical sections below describes the state at the time of each experiment.
 
 This report records the accepted-code baselines, profiling instrumentation, scaling probes, and optimization experiments completed so far. The original assignment document, `docs/COPILOT_PS0_10D_VERIFICATION_THROUGHPUT.md`, remains unchanged; the later explicit assignments governed these runs.
 
@@ -1266,7 +1266,7 @@ The curve is superlinear: normalized processing rises 38.35% and Verification 43
 
 ## Final Acceptance Closure
 
-**Status:** PS-0.10D is In Progress and unaccepted. Local and vendor gates below have passed; remote CI is NOT YET run and formal acceptance requires review of the completion report.
+**Status:** PS-0.10D is Accepted. Local and vendor gates below passed; remote CI (GitHub Actions run 38014590907, commit `6d52272`) completed `success` for `build-and-test`, `oracle-integration` and `db2-integration`, with per-test results confirmed green by the repository owner; the PR was merged as `091e7e3`. Per-test totals were not retrievable from unauthenticated logs and are not restated here.
 
 ### Retained Architecture
 
@@ -1296,6 +1296,7 @@ Execution-independent where inputs match: configuration, graph, checkpoint/sourc
 | Restore / Debug build | Succeeded, 0 warnings, 0 errors |
 | Full local suite | 219 total, 217 passed, 0 failed, 2 skipped (Windows symlink-capability tests: `FilesystemShadowRejectsSymlinkEscapeWhenHostAllowsSymlinkCreation`, `CsvConnectorRejectsTraversalAndSymlinkAncestorEscapes`); per project: Configuration 12, Domain 11, EndToEnd 104 (102 passed/2 skipped), Engine 4, Evidence 5, Graph 28, Recovery 8, Verification 47 |
 | Fast 149/0 regression | Passed within the full-suite EndToEnd run (`FastDefectiveAndCorrectedDatasetsRunThroughVerificationServiceWithExactBusinessCounts`: 149 defective, `NotQualified` defective/false-Reverse, CLI report/comparison) |
+| Remote CI (run 38014590907, commit `6d52272`) | `build-and-test`, `oracle-integration`, `db2-integration` all `success`; Oracle and Db2 jobs executed (not skipped) |
 | Oracle Free integration | 2 passed, 0 failed, 0 skipped (4m 34s) |
 | Db2 LUW Community integration | 2 passed, 0 failed, 0 skipped (6m 12s) |
 
@@ -1322,7 +1323,7 @@ The local suite is not a zero-skip result; the two symlink skips are host-specif
 | Resource measurements; scratch estimation | PASS |
 | Focused tests; full local tests | PASS (2 documented symlink skips) |
 | Oracle; Db2 | PASS |
-| Remote CI zero-required-skip | NOT YET |
+| Remote CI zero-required-skip | PASS (run 38014590907; confirmed green by the repository owner) |
 | No PS-0.10E | PASS (not started) |
 
-PS-0.10D acceptance gates are not yet complete: remote CI and review remain. Do not begin PS-0.10E.
+PS-0.10D is Accepted (merge commit `091e7e3`). PS-0.10E, a second Large, 2M+ and production execution/rollback each require a new explicit assignment.

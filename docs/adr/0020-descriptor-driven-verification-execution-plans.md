@@ -1,6 +1,6 @@
 # ADR 0020: Descriptor-Driven Verification Execution Plans
 
-- Status: Accepted for the PS-0.10D plan-driven workset slice; milestone remains in progress
+- Status: Accepted (PS-0.10D, merged as 091e7e3)
 - Date: 2026-10-07
 
 ## Context

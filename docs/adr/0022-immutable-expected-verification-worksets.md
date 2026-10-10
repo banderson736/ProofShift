@@ -1,6 +1,6 @@
 # ADR 0022: Immutable Expected Verification Worksets
 
-- Status: Retained measured PS-0.10D cumulative candidate; milestone remains In Progress
+- Status: Accepted as part of PS-0.10D (merged as 091e7e3)
 - Date: 2026-10-07
 
 ## Context
