@@ -4,7 +4,7 @@ PS-0.10C Enterprise Connector & Data-Format Coverage is Accepted after GitHub Ac
 
 ## Current Assignment
 
-PS-0.10E Test Discovery and Acceptance Reconciliation is explicitly assigned as of 2026-10-09 and remains In Progress and unaccepted. This current assignment supersedes historical statements below that PS-0.10E is unassigned or prohibited. Preserve Parquet semantics; do not add connectors/types, start PS-0.10F, perform production migration/rollback, or push before the local acceptance matrix is complete. The final RemoteStorage run passes 53/53 with zero failures/skips; SFTP bounded enumeration is covered by unit and OpenSSH integration tests. See [the acceptance matrix](docs/PS0_10E_ACCEPTANCE_MATRIX.md).
+PS-0.10E Test Discovery and Acceptance Reconciliation remains In Progress and unaccepted, pending formal review. Code candidate `a6e8b15528df5767dd5368f96c000d8dcfb0d1f1` is merged to `main` as `d5bcf8b528bd9d7370841fbfb92625a8954fa75d`; GitHub Actions run 38068572196 passed all four required jobs. The final RemoteStorage run passes 53/53 with zero failures/skips; SFTP bounded enumeration is covered by unit and OpenSSH integration tests. Preserve Parquet semantics; do not add connectors/types, start PS-0.10F, or perform production migration/rollback. See [the acceptance matrix](docs/PS0_10E_ACCEPTANCE_MATRIX.md).
 
 This repository is intended to be developed primarily with an IDE coding agent while preserving product/architecture continuity.
 

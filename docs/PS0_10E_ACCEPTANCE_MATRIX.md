@@ -78,9 +78,9 @@ Status: In Progress and unaccepted. This reconciliation records evidence availab
 | Pension Fast | PASS | Final run: 2 total, 2 passed, 0 failed, 0 skipped; exact defective 149/corrected 0, unaccounted 0, unexplained 0, Recovery `Passed`, corrected `QUALIFIED`. |
 | Documentation/ADR closure | PASS | README, ROADMAP, AGENTS, Copilot instructions, connector runtime/capability docs, safe configuration examples and Proposed ADR-0026 are updated. |
 | Dependency/license review | PASS | NuGet manifest declarations and PyArrow 18.1.0 metadata are verified; requested packages have permissive licenses and MinIO remains test-only. |
-| Worktree/diff review | NOT YET | Final status/stat/full diff/diff-check review is in progress; preserve all pre-existing PS-0.10E changes and exclude generated/runtime state. |
-| Candidate commit and SHA | NOT YET | Local gates are green; after diff review, commit only PS-0.10E candidate changes and record the SHA. |
-| Remote CI and push | NOT YET | After candidate review, push authorized branch `ps-0.10e-transport-storage`, run required jobs and do not merge. |
+| Worktree/diff review | PASS | Candidate review completed; `git diff --check` passed and the code candidate was merged to `main` as `d5bcf8b528bd9d7370841fbfb92625a8954fa75d`. |
+| Candidate commit and SHA | PASS | PS-0.10E code candidate: `a6e8b15528df5767dd5368f96c000d8dcfb0d1f1`. |
+| Remote CI and push | PASS | GitHub Actions [run 38068572196](https://github.com/banderson736/ProofShift/actions/runs/38068572196) for `a6e8b15528df5767dd5368f96c000d8dcfb0d1f1` passed `build-and-test`, `remote-storage-integration`, `oracle-integration`, and `db2-integration`; all jobs succeeded. Candidate is merged to `main`. |
 | Formal PS-0.10E acceptance | NOT YET | Reserved for formal review; the coding agent does not self-accept this milestone. |
 
 ## Dependency and License Review

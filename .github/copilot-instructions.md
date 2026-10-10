@@ -5,7 +5,7 @@ You are working in **ProofShift**, a migration assurance and evidence platform f
 
 ## Current Assignment
 
-PS-0.10E Test Discovery and Acceptance Reconciliation is explicitly assigned as of 2026-10-09 and remains In Progress and unaccepted. This current assignment supersedes historical statements below that PS-0.10E is unassigned or prohibited. Preserve Parquet semantics; do not add connectors/types, start PS-0.10F, perform production migration/rollback, or push before the local acceptance matrix is complete. The final RemoteStorage project passes 53/53 with zero failures/skips; bounded SFTP enumeration is covered by unit and OpenSSH integration tests. Oracle and Db2 integration tests are required existing gates, not feature expansion. See docs/PS0_10E_ACCEPTANCE_MATRIX.md.
+PS-0.10E Test Discovery and Acceptance Reconciliation remains In Progress and unaccepted pending formal review. Code candidate `a6e8b15528df5767dd5368f96c000d8dcfb0d1f1` is merged to `main` as `d5bcf8b528bd9d7370841fbfb92625a8954fa75d`; GitHub Actions run 38068572196 passed all four required jobs. Preserve Parquet semantics; do not add connectors/types, start PS-0.10F, or perform production migration/rollback. The final RemoteStorage project passes 53/53 with zero failures/skips; bounded SFTP enumeration is covered by unit and OpenSSH integration tests. Oracle and Db2 are required existing integration gates, not feature expansion. See docs/PS0_10E_ACCEPTANCE_MATRIX.md.
 
 ## Mandatory context
 
