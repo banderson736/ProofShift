@@ -26,7 +26,7 @@ All fixtures run in Docker through Testcontainers and are pulled at test time; n
 
 | Purpose | Fixture | Pin | SDK / library (license) |
 | --- | --- | --- | --- |
-| S3-compatible object storage | MinIO | `quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e` | `AWSSDK.S3` 4.0.104.2 (Apache-2.0) |
+| S3-compatible object storage | MinIO | `docker.io/bitnamilegacy/minio@sha256:e8bf17d3fc5465b1e792d4296245a53135e23dbd8d63086d7529b8bfdb8283af` (2024.11.7 package) | `AWSSDK.S3` 4.0.104.2 (Apache-2.0) |
 | Azure Blob Storage | Azurite | `mcr.microsoft.com/azure-storage/azurite:3.35.0` | `Azure.Storage.Blobs` 12.30.1, `Azure.Identity` 1.21.0 (MIT) |
 | SFTP | `atmoz/sftp:alpine` (OpenSSH) | tag (digest recorded in CI logs) | `SSH.NET` 2026.0.0 (MIT) |
 | Parquet | none (files); fixtures written by Apache Arrow `pyarrow==18.1.0` (Apache-2.0) via `scripts/generate-parquet-fixtures.py` | committed fixtures under `tests/ProofShift.Connectors.RemoteStorage.Tests/fixtures/parquet` | `Parquet.Net` 6.1.0 (MIT) |

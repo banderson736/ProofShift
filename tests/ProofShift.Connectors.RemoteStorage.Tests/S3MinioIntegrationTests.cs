@@ -15,7 +15,7 @@ namespace ProofShift.Connectors.RemoteStorage.Tests;
 public sealed class MinioFixture : IAsyncLifetime
 {
     // Test-only fixture image, pinned by digest; not redistributed (see docs/CONNECTOR_TEST_RUNTIMES.md).
-    public const string Image = "quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e";
+    public const string Image = "bitnamilegacy/minio@sha256:e8bf17d3fc5465b1e792d4296245a53135e23dbd8d63086d7529b8bfdb8283af";
     public const string AccessKey = "proofshift-test-user";
     public const string SecretKey = "Synthetic-Minio-Secret-2026!";
     private IContainer? _container;
@@ -27,7 +27,6 @@ public sealed class MinioFixture : IAsyncLifetime
             .WithPortBinding(9000, true)
             .WithEnvironment("MINIO_ROOT_USER", AccessKey)
             .WithEnvironment("MINIO_ROOT_PASSWORD", SecretKey)
-            .WithCommand("server", "/data")
             .WithWaitStrategy(Wait.ForUnixContainer().UntilHttpRequestIsSucceeded(request => request.ForPath("/minio/health/ready").ForPort(9000)))
             .Build();
         try

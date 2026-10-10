@@ -81,7 +81,7 @@ jobs:
           dotnet-version: 10.0.x
       - name: Pre-pull pinned fixture images (test-only, not redistributed)
         run: |
-          docker pull quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+          docker pull bitnamilegacy/minio@sha256:e8bf17d3fc5465b1e792d4296245a53135e23dbd8d63086d7529b8bfdb8283af
           docker pull mcr.microsoft.com/azure-storage/azurite:3.35.0
           docker pull atmoz/sftp:alpine
       - name: Restore
