@@ -78,8 +78,8 @@ public sealed class S3StoreFactory : IRemoteObjectStoreFactory
         AmazonS3Client client;
         if (authentication == "static")
         {
-            var accessKey = configuration.GetRequired("accessKeyId").UseValue(value => value);
-            var secretKey = configuration.GetRequired("secretAccessKey").UseValue(value => value);
+            var accessKey = RemoteSettings.RequiredSecret(context, "accessKeyId");
+            var secretKey = RemoteSettings.RequiredSecret(context, "secretAccessKey");
             AWSCredentials credentials = configuration.TryGet("sessionToken", out var token)
                 ? new SessionAWSCredentials(accessKey, secretKey, token.UseValue(value => value))
                 : new BasicAWSCredentials(accessKey, secretKey);

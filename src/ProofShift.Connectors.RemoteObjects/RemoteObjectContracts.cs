@@ -168,3 +168,27 @@ public sealed class RemoteRetryPolicy
         }
     }
 }
+
+public static class RemoteSettings
+{
+    public static string Optional(ConnectorContext context, string name, string fallback = "") =>
+        context.Configuration.TryGet(name, out var setting) ? setting.UseValue(value => value) : fallback;
+
+    /// <summary>Credential material must arrive through a secret reference, never as an inline or plain-environment value.</summary>
+    public static string RequiredSecret(ConnectorContext context, string name)
+    {
+        var setting = context.Configuration.GetRequired(name);
+        if (!setting.IsSecret)
+            throw new ConnectorConfigurationException(ConnectorIssueCodes.InsecureRemoteConfiguration,
+                $"Endpoint property '{name}' carries credential material and must be supplied as a secret reference.");
+        return setting.UseValue(value => value);
+    }
+
+    public static bool TryGetSecret(ConnectorContext context, string name, out string value)
+    {
+        value = string.Empty;
+        if (!context.Configuration.TryGet(name, out _)) return false;
+        value = RequiredSecret(context, name);
+        return true;
+    }
+}

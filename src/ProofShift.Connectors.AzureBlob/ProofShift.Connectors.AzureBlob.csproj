@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>ProofShift.Connectors.AzureBlob</RootNamespace>
+    <AssemblyName>ProofShift.Connectors.AzureBlob</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Azure.Storage.Blobs" />
+    <PackageReference Include="Azure.Identity" />
+    <ProjectReference Include="../ProofShift.Connectors.Abstractions/ProofShift.Connectors.Abstractions.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.RemoteObjects/ProofShift.Connectors.RemoteObjects.csproj" />
+  </ItemGroup>
+</Project>
