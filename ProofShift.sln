@@ -79,6 +79,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProofShift.Connectors.Remot
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProofShift.Connectors.AzureBlob", "src\ProofShift.Connectors.AzureBlob\ProofShift.Connectors.AzureBlob.csproj", "{A4C040D1-1EE0-41D3-B965-665574AAD405}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProofShift.Connectors.Sftp", "src\ProofShift.Connectors.Sftp\ProofShift.Connectors.Sftp.csproj", "{8ADA7ACC-0A8D-44F6-A15B-2DE01CB7BDEE}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -521,6 +523,18 @@ Global
 		{A4C040D1-1EE0-41D3-B965-665574AAD405}.Release|x64.Build.0 = Release|Any CPU
 		{A4C040D1-1EE0-41D3-B965-665574AAD405}.Release|x86.ActiveCfg = Release|Any CPU
 		{A4C040D1-1EE0-41D3-B965-665574AAD405}.Release|x86.Build.0 = Release|Any CPU
+		{8ADA7ACC-0A8D-44F6-A15B-2DE01CB7BDEE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8ADA7ACC-0A8D-44F6-A15B-2DE01CB7BDEE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8ADA7ACC-0A8D-44F6-A15B-2DE01CB7BDEE}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{8ADA7ACC-0A8D-44F6-A15B-2DE01CB7BDEE}.Debug|x64.Build.0 = Debug|Any CPU
+		{8ADA7ACC-0A8D-44F6-A15B-2DE01CB7BDEE}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{8ADA7ACC-0A8D-44F6-A15B-2DE01CB7BDEE}.Debug|x86.Build.0 = Debug|Any CPU
+		{8ADA7ACC-0A8D-44F6-A15B-2DE01CB7BDEE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8ADA7ACC-0A8D-44F6-A15B-2DE01CB7BDEE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8ADA7ACC-0A8D-44F6-A15B-2DE01CB7BDEE}.Release|x64.ActiveCfg = Release|Any CPU
+		{8ADA7ACC-0A8D-44F6-A15B-2DE01CB7BDEE}.Release|x64.Build.0 = Release|Any CPU
+		{8ADA7ACC-0A8D-44F6-A15B-2DE01CB7BDEE}.Release|x86.ActiveCfg = Release|Any CPU
+		{8ADA7ACC-0A8D-44F6-A15B-2DE01CB7BDEE}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -536,5 +550,6 @@ Global
 		{EE3E45F9-7E26-48EB-9FC2-53E187C2EB7E} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{144B6835-C87E-4D77-97FF-F55F45EF1D3D} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{A4C040D1-1EE0-41D3-B965-665574AAD405} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{8ADA7ACC-0A8D-44F6-A15B-2DE01CB7BDEE} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal
