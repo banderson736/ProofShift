@@ -227,7 +227,7 @@ public class RemoteObjectSourceConnector : ICheckpointSourceConnector, ISourceBi
             temporal: info.LastModified is { } recorded ? new TemporalMetadata(recordedAt: recorded) : null);
     }
 
-    private static async IAsyncEnumerable<RemoteObjectInfo> MatchAsync(IRemoteObjectStore store, string pattern,
+    public static async IAsyncEnumerable<RemoteObjectInfo> MatchAsync(IRemoteObjectStore store, string pattern,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var matcher = CreatePatternMatcher(pattern);
@@ -254,14 +254,7 @@ public class RemoteObjectSourceConnector : ICheckpointSourceConnector, ISourceBi
         try
         {
             await using var store = _factory.Create(context);
-            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            await foreach (var info in MatchAsync(store, pattern, cancellationToken).ConfigureAwait(false))
-            {
-                hash.AppendData(Encoding.UTF8.GetBytes(info.CanonicalState));
-                hash.AppendData("\n"u8);
-            }
-
-            return Convert.ToHexString(hash.GetHashAndReset());
+            return await InventoryAsync(store, pattern, cancellationToken).ConfigureAwait(false);
         }
         catch (RemoteStoreException exception)
         {
@@ -269,6 +262,18 @@ public class RemoteObjectSourceConnector : ICheckpointSourceConnector, ISourceBi
         }
     }
 
+    /// <summary>Digest of the key, length, modification time, entity tag and version of every matched object.</summary>
+    public static async Task<string> InventoryAsync(IRemoteObjectStore store, string pattern, CancellationToken cancellationToken)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        await foreach (var info in MatchAsync(store, pattern, cancellationToken).ConfigureAwait(false))
+        {
+            hash.AppendData(Encoding.UTF8.GetBytes(info.CanonicalState));
+            hash.AppendData("\n"u8);
+        }
+
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
     private static async IAsyncEnumerable<T> Translate<T>(IAsyncEnumerable<T> source,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -292,7 +297,7 @@ public class RemoteObjectSourceConnector : ICheckpointSourceConnector, ISourceBi
         }
     }
 
-    internal static bool TryGetPattern(ArtifactSelector selector, out string pattern)
+    public static bool TryGetPattern(ArtifactSelector selector, out string pattern)
     {
         if (!selector.Properties.TryGetValue("pattern", out pattern!) || string.IsNullOrWhiteSpace(pattern) ||
             pattern.StartsWith('/') || pattern.Contains('\\', StringComparison.Ordinal) || RemoteKeyRules.HasUnsafeSegment(pattern))
@@ -335,7 +340,7 @@ public class RemoteObjectSourceConnector : ICheckpointSourceConnector, ISourceBi
         }
     }
 
-    internal static Regex CreatePatternMatcher(string pattern)
+    public static Regex CreatePatternMatcher(string pattern)
     {
         var escaped = Regex.Escape(pattern)
             .Replace("\\*\\*/", "(?:.*/)?", StringComparison.Ordinal)
