@@ -108,7 +108,7 @@ public sealed class AuthoringCliTests
         var endpoint = schema.GetProperty("properties").GetProperty("endpoint");
         Assert.False(endpoint.GetProperty("additionalProperties").GetBoolean());
         var selector = schema.GetProperty("properties").GetProperty("selector");
-        var expectedSelectorKind = connectorId is "oracle" or "db2" ? "table" : connectorId;
+        var expectedSelectorKind = connectorId is "oracle" or "db2" ? "table" : connectorId is "s3" or "azure-blob" or "sftp" ? "object-pattern" : connectorId;
         Assert.Equal(expectedSelectorKind, selector.GetProperty("properties").GetProperty("kind").GetProperty("const").GetString());
         Assert.False(selector.GetProperty("additionalProperties").GetBoolean());
         Assert.False(selector.GetProperty("properties").GetProperty("properties").GetProperty("additionalProperties").GetBoolean());

@@ -142,7 +142,8 @@ internal static class MappingAuthoringCommands
         selector = new
         {
             kind = connector is "postgres" or "sqlserver" or "oracle" or "db2"
-                ? "table" : connector == "csv" ? "csv" : connector is "json" or "ndjson" or "xml" or "fixed-width" ? connector : "file-pattern",
+                ? "table" : connector == "csv" ? "csv" : connector is "json" or "ndjson" or "xml" or "fixed-width" or "parquet" ? connector
+                    : connector is "s3" or "azure-blob" or "sftp" ? "object-pattern" : "file-pattern",
             properties = connector is "postgres" or "sqlserver" or "oracle" or "db2"
                 ? (entity.SelectorProperties ?? new Dictionary<string, string>())
                     .Append(new KeyValuePair<string, string>("name", MappingScaffold.Name(entity)))
@@ -159,8 +160,34 @@ internal static class MappingAuthoringCommands
         id, name = id, role, storage = new Dictionary<string, object>
         {
             ["records"] = connector is "sqlserver" or "postgres" or "oracle" or "db2"
-                ? new { connector, connection = new { secret = id == "source" ? "PROOFSHIFT_SOURCE_CONNECTION" : "PROOFSHIFT_TARGET_CONNECTION" } }
-                : new { connector, root = new { env = id == "source" ? "PROOFSHIFT_SOURCE_ROOT" : "PROOFSHIFT_TARGET_ROOT" } }
+                ? (object)new { connector, connection = new { secret = id == "source" ? "PROOFSHIFT_SOURCE_CONNECTION" : "PROOFSHIFT_TARGET_CONNECTION" } }
+                : connector is "s3" or "azure-blob" or "sftp" or "parquet" ? (object)RemoteEndpoint(connector, id == "source" ? "SOURCE" : "TARGET")
+                : (object)new { connector, root = new { env = id == "source" ? "PROOFSHIFT_SOURCE_ROOT" : "PROOFSHIFT_TARGET_ROOT" } }
+        }
+    };
+
+    // Credential-free skeletons: every location comes from the environment and every credential is a secret reference to fill in.
+    private static Dictionary<string, object> RemoteEndpoint(string connector, string role) => connector switch
+    {
+        "s3" => new Dictionary<string, object>
+        {
+            ["connector"] = connector, ["bucket"] = new { env = $"PROOFSHIFT_{role}_BUCKET" }, ["region"] = new { env = $"PROOFSHIFT_{role}_REGION" },
+            ["authentication"] = "default-chain"
+        },
+        "azure-blob" => new Dictionary<string, object>
+        {
+            ["connector"] = connector, ["account"] = new { env = $"PROOFSHIFT_{role}_ACCOUNT" }, ["container"] = new { env = $"PROOFSHIFT_{role}_CONTAINER" },
+            ["authentication"] = "default-credential"
+        },
+        "sftp" => new Dictionary<string, object>
+        {
+            ["connector"] = connector, ["host"] = new { env = $"PROOFSHIFT_{role}_HOST" }, ["username"] = new { env = $"PROOFSHIFT_{role}_USER" },
+            ["remoteRoot"] = new { env = $"PROOFSHIFT_{role}_REMOTE_ROOT" }, ["hostKeyFingerprint"] = new { env = $"PROOFSHIFT_{role}_HOST_KEY_FINGERPRINT" },
+            ["authentication"] = "private-key", ["privateKey"] = new { secret = $"PROOFSHIFT_{role}_PRIVATE_KEY" }
+        },
+        _ => new Dictionary<string, object>
+        {
+            ["connector"] = connector, ["transport"] = "filesystem", ["root"] = new { env = $"PROOFSHIFT_{role}_ROOT" }
         }
     };
 

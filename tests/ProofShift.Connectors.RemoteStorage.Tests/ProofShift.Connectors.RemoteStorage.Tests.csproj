@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <NoWarn>$(NoWarn);CA1707;xUnit1051;CA1861</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Testcontainers" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/ProofShift.Connectors.S3/ProofShift.Connectors.S3.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Connectors.AzureBlob/ProofShift.Connectors.AzureBlob.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Connectors.Sftp/ProofShift.Connectors.Sftp.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Connectors.Parquet/ProofShift.Connectors.Parquet.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Connectors.RemoteObjects/ProofShift.Connectors.RemoteObjects.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Engine/ProofShift.Engine.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Snapshots/ProofShift.Snapshots.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="fixtures/**/*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

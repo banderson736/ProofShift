@@ -350,3 +350,167 @@ Every graph target/archive destination used by `proofshift project` must resolve
 Projection also rejects a PostgreSQL source and shadow destination that resolve to the same connection string, and rejects a filesystem shadow root that overlaps (equals, contains, or is contained by) any filesystem/CSV source root. This avoids accidental writes into a live source store even when roles were misconfigured.
 
 The runnable synthetic configuration and template SQL are in `scenarios/pension-modernization/ps05/`. Set `PS05_SQL_CONNECTION`, `PS05_POSTGRES_CONNECTION`, `PS05_SOURCE_FILES`, `PS05_SOURCE_CSV`, and `PS05_SHADOW_FILES` in the process environment. The source seed includes an unmapped status `X`, so the first projection intentionally fails closed after journaling/materializing preceding records. Correct the source code to a configured value and rerun; each run remains isolated. The configuration contains only secret/environment references, never resolved values.
+
+## Remote Storage Examples
+
+The following are endpoint fragments for source systems. Resource names and `.invalid` hosts are placeholders; replace them only in a reviewed deployment configuration. Credential fields remain secret references. These examples configure read-only observation and do not grant shadow-write, delete, migration, or rollback capability.
+
+### S3
+
+```yaml
+storage:
+  source-objects:
+    connector: s3
+    bucket: example-source-bucket
+    prefix: exports/
+    region: us-east-1
+    authentication: static
+    accessKeyId:
+      secret: PROOFSHIFT_AWS_ACCESS_KEY_ID
+    secretAccessKey:
+      secret: PROOFSHIFT_AWS_SECRET_ACCESS_KEY
+    sessionToken:
+      secret: PROOFSHIFT_AWS_SESSION_TOKEN
+```
+
+### S3-Compatible
+
+```yaml
+storage:
+  source-objects:
+    connector: s3
+    bucket: example-bucket
+    prefix: exports/
+    region: us-east-1
+    serviceUrl: https://objects.example.invalid
+    forcePathStyle: true
+    authentication: static
+    accessKeyId:
+      secret: PROOFSHIFT_OBJECT_ACCESS_KEY
+    secretAccessKey:
+      secret: PROOFSHIFT_OBJECT_SECRET_KEY
+```
+
+### Azure Blob
+
+```yaml
+storage:
+  source-objects:
+    connector: azure-blob
+    account: exampleaccount
+    serviceUrl: https://blob.example.invalid/exampleaccount
+    container: example-container
+    prefix: exports/
+    authentication: account-key
+    accountKey:
+      secret: PROOFSHIFT_AZURE_ACCOUNT_KEY
+```
+
+### SFTP
+
+```yaml
+storage:
+  source-files:
+    connector: sftp
+    host: sftp.example.invalid
+    port: 22
+    username: proofshift-reader
+    remoteRoot: /exports
+    hostKeyFingerprint: SHA256:REPLACE_WITH_OUT_OF_BAND_VERIFIED_HOST_PIN
+    authentication: private-key
+    privateKey:
+      secret: PROOFSHIFT_SFTP_PRIVATE_KEY
+    privateKeyPassphrase:
+      secret: PROOFSHIFT_SFTP_PRIVATE_KEY_PASSPHRASE
+```
+
+The SFTP fingerprint placeholder must be replaced with a value verified through a separate trusted channel; trust-on-first-use is not supported.
+
+### Parquet Filesystem
+
+```yaml
+storage:
+  source-parquet:
+    connector: parquet
+    transport: filesystem
+    root:
+      env: PROOFSHIFT_PARQUET_ROOT
+
+selector:
+  kind: parquet
+  properties:
+    path: exports/records.parquet
+  identity:
+    - id
+```
+
+### Parquet over S3
+
+```yaml
+storage:
+  source-parquet:
+    connector: parquet
+    transport: s3
+    bucket: example-source-bucket
+    prefix: exports/
+    region: us-east-1
+    authentication: static
+    accessKeyId:
+      secret: PROOFSHIFT_AWS_ACCESS_KEY_ID
+    secretAccessKey:
+      secret: PROOFSHIFT_AWS_SECRET_ACCESS_KEY
+
+selector:
+  kind: parquet
+  properties:
+    path: records.parquet
+  identity:
+    - id
+```
+
+### Parquet over Azure Blob
+
+```yaml
+storage:
+  source-parquet:
+    connector: parquet
+    transport: azure-blob
+    account: exampleaccount
+    serviceUrl: https://blob.example.invalid/exampleaccount
+    container: example-container
+    prefix: exports/
+    authentication: account-key
+    accountKey:
+      secret: PROOFSHIFT_AZURE_ACCOUNT_KEY
+
+selector:
+  kind: parquet
+  properties:
+    path: records.parquet
+  identity:
+    - id
+```
+
+### Parquet over SFTP
+
+```yaml
+storage:
+  source-parquet:
+    connector: parquet
+    transport: sftp
+    host: sftp.example.invalid
+    port: 22
+    username: proofshift-reader
+    remoteRoot: /exports
+    hostKeyFingerprint: SHA256:REPLACE_WITH_OUT_OF_BAND_VERIFIED_HOST_PIN
+    authentication: password
+    password:
+      secret: PROOFSHIFT_SFTP_PASSWORD
+
+selector:
+  kind: parquet
+  properties:
+    path: records.parquet
+  identity:
+    - id
+```

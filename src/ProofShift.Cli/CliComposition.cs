@@ -10,6 +10,11 @@ using ProofShift.Connectors.Files;
 using ProofShift.Connectors.Oracle;
 using ProofShift.Connectors.Db2;
 using ProofShift.Connectors.StructuredFiles;
+using ProofShift.Connectors.RemoteObjects;
+using ProofShift.Connectors.S3;
+using ProofShift.Connectors.AzureBlob;
+using ProofShift.Connectors.Sftp;
+using ProofShift.Connectors.Parquet;
 
 namespace ProofShift.Cli;
 
@@ -18,7 +23,9 @@ internal static class CliComposition
     internal static ConnectorCatalog Connectors() => new(
         [new SqlServerSourceConnector(), new PostgresSourceConnector(), new CsvSourceConnector(), new FilesystemSourceConnector(),
             new OracleSourceConnector(), new Db2SourceConnector(), new StructuredFileConnector("fixed-width"), new StructuredFileConnector("json"),
-            new StructuredFileConnector("ndjson"), new StructuredFileConnector("xml")],
+            new StructuredFileConnector("ndjson"), new StructuredFileConnector("xml"),
+            new S3SourceConnector(), new AzureBlobSourceConnector(), new SftpSourceConnector(),
+            new ParquetSourceConnector([new LocalFileStoreFactory(), new S3StoreFactory(), new AzureBlobStoreFactory(), new SftpStoreFactory()])],
         [new PostgresShadowTargetConnector(), new FilesystemShadowTargetConnector()]);
 
     internal static PackRegistry Packs() => new([new PensionPack()]);

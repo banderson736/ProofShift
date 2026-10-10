@@ -750,6 +750,9 @@ public sealed class ConfigurationLoader
             normalized.Contains("token", StringComparison.Ordinal) ||
             normalized.Contains("connectionstring", StringComparison.Ordinal) ||
             normalized.Contains("apikey", StringComparison.Ordinal) ||
+            normalized.Contains("accesskey", StringComparison.Ordinal) ||
+            normalized.Contains("accountkey", StringComparison.Ordinal) ||
+            normalized.Contains("privatekey", StringComparison.Ordinal) ||
             normalized.Contains("secret", StringComparison.Ordinal) && normalized is not "secret" and not "secretref" and not "secretreference";
         if (!looksSensitive || normalized.EndsWith("ref", StringComparison.Ordinal) ||
             normalized.EndsWith("reference", StringComparison.Ordinal) || normalized.EndsWith("env", StringComparison.Ordinal))

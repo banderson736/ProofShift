@@ -2,6 +2,10 @@ The authorized PS-0.10D workers=8 Medium rerun passed exact correctness at 5,574
 PS-0.10C Enterprise Connector & Data-Format Coverage is Accepted after GitHub Actions run 37416501703 passed all required jobs with 185 passed, 0 failed, 0 skipped. Preserve read-only observation separately from shadow writing/Recovery. The final code commits are 739b942007dbd87a71cf3d130b0056aeebca55aa and eefcae471877b6f0218f60b5ac10b34ec63ef219. Oracle uses the pinned official source build; vendor images are test-only and not redistributed. See docs/CONNECTOR_TEST_RUNTIMES.md and ADR-0019.
 # Agent Guide
 
+## Current Assignment
+
+PS-0.10E Test Discovery and Acceptance Reconciliation is explicitly assigned as of 2026-10-09 and remains In Progress and unaccepted. This current assignment supersedes historical statements below that PS-0.10E is unassigned or prohibited. Preserve Parquet semantics; do not add connectors/types, start PS-0.10F, perform production migration/rollback, or push before the local acceptance matrix is complete. The final RemoteStorage run passes 53/53 with zero failures/skips; SFTP bounded enumeration is covered by unit and OpenSSH integration tests. See [the acceptance matrix](docs/PS0_10E_ACCEPTANCE_MATRIX.md).
+
 This repository is intended to be developed primarily with an IDE coding agent while preserving product/architecture continuity.
 
 Agents must read `.github/copilot-instructions.md` and the linked documentation before meaningful changes.

@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>ProofShift.Connectors.S3</RootNamespace>
+    <AssemblyName>ProofShift.Connectors.S3</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.S3" />
+    <ProjectReference Include="../ProofShift.Connectors.Abstractions/ProofShift.Connectors.Abstractions.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.RemoteObjects/ProofShift.Connectors.RemoteObjects.csproj" />
+  </ItemGroup>
+</Project>
