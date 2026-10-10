@@ -131,7 +131,7 @@ public sealed class ParquetSourceConnector : ICheckpointSourceConnector, ISource
                         fields.Select((field, index) => new PhysicalField(field.Name, NativeType(field), field.IsNullable, index + 1)).ToArray(),
                         selector.IdentityFields.Count == 0 ? [] : [new PhysicalKey("configured-identity", true, selector.IdentityFields.ToArray())], [],
                         reader.RowGroups.Sum(group => group.RowCount), info.Length,
-                        new Dictionary<string, string> { ["path"] = info.Key, ["rowGroups"] = reader.RowGroupCount.ToString(CultureInfo.InvariantCulture) }));
+                        new Dictionary<string, string> { ["path"] = info.Key }));
                 }
             }
 

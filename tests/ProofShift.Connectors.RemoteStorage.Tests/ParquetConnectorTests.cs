@@ -195,7 +195,7 @@ public sealed class ParquetConnectorTests : IDisposable
         var objectA = Assert.Single(a.Objects);
         Assert.Equal(["id", "v"], objectA.Fields.Select(field => field.Name).ToArray());
         Assert.Equal(1, objectA.RecordCount);
-        Assert.Equal("1", objectA.SelectorProperties!["rowGroups"]);
+        Assert.Equal("drift-a.parquet", objectA.SelectorProperties!["path"]);
         Assert.NotEqual(Assert.Single(a.Objects).Fields[1].NativeType, Assert.Single(b.Objects).Fields[1].NativeType);
 
         var rich = await connector.DiscoverAsync(Context(), [new ArtifactSelector("parquet", [new("path", "rich.parquet")])], TestContext.Current.CancellationToken);

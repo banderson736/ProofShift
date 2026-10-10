@@ -25,5 +25,10 @@
     <ProjectReference Include="../ProofShift.Connectors.SqlServer/ProofShift.Connectors.SqlServer.csproj" />
     <ProjectReference Include="../ProofShift.Connectors.Files/ProofShift.Connectors.Files.csproj" />
     <ProjectReference Include="../ProofShift.Connectors.Csv/ProofShift.Connectors.Csv.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.RemoteObjects/ProofShift.Connectors.RemoteObjects.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.S3/ProofShift.Connectors.S3.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.AzureBlob/ProofShift.Connectors.AzureBlob.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.Sftp/ProofShift.Connectors.Sftp.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.Parquet/ProofShift.Connectors.Parquet.csproj" />
   </ItemGroup>
 </Project>
