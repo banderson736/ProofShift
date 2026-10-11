@@ -190,10 +190,14 @@ foreach ($command in @("demo list", "demo describe", "demo preflight", "demo run
     }
 }
 $scenarioList = @(Invoke-PackagedJson $cliPath @("demo", "list", "--json"))
+$humanScenarioList = Invoke-PackagedCli $cliPath @("demo", "list")
 $expectedScenarios = @("fhir", "hcm", "justice", "pension", "utility")
 Assert-Equal $scenarioList.Count $expectedScenarios.Count "Installed scenario count"
 foreach ($scenarioId in $expectedScenarios) {
     if ($scenarioList.id -notcontains $scenarioId) { throw "Packaged scenario '$scenarioId' is missing from the catalog." }
+    if ($humanScenarioList -notmatch "(?m)^\s*$([Regex]::Escape($scenarioId))\s") {
+        throw "Packaged human demo list is missing scenario '$scenarioId'."
+    }
 }
 
 $descriptions = @{}
@@ -363,15 +367,19 @@ foreach ($scenarioId in $scenariosToRun) {
         Assert-Equal $assurance.correctedShadow.recoveryOutcome "PASSED" "$scenarioId Recovery"
         Assert-Equal $assurance.correctedShadow.qualification "QUALIFIED" "$scenarioId corrected qualification"
         $humanReport = Get-Content -LiteralPath $assuranceTextPath -Raw
+        if ([string]::IsNullOrWhiteSpace($assurance.claimBoundary)) {
+            throw "Scenario '$scenarioId' machine-readable assurance report omitted its claim boundary."
+        }
         if ($humanReport -notmatch "EXTERNAL TARGET OBSERVATIONS \(READ ONLY\)" -or
             $humanReport -notmatch "Source accounting:" -or $humanReport -notmatch "Target lineage:" -or
             $humanReport -notmatch "Qualification: QUALIFIED" -or
-            $humanReport -notmatch [Regex]::Escape($descriptions[$scenarioId].claimBoundary)) {
+            $humanReport -notmatch [Regex]::Escape($assurance.claimBoundary)) {
             throw "Scenario '$scenarioId' human-readable report omitted assurance totals or its claim boundary."
         }
         $scenarioOutcome = [ordered]@{
             seededDefects = $assurance.seededDefectCount
             claimBoundary = $descriptions[$scenarioId].claimBoundary
+            reportClaimBoundary = $assurance.claimBoundary
             defectiveFindings = $assurance.defectiveExternalObservation.verificationFailureCount
             correctedFindings = $assurance.correctedShadow.verificationFailureCount
             sourceArtifacts = $assurance.checkpointArtifactCount
@@ -508,6 +516,7 @@ $summaryOutput = [ordered]@{
     packageOnlyValidation = [bool] $PackageOnly
     rootHelpExitCode = $rootHelpExitCode
     rootHelpUsageValidated = $true
+    humanScenarioListValidated = $true
     shippedSampleConfigurationsValidated = $samples.Count
     pensionResetRepeatability = $pensionRepeatability
     scenarios = @($scenarioResults)
