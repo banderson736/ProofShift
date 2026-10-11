@@ -44,20 +44,22 @@ jobs:
           if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
             throw "Docker CLI is not installed on the Windows runner."
           }
-          $services = @(Get-Service -Name docker, com.docker.service -ErrorAction SilentlyContinue)
-          if ($services.Count -eq 0) {
-            throw "Docker CLI is installed, but no Windows Docker service is available on this runner."
-          }
-          foreach ($service in $services) {
-            if ($service.Status -ne "Running") { Start-Service -Name $service.Name }
-          }
-          $dockerInfo = @()
-          $dockerExitCode = 1
-          for ($attempt = 0; $attempt -lt 60; $attempt++) {
-            $dockerInfo = @(docker info --format '{{.ServerVersion}} {{.OSType}}' 2>&1)
-            $dockerExitCode = $LASTEXITCODE
-            if ($dockerExitCode -eq 0) { break }
-            Start-Sleep -Seconds 2
+          $dockerInfo = @(docker info --format '{{.ServerVersion}} {{.OSType}}' 2>&1)
+          $dockerExitCode = $LASTEXITCODE
+          if ($dockerExitCode -ne 0) {
+            $services = @(Get-Service -Name docker, com.docker.service -ErrorAction SilentlyContinue)
+            if ($services.Count -eq 0) {
+              throw "Docker CLI is installed but no reachable daemon or startable Docker service was found: $($dockerInfo -join ' ')"
+            }
+            foreach ($service in $services) {
+              if ($service.Status -ne "Running") { Start-Service -Name $service.Name }
+            }
+            for ($attempt = 0; $attempt -lt 60; $attempt++) {
+              $dockerInfo = @(docker info --format '{{.ServerVersion}} {{.OSType}}' 2>&1)
+              $dockerExitCode = $LASTEXITCODE
+              if ($dockerExitCode -eq 0) { break }
+              Start-Sleep -Seconds 2
+            }
           }
           if ($dockerExitCode -ne 0) { throw "Windows Docker service did not become usable: $($dockerInfo -join ' ')" }
           if ($dockerInfo[-1] -notmatch '\blinux\b') {
