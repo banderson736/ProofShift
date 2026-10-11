@@ -2,6 +2,10 @@
 
 Run one scenario at a time from the extracted evaluation package root. The demos use Docker-backed synthetic fixtures; cold image startup varies and the runtime estimates are diagnostic, not SLAs.
 
+## Acceptance Environments
+
+The clean Windows CI job validates the Windows package, its CLI/discovery/sample configuration, and package contents without Docker or physical demos. The clean Ubuntu CI job builds the Linux package and runs all five Docker-backed demos, including Pension reset/repeat. These are complementary claims: Ubuntu demo execution does not prove Windows Docker execution, and Windows package validation does not prove the Docker-backed demo stack on Windows.
+
 ## Presenter Flow
 
 1. Show `demo list`, then `demo describe pension`. State the configured synthetic claim boundary before starting the run.

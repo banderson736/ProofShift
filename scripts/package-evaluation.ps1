@@ -178,6 +178,22 @@ function Convert-ManifestsToBinaryRunner {
 }
 
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$architecture = [string] [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+if ([string]::IsNullOrWhiteSpace($architecture)) {
+    $architecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+}
+if ($architecture -notin @("X64", "AMD64", "x86_64")) {
+    throw "Evaluation packages are currently built for x64 hosts only; found '$architecture'."
+}
+$targetPlatform = if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
+    "win-x64"
+}
+elseif ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Linux)) {
+    "linux-x64"
+}
+else {
+    throw "Evaluation packages are supported only on Windows and Linux hosts."
+}
 $outputPath = [IO.Path]::GetFullPath($OutputFile)
 if (Test-Path -LiteralPath $outputPath) { throw "Refusing to overwrite existing package output '$outputPath'." }
 $outputParent = Split-Path -Parent $outputPath
@@ -208,7 +224,8 @@ try {
         $fixtureOutput = Join-Path $packageRoot "fixtures"
         New-Item -ItemType Directory -Path $fixtureOutput -Force | Out-Null
         Get-ChildItem -LiteralPath $testOutput -Recurse -File | Where-Object {
-            $_.Extension -notin @(".pdb", ".xml", ".exe") -and $_.Name -notlike "*.runtimeconfig.dev.json"
+            $_.Extension -notin @(".pdb", ".xml", ".exe") -and $_.Name -ne "ProofShift.EndToEnd.Tests" -and
+                $_.Name -notlike "*.runtimeconfig.dev.json"
         } | ForEach-Object {
             $relative = Get-RelativePath $testOutput $_.FullName
             $destination = Join-Path $fixtureOutput $relative
@@ -273,8 +290,9 @@ try {
     $worktreeStatus = @(& git -C $repositoryRoot status --porcelain)
     if ($LASTEXITCODE -ne 0) { throw "Could not identify the source worktree state." }
     $packageManifest = [ordered]@{
-        format = "proofshift-evaluation-package-v1"
+        format = "proofshift-evaluation-package-v2"
         productVersion = "PS-0.10G"
+        targetPlatform = $targetPlatform
         sourceRevision = $revision
         sourceWorktreeClean = ($worktreeStatus.Count -eq 0)
         contentSha256 = $contentHash

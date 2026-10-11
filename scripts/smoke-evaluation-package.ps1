@@ -9,7 +9,13 @@ param(
     [string] $ResultFile,
 
     [Parameter(Mandatory = $true)]
-    [string] $ExpectedRevision
+    [string] $ExpectedRevision,
+
+    [Parameter(Mandatory = $true)]
+    [ValidateSet("win-x64", "linux-x64")]
+    [string] $ExpectedPlatform,
+
+    [switch] $PackageOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,6 +58,23 @@ $archiveFullPath = [IO.Path]::GetFullPath($ArchivePath)
 $extractionFullPath = [IO.Path]::GetFullPath($ExtractionRoot)
 $resultFullPath = [IO.Path]::GetFullPath($ResultFile)
 $checkoutPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..")).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+$architecture = [string] [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+if ([string]::IsNullOrWhiteSpace($architecture)) {
+    $architecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+}
+if ($architecture -notin @("X64", "AMD64", "x86_64")) {
+    throw "Package smoke requires an x64 runner; found '$architecture'."
+}
+$actualPlatform = if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
+    "win-x64"
+}
+elseif ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Linux)) {
+    "linux-x64"
+}
+else {
+    throw "Package smoke supports Windows and Linux runners only."
+}
+Assert-Equal $actualPlatform $ExpectedPlatform "Runner platform"
 
 if (-not (Test-Path -LiteralPath $archiveFullPath -PathType Leaf)) { throw "Evaluation archive not found: $archiveFullPath" }
 if ($extractionFullPath.StartsWith($checkoutPath, [StringComparison]::OrdinalIgnoreCase)) {
@@ -89,9 +112,17 @@ foreach ($requiredPath in @(
 $manifestPath = Join-Path $packageRoot "package-manifest.json"
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw "Package manifest is missing." }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+Assert-Equal $manifest.format "proofshift-evaluation-package-v2" "Package manifest format"
+Assert-Equal $manifest.targetPlatform $ExpectedPlatform "Package target platform"
 Assert-Equal $manifest.sourceRevision $ExpectedRevision "Package source revision"
 if (-not $manifest.sourceWorktreeClean) { throw "Package was not built from a clean source worktree." }
 if (-not $manifest.contentSha256) { throw "Package content digest is missing." }
+$thirdPartyNotices = Join-Path $packageRoot "THIRD-PARTY-NOTICES.md"
+$thirdPartyLicenseFiles = @(Get-ChildItem -LiteralPath (Join-Path $packageRoot "THIRD-PARTY-LICENSES") -Recurse -File)
+if ($thirdPartyLicenseFiles.Count -eq 0) { throw "No third-party license texts were packaged." }
+if ([IO.File]::ReadAllText($thirdPartyNotices) -match "UNSPECIFIED: manual review required") {
+    throw "Third-party notices contain unresolved license metadata."
+}
 $script:PackageRoot = $packageRoot
 
 foreach ($name in @("PROOFSHIFT_DEMO_REPOSITORY_ROOT", "PROOFSHIFT_DEMO_CLI_PATH", "PS09_INTEGRATED_RUN_DIRECTORY")) {
@@ -139,9 +170,24 @@ if ($forbiddenFiles.Count -gt 0) {
 
 $version = Invoke-PackagedCli $cliPath @("--version")
 if ($version -notmatch "ProofShift PS-0\.10G") { throw "Packaged version output was unexpected: $version" }
-$help = Invoke-PackagedCli $cliPath @("demo", "help")
+Push-Location $script:PackageRoot
+try {
+    $rootHelpLines = @(& dotnet $cliPath "--help" 2>&1)
+    $rootHelpExitCode = $LASTEXITCODE
+}
+finally {
+    Pop-Location
+}
+$rootHelp = $rootHelpLines -join [Environment]::NewLine
+if ($rootHelpExitCode -ne 2 -or $rootHelp -notmatch "Usage: proofshift") {
+    throw "Packaged root help must print usage and preserve exit code 2; found '$rootHelpExitCode'."
+}
+$help = Invoke-PackagedCli $cliPath @("demo", "--help")
+$legacyHelp = Invoke-PackagedCli $cliPath @("demo", "help")
 foreach ($command in @("demo list", "demo describe", "demo preflight", "demo run", "demo reset")) {
-    if ($help -notmatch [Regex]::Escape($command)) { throw "Packaged demo help is missing '$command'." }
+    if ($help -notmatch [Regex]::Escape($command) -or $legacyHelp -notmatch [Regex]::Escape($command)) {
+        throw "Packaged demo help is missing '$command'."
+    }
 }
 $scenarioList = @(Invoke-PackagedJson $cliPath @("demo", "list", "--json"))
 $expectedScenarios = @("fhir", "hcm", "justice", "pension", "utility")
@@ -151,10 +197,16 @@ foreach ($scenarioId in $expectedScenarios) {
 }
 
 $descriptions = @{}
+$humanDescriptions = @{}
 foreach ($scenarioId in $expectedScenarios) {
     $description = Invoke-PackagedJson $cliPath @("demo", "describe", $scenarioId, "--json")
     if ([string]::IsNullOrWhiteSpace($description.claimBoundary)) { throw "Scenario '$scenarioId' has no claim boundary." }
+    $humanDescription = Invoke-PackagedCli $cliPath @("demo", "describe", $scenarioId)
+    if (-not $humanDescription.Contains($description.claimBoundary)) {
+        throw "Scenario '$scenarioId' human description omitted its claim boundary."
+    }
     $descriptions[$scenarioId] = $description
+    $humanDescriptions[$scenarioId] = $humanDescription
 }
 Assert-Equal $descriptions.pension.acceptedOutcome.expectedFindings 149 "Pension accepted findings"
 Assert-Equal $descriptions.utility.acceptedOutcome.expectedFindings 26 "Utility accepted findings"
@@ -176,7 +228,8 @@ foreach ($sample in $samples) {
 }
 
 $scenarioResults = [System.Collections.Generic.List[object]]::new()
-foreach ($scenarioId in $expectedScenarios) {
+$scenariosToRun = if ($PackageOnly) { @() } else { $expectedScenarios }
+foreach ($scenarioId in $scenariosToRun) {
     $preflight = Invoke-PackagedJson $cliPath @("demo", "preflight", $scenarioId, "--json")
     if (-not $preflight.ready) { throw "Packaged scenario '$scenarioId' preflight was blocked." }
 
@@ -209,6 +262,7 @@ foreach ($scenarioId in $expectedScenarios) {
     }
 
     $scenarioOutcome = $null
+    $humanReportPaths = @()
     if ($scenarioId -eq "pension") {
         $summaryPath = Join-Path $workspace "integrated-assurance/demo-summary.json"
         if (-not (Test-Path -LiteralPath $summaryPath -PathType Leaf)) { throw "Pension machine-readable assurance summary is missing." }
@@ -238,6 +292,36 @@ foreach ($scenarioId in $expectedScenarios) {
         if ($null -eq $defectiveReport -or $null -eq $correctedReport -or $null -eq $falseReverseReport) {
             throw "Pension defective, corrected, or false-Reverse JSON report is missing."
         }
+        $pensionReportDirectory = Join-Path $workspace "integrated-assurance/.proofshift/reports"
+        $humanReportPaths = @(
+            (Join-Path $pensionReportDirectory "$($summary.defectiveDryRunId).txt"),
+            (Join-Path $pensionReportDirectory "$($summary.correctedDryRunId).txt"),
+            (Join-Path $pensionReportDirectory "$($summary.falseReverseDryRunId).txt")
+        )
+        foreach ($humanReportPath in $humanReportPaths) {
+            if (-not (Test-Path -LiteralPath $humanReportPath -PathType Leaf)) {
+                throw "Pension human-readable report is missing: $humanReportPath"
+            }
+        }
+        $defectiveHumanReport = [IO.File]::ReadAllText($humanReportPaths[0])
+        $correctedHumanReport = [IO.File]::ReadAllText($humanReportPaths[1])
+        $falseReverseHumanReport = [IO.File]::ReadAllText($humanReportPaths[2])
+        if ($defectiveHumanReport -notmatch "Business Discrepancies: 149" -or
+            $defectiveHumanReport -notmatch "Qualification: NOT QUALIFIED") {
+            throw "Pension defective human report omitted the exact findings or qualification."
+        }
+        if ($correctedHumanReport -notmatch "Business Discrepancies: 0" -or
+            $correctedHumanReport -notmatch "Unaccounted Sources: 0" -or
+            $correctedHumanReport -notmatch "Unexplained Targets: 0" -or
+            $correctedHumanReport -notmatch "Recovery: PASSED" -or
+            $correctedHumanReport -notmatch "Qualification: QUALIFIED") {
+            throw "Pension corrected human report omitted accounting, lineage, Recovery, or qualification results."
+        }
+        if ($falseReverseHumanReport -notmatch "Verification: PASSED" -or
+            $falseReverseHumanReport -notmatch "Business Discrepancies: 2" -or
+            $falseReverseHumanReport -notmatch "Qualification: NOT QUALIFIED") {
+            throw "Pension false-Reverse human report omitted its accepted Verification/Recovery distinction."
+        }
         Assert-Equal $correctedReport.rehearsalOutcome "Passed" "Pension Recovery rehearsal"
         Assert-Equal $correctedReport.failedRecoveryEdges 0 "Pension corrected Recovery edges"
         Assert-Equal $falseReverseReport.falseReversibleTransformations 2 "Pension false-Reverse declarations"
@@ -246,6 +330,7 @@ foreach ($scenarioId in $expectedScenarios) {
         $scenarioOutcome = [ordered]@{
             seededDefects = $descriptions.pension.acceptedOutcome.seededDefects
             defectiveFindings = $summary.defectiveBusinessDiscrepancies
+            claimBoundary = $descriptions.pension.claimBoundary
             correctedFindings = $summary.correctedBusinessDiscrepancies
             sourceArtifacts = $summary.checkpointArtifacts
             correctedTargetArtifacts = $summary.correctedProjectionTargets
@@ -266,6 +351,7 @@ foreach ($scenarioId in $expectedScenarios) {
         foreach ($reportFile in @($assuranceJsonPath, $assuranceTextPath)) {
             if (-not (Test-Path -LiteralPath $reportFile -PathType Leaf)) { throw "Scenario '$scenarioId' assurance report is missing: $reportFile" }
         }
+        $humanReportPaths = @($assuranceTextPath)
         $assurance = Get-Content -LiteralPath $assuranceJsonPath -Raw | ConvertFrom-Json
         $expectedFindings = $descriptions[$scenarioId].acceptedOutcome.expectedFindings
         $expectedDefects = $descriptions[$scenarioId].acceptedOutcome.seededDefects
@@ -285,6 +371,7 @@ foreach ($scenarioId in $expectedScenarios) {
         }
         $scenarioOutcome = [ordered]@{
             seededDefects = $assurance.seededDefectCount
+            claimBoundary = $descriptions[$scenarioId].claimBoundary
             defectiveFindings = $assurance.defectiveExternalObservation.verificationFailureCount
             correctedFindings = $assurance.correctedShadow.verificationFailureCount
             sourceArtifacts = $assurance.checkpointArtifactCount
@@ -297,23 +384,132 @@ foreach ($scenarioId in $expectedScenarios) {
         }
     }
 
+    $stageResourceMeasurements = @($runResult.stages | ForEach-Object {
+        [ordered]@{
+            stageId = $_.id
+            elapsedMilliseconds = $_.fixtureProcessElapsedMilliseconds
+            peakWorkingSetBytes = $_.fixtureProcessPeakWorkingSetBytes
+        }
+    })
     $scenarioResults.Add([ordered]@{
         id = $scenarioId
         status = $runResult.status
         stageCount = @($runResult.stages).Count
         reportCount = $reportPaths.Count
+        reportFiles = @($reportPaths | ForEach-Object { [IO.Path]::GetFileName($_) })
+        humanReportFiles = @($humanReportPaths | ForEach-Object { [IO.Path]::GetFileName($_) })
+        humanScenarioDescription = $humanDescriptions[$scenarioId]
+        claimBoundary = $descriptions[$scenarioId].claimBoundary
+        dockerRequired = [bool] $descriptions[$scenarioId].requirements.docker
+        requiredServices = @($descriptions[$scenarioId].requiredServices)
+        humanReadableReportValidated = $true
+        machineReadableReportValidated = $true
+        fixtureResourceMeasurements = $stageResourceMeasurements
         outcome = $scenarioOutcome
     })
 }
 
+$pensionRepeatability = "NOT RUN (package-only validation)"
+if (-not $PackageOnly) {
+    $pensionResult = @($scenarioResults | Where-Object { $_.id -eq "pension" })
+    if ($pensionResult.Count -ne 1) { throw "Pension scenario outcome is unavailable for repeatability validation." }
+    $firstPensionOutcome = $pensionResult[0].outcome
+
+    $null = Invoke-PackagedCli $cliPath @("demo", "reset", "pension")
+    $repeatHumanOutput = Invoke-PackagedCli $cliPath @("demo", "run", "pension")
+    if ($repeatHumanOutput -notmatch "Demo run: COMPLETED" -or
+        $repeatHumanOutput -notmatch "NOT QUALIFIED" -or $repeatHumanOutput -notmatch "QUALIFIED" -or
+        $repeatHumanOutput -notmatch "149" -or $repeatHumanOutput -notmatch "0") {
+        throw "Pension did not complete after reset."
+    }
+    $repeatWorkspace = Join-Path $packageRoot ".proofshift/demos/pension"
+    $repeatResultPath = Join-Path $repeatWorkspace "demo-result.json"
+    $repeatSummaryPath = Join-Path $repeatWorkspace "integrated-assurance/demo-summary.json"
+    foreach ($requiredPath in @($repeatResultPath, $repeatSummaryPath)) {
+        if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+            throw "Pension reset/repeat output is missing: $requiredPath"
+        }
+    }
+    $repeatRunResult = Get-Content -LiteralPath $repeatResultPath -Raw | ConvertFrom-Json
+    Assert-Equal $repeatRunResult.status "completed" "Pension repeat run status"
+    $repeatFailedStages = @($repeatRunResult.stages | Where-Object { $_.status -notin @("completed", "expected-state-observed") })
+    if ($repeatFailedStages.Count -gt 0) { throw "A Pension repeat stage failed its manifest assertions." }
+    $repeatReportPaths = @($repeatRunResult.reports)
+    if ($repeatReportPaths.Count -eq 0 -or @($repeatReportPaths | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) }).Count -gt 0) {
+        throw "Pension repeat reports are missing."
+    }
+    $repeatSummary = Get-Content -LiteralPath $repeatSummaryPath -Raw | ConvertFrom-Json
+    $repeatPensionReportDirectory = Join-Path $repeatWorkspace "integrated-assurance/.proofshift/reports"
+    $repeatHumanReportPaths = @(
+        (Join-Path $repeatPensionReportDirectory "$($repeatSummary.defectiveDryRunId).txt"),
+        (Join-Path $repeatPensionReportDirectory "$($repeatSummary.correctedDryRunId).txt"),
+        (Join-Path $repeatPensionReportDirectory "$($repeatSummary.falseReverseDryRunId).txt")
+    )
+    foreach ($humanReportPath in $repeatHumanReportPaths) {
+        if (-not (Test-Path -LiteralPath $humanReportPath -PathType Leaf)) {
+            throw "Pension repeat human-readable report is missing: $humanReportPath"
+        }
+    }
+    $repeatCorrectedHumanReport = [IO.File]::ReadAllText($repeatHumanReportPaths[1])
+    if ($repeatCorrectedHumanReport -notmatch "Business Discrepancies: 0" -or
+        $repeatCorrectedHumanReport -notmatch "Unaccounted Sources: 0" -or
+        $repeatCorrectedHumanReport -notmatch "Unexplained Targets: 0" -or
+        $repeatCorrectedHumanReport -notmatch "Recovery: PASSED" -or
+        $repeatCorrectedHumanReport -notmatch "Qualification: QUALIFIED") {
+        throw "Pension repeat corrected human report omitted its accepted outcomes."
+    }
+    $repeatJsonReports = @($repeatReportPaths | Where-Object { $_ -like "*.json" } | ForEach-Object {
+        Get-Content -LiteralPath $_ -Raw | ConvertFrom-Json
+    })
+    $repeatCorrectedReport = $repeatJsonReports | Where-Object {
+        $_.qualification -eq "QUALIFIED" -and $_.businessDiscrepancyCount -eq 0
+    } | Select-Object -First 1
+    $repeatDefectiveReport = $repeatJsonReports | Where-Object {
+        $_.qualification -eq "NOT QUALIFIED" -and $_.businessDiscrepancyCount -eq 149
+    } | Select-Object -First 1
+    $repeatFalseReverseReport = $repeatJsonReports | Where-Object {
+        $_.verificationOutcome -eq "PASSED" -and $_.businessDiscrepancyCount -eq 2
+    } | Select-Object -First 1
+    if ($null -eq $repeatCorrectedReport -or $null -eq $repeatDefectiveReport -or $null -eq $repeatFalseReverseReport) {
+        throw "Pension repeat defective, corrected, or false-Reverse report is missing."
+    }
+    $repeatPensionOutcome = [ordered]@{
+        seededDefects = $descriptions.pension.acceptedOutcome.seededDefects
+        defectiveFindings = $repeatSummary.defectiveBusinessDiscrepancies
+        claimBoundary = $descriptions.pension.claimBoundary
+        correctedFindings = $repeatSummary.correctedBusinessDiscrepancies
+        sourceArtifacts = $repeatSummary.checkpointArtifacts
+        correctedTargetArtifacts = $repeatSummary.correctedProjectionTargets
+        defectiveQualification = $repeatSummary.defectiveQualification
+        correctedQualification = $repeatSummary.correctedQualification
+        unaccountedSources = $repeatSummary.unaccountedSources
+        unexplainedTargets = $repeatSummary.unexplainedTargets
+        recoveryRehearsal = $repeatCorrectedReport.rehearsalOutcome
+        falseReverseVerification = $repeatSummary.falseReverseVerificationOutcome
+        falseReverseVerificationFailures = $repeatSummary.falseReverseVerificationFailures
+        falseReverseRejectedEdges = $repeatSummary.falseReverseRejectedEdges
+        falseReverseQualification = $repeatSummary.falseReverseQualification
+    }
+    $firstSemanticJson = ConvertTo-Json -InputObject $firstPensionOutcome -Depth 10 -Compress
+    $repeatSemanticJson = ConvertTo-Json -InputObject $repeatPensionOutcome -Depth 10 -Compress
+    Assert-Equal $repeatSemanticJson $firstSemanticJson "Pension reset/repeat semantic outcome"
+    $pensionRepeatability = "PASS"
+}
+
 $summaryOutput = [ordered]@{
-    format = "proofshift-evaluation-package-smoke-v1"
+    format = "proofshift-evaluation-package-smoke-v2"
     sourceRevision = $manifest.sourceRevision
+    targetPlatform = $manifest.targetPlatform
     packageFile = [IO.Path]::GetFileName($archiveFullPath)
     packageSizeBytes = (Get-Item -LiteralPath $archiveFullPath).Length
     packageSha256 = $archiveHash
     packageContentSha256 = $manifest.contentSha256
     extractionRoot = $extractionFullPath
+    packageOnlyValidation = [bool] $PackageOnly
+    rootHelpExitCode = $rootHelpExitCode
+    rootHelpUsageValidated = $true
+    shippedSampleConfigurationsValidated = $samples.Count
+    pensionResetRepeatability = $pensionRepeatability
     scenarios = @($scenarioResults)
 }
 $resultParent = Split-Path -Parent $resultFullPath
@@ -321,5 +517,5 @@ if ($resultParent) { New-Item -ItemType Directory -Path $resultParent -Force | O
 [IO.File]::WriteAllText($resultFullPath, (ConvertTo-Json -InputObject $summaryOutput -Depth 20), [Text.UTF8Encoding]::new($false))
 Write-Output "Package SHA-256: $archiveHash"
 Write-Output "Package content SHA-256: $($manifest.contentSha256)"
-Write-Output "Fresh Windows package smoke: PASS ($($scenarioResults.Count) scenarios)"
+Write-Output "Fresh $ExpectedPlatform package smoke: PASS ($($scenarioResults.Count) scenarios)"
 Write-Output "Result: $resultFullPath"
