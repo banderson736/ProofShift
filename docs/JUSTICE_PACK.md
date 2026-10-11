@@ -12,7 +12,7 @@ The frozen concept set is `Justice.Person`, `Justice.Case`, `Justice.CaseParty`,
 
 Pack-owned rules:
 
-- `justice-reference-integrity` streams source-reference and lookup records using descriptor-declared target fields and typed lookup ordering. It is global because each independently configured relationship spans graph nodes.
+- `justice-reference-integrity` uses shared `OrderedReferenceMatcher` mechanics in `Packs.Abstractions` to stream source-reference and lookup records using descriptor-declared target fields and typed lookup ordering. Justice retains its plain-key interpretation and Evidence semantics. It is global because each independently configured relationship spans graph nodes.
 - `justice-attribute-equality` compares a configured target attribute with the checkpoint-and-graph expected value by deterministic identity. The physical fixture uses it for status/code transformation, parent-case matching, and exact filing-date preservation.
 - `justice-event-order` compares configured fixture timestamps in order. The scenario checks case-opened time before filing and filing before hearing; these are fixture invariants, not universal procedure.
 

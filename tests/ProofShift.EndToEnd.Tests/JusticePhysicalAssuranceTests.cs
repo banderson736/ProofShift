@@ -14,6 +14,7 @@ using ProofShift.Evidence;
 using ProofShift.Graph;
 using ProofShift.Packs.Abstractions;
 using ProofShift.Packs.Justice;
+using ProofShift.Reporting;
 using ProofShift.Projection;
 using ProofShift.Recovery;
 using ProofShift.Snapshots;
@@ -211,6 +212,21 @@ public sealed class JusticePhysicalAssuranceTests
         Assert.DoesNotContain("meter", reportJson, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("beneficiary", reportJson, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("does not validate law", reportJson, StringComparison.Ordinal);
+        var genericReport = CrossDomainAssuranceReport.Create(configuration.Root.Project!.Name!, new JusticePack(),
+            report.ClaimBoundary, dryRun.Verification!, dryRun.Recovery!);
+        Assert.Equal("proofshift.justice", genericReport.PackId);
+        Assert.Equal("0.10.0", genericReport.PackVersion);
+        Assert.Equal("QUALIFIED", genericReport.Qualification);
+        Assert.Equal(genericReport.PackVersion, genericReport.RuntimePackVersions[genericReport.PackId]);
+        Assert.NotEmpty(genericReport.RuleVersions);
+        Assert.All(genericReport.RuleVersions.Values, version => Assert.Equal("1", version));
+        Assert.Contains(genericReport.Concepts, concept => concept.SemanticType == "Justice.Case");
+        Assert.Contains(genericReport.Rules, rule => rule.Type == "justice-reference-integrity" && rule.Version == "1");
+        var genericReportJson = JsonSerializer.Serialize(genericReport);
+        Assert.DoesNotContain("Utility.Account", genericReportJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Pension.Member", genericReportJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("HCM.Worker", genericReportJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Fhir.Patient", genericReportJson, StringComparison.Ordinal);
     }
 
     private static Fixture CreateFixture(int caseCount)

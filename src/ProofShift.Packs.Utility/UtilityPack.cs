@@ -247,27 +247,19 @@ public sealed class UtilityReferenceIntegrityRule(VerificationRuleDefinition def
         var referenceNode = Option("referenceNode");
         var referenceSemanticType = Option("referenceSemanticType");
         var referenceKeyField = Option("referenceKeyField");
-        var sourceOrder = new VerificationOrderingKey(semanticType, referenceField, VerificationOrderingRole.Grouping);
-        var referenceOrder = new VerificationOrderingKey(referenceSemanticType, referenceKeyField, VerificationOrderingRole.Lookup);
-        await using var sources = context.Workspace.ReadArtifactRecordsByKeysAsync(VerificationArtifactRole.ActualTarget,
-            sourceNode, semanticType, [sourceOrder], cancellationToken).GetAsyncEnumerator(cancellationToken);
-        await using var references = context.Workspace.ReadArtifactRecordsByKeysAsync(VerificationArtifactRole.ActualTarget,
-            referenceNode, referenceSemanticType, [referenceOrder], cancellationToken).GetAsyncEnumerator(cancellationToken);
-        var hasReference = await references.MoveNextAsync().ConfigureAwait(false);
         var failures = 0;
-        while (await sources.MoveNextAsync().ConfigureAwait(false))
+        await foreach (var match in OrderedReferenceMatcher.ScanAsync(context, sourceNode, semanticType, referenceField,
+            referenceNode, referenceSemanticType, referenceKeyField,
+            record => Text(record, referenceField), record => Text(record, referenceKeyField), cancellationToken)
+            .WithCancellation(cancellationToken).ConfigureAwait(false))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var source = sources.Current;
-            var key = Text(source, referenceField);
-            while (hasReference && StringComparer.Ordinal.Compare(Text(references.Current, referenceKeyField), key) < 0)
-                hasReference = await references.MoveNextAsync().ConfigureAwait(false);
-            if (key.Length != 0 && hasReference && StringComparer.Ordinal.Equals(Text(references.Current, referenceKeyField), key)) continue;
+            if (match.Resolves) continue;
 
             failures++;
             yield return Finding(context, EvidenceType.Relationship, EvidenceResult.Fail, "UtilityReferenceMissing",
-                $"{Id.Value}:{source.NodeKey}:{Fingerprint(key)}", "A configured Utility reference does not resolve within the observed target scope.",
-                [ArtifactInput(context, source.NodeKey, source.Artifact)],
+                $"{Id.Value}:{match.Source.NodeKey}:{Fingerprint(match.ReferenceKey ?? string.Empty)}",
+                "A configured Utility reference does not resolve within the observed target scope.",
+                [ArtifactInput(context, match.Source.NodeKey, match.Source.Artifact)],
                 new EvidenceValue(new StringValue("resolvable")), new EvidenceValue(new StringValue("missing")));
         }
 

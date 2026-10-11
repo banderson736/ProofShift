@@ -14,8 +14,8 @@ using ProofShift.Engine;
 using ProofShift.Evidence;
 using ProofShift.Graph;
 using ProofShift.Packs.Pension;
-using ProofShift.Projection;
 using ProofShift.Reporting;
+using ProofShift.Projection;
 using ProofShift.Recovery;
 using ProofShift.Snapshots;
 using ProofShift.Verification;
@@ -284,6 +284,22 @@ public sealed class PensionExternalCorpusVerificationTests
             Assert.Equal(expectedCheckpointArtifacts, correctedPipeline.Verification.Ledger.DispositionCount);
             Assert.Equal(expectedTargetArtifacts, correctedPipeline.Verification.Ledger.LineageCount);
             Assert.Equal(DryRunQualificationStatus.Qualified, correctedPipeline.Recovery.Qualification.Status);
+            var genericReport = CrossDomainAssuranceReport.Create(configuration.Root.Project!.Name!, new PensionPack(),
+                "Configured synthetic pension migration invariants only; not regulatory, actuarial, or benefit-calculation certification.",
+                correctedPipeline.Verification, correctedPipeline.Recovery);
+            Assert.Equal("proofshift.pension", genericReport.PackId);
+            Assert.Equal("0.9.0", genericReport.PackVersion);
+            Assert.Equal("QUALIFIED", genericReport.Qualification);
+            Assert.Equal(genericReport.PackVersion, genericReport.RuntimePackVersions[genericReport.PackId]);
+            Assert.NotEmpty(genericReport.RuleVersions);
+            Assert.All(genericReport.RuleVersions.Values, version => Assert.Equal("1", version));
+            Assert.Contains(genericReport.Concepts, concept => concept.SemanticType == "Pension.Member");
+            Assert.Contains(genericReport.Rules, rule => rule.Type == "pension-member-accounting" && rule.Version == "1");
+            var genericReportJson = JsonSerializer.Serialize(genericReport);
+            Assert.DoesNotContain("Justice.Case", genericReportJson, StringComparison.Ordinal);
+            Assert.DoesNotContain("Utility.Account", genericReportJson, StringComparison.Ordinal);
+            Assert.DoesNotContain("HCM.Worker", genericReportJson, StringComparison.Ordinal);
+            Assert.DoesNotContain("Fhir.Patient", genericReportJson, StringComparison.Ordinal);
 
             var falseReversePipeline = await ProjectVerifyAndQualifyAsync(checkpointStore, sourceConnectors, targetConnectors,
                 contextFactory, configuration, defectiveScenario, defectiveCapture, rules, directory,

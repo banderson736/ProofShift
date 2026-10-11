@@ -4,9 +4,9 @@ PS-0.10C Enterprise Connector & Data-Format Coverage is Accepted after GitHub Ac
 
 ## Current Assignment
 
-PS-0.10E Test Discovery and Acceptance Reconciliation is Accepted: candidate `a6e8b15528df5767dd5368f96c000d8dcfb0d1f1` passed GitHub Actions run 38068572196 and is merged to `main` as `d5bcf8b528bd9d7370841fbfb92625a8954fa75d`. PS-0.10F Cross-Domain Assurance remains In Progress and unaccepted; F1-F5 are locally validated, including Healthcare/FHIR physical assurance. Stop for review after F5; do not begin F6 without a new explicit assignment. Follow the [PS-0.10F acceptance matrix](docs/PS0_10F_ACCEPTANCE_MATRIX.md). Do not add connectors/FHIR Bulk or perform production migration/rollback.
+PS-0.10E Test Discovery and Acceptance Reconciliation is Accepted: candidate `a6e8b15528df5767dd5368f96c000d8dcfb0d1f1` passed GitHub Actions run 38068572196 and is merged to `main` as `d5bcf8b528bd9d7370841fbfb92625a8954fa75d`. F6 Cross-Domain Assurance is locally complete; PS-0.10F remains In Progress and unaccepted pending final acceptance closure. Review the authoritative [PS-0.10F acceptance matrix](docs/PS0_10F_ACCEPTANCE_MATRIX.md), then stop. Do not begin PS-0.10G, add connectors/FHIR Bulk, or perform production migration/rollback.
 
-The explicit PS-0.10F assignment supersedes historical statements below that domain expansion or FHIR work is deferred. F1-F5 are locally complete; stop for review and do not begin F6 without a new explicit assignment. FHIR Bulk transport, new connectors, and production migration/rollback remain out of scope.
+The explicit PS-0.10F6 assignment superseded historical statements below that F6 was unassigned. F6 local gates are complete; stop for review and do not begin PS-0.10G. FHIR Bulk transport, new connectors, and production migration/rollback remain out of scope.
 
 This repository is intended to be developed primarily with an IDE coding agent while preserving product/architecture continuity.
 

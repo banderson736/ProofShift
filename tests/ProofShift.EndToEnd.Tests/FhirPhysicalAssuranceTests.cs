@@ -16,6 +16,7 @@ using ProofShift.Evidence;
 using ProofShift.Graph;
 using ProofShift.Packs.Abstractions;
 using ProofShift.Packs.Fhir;
+using ProofShift.Reporting;
 using ProofShift.Projection;
 using ProofShift.Recovery;
 using ProofShift.Snapshots;
@@ -203,6 +204,21 @@ public sealed class FhirPhysicalAssuranceTests
         Assert.Contains("Not FHIR/profile/US Core certification", report.ClaimBoundaryText, StringComparison.Ordinal);
         Assert.DoesNotContain("Pension.Member", JsonSerializer.Serialize(report), StringComparison.Ordinal);
         Assert.DoesNotContain("HCM.Worker", JsonSerializer.Serialize(report), StringComparison.Ordinal);
+        var genericReport = CrossDomainAssuranceReport.Create(configuration.Root.Project!.Name!, new FhirPack(),
+            report.ClaimBoundaryText, dryRun.Verification!, dryRun.Recovery!);
+        Assert.Equal("proofshift.fhir", genericReport.PackId);
+        Assert.Equal("0.10.0", genericReport.PackVersion);
+        Assert.Equal("QUALIFIED", genericReport.Qualification);
+        Assert.Equal(genericReport.PackVersion, genericReport.RuntimePackVersions[genericReport.PackId]);
+        Assert.NotEmpty(genericReport.RuleVersions);
+        Assert.All(genericReport.RuleVersions.Values, version => Assert.Equal("1", version));
+        Assert.Contains(genericReport.Concepts, concept => concept.SemanticType == "Fhir.Binary");
+        Assert.Contains(genericReport.Rules, rule => rule.Type == "fhir-quantity-fidelity" && rule.Version == "1");
+        var genericReportJson = JsonSerializer.Serialize(genericReport);
+        Assert.DoesNotContain("Pension.Member", genericReportJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Utility.Account", genericReportJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Justice.Case", genericReportJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("HCM.Worker", genericReportJson, StringComparison.Ordinal);
     }
 
     private static FhirFixture CreateFixture(int count)

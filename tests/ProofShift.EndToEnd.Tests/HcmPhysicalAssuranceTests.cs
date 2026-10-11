@@ -14,6 +14,7 @@ using ProofShift.Evidence;
 using ProofShift.Graph;
 using ProofShift.Packs.Abstractions;
 using ProofShift.Packs.Hcm;
+using ProofShift.Reporting;
 using ProofShift.Projection;
 using ProofShift.Recovery;
 using ProofShift.Snapshots;
@@ -213,6 +214,21 @@ public sealed class HcmPhysicalAssuranceTests
         Assert.DoesNotContain("Pension.Member", JsonSerializer.Serialize(report), StringComparison.Ordinal);
         Assert.DoesNotContain("Justice.Case", JsonSerializer.Serialize(report), StringComparison.Ordinal);
         Assert.DoesNotContain("Utility.Account", JsonSerializer.Serialize(report), StringComparison.Ordinal);
+        var genericReport = CrossDomainAssuranceReport.Create(configuration.Root.Project!.Name!, new HcmPack(),
+            report.ClaimBoundaryText, dryRun.Verification!, dryRun.Recovery!);
+        Assert.Equal("proofshift.hcm", genericReport.PackId);
+        Assert.Equal("0.10.0", genericReport.PackVersion);
+        Assert.Equal("QUALIFIED", genericReport.Qualification);
+        Assert.Equal(genericReport.PackVersion, genericReport.RuntimePackVersions[genericReport.PackId]);
+        Assert.NotEmpty(genericReport.RuleVersions);
+        Assert.All(genericReport.RuleVersions.Values, version => Assert.Equal("1", version));
+        Assert.Contains(genericReport.Concepts, concept => concept.SemanticType == "HCM.Worker");
+        Assert.Contains(genericReport.Rules, rule => rule.Type == "hcm-payroll-reconciliation" && rule.Version == "1");
+        var genericReportJson = JsonSerializer.Serialize(genericReport);
+        Assert.DoesNotContain("Justice.Case", genericReportJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Pension.Member", genericReportJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Utility.Account", genericReportJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Fhir.Patient", genericReportJson, StringComparison.Ordinal);
     }
 
     private static Fixture CreateFixture(int workerCount)

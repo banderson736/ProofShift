@@ -5,9 +5,9 @@ You are working in **ProofShift**, a migration assurance and evidence platform f
 
 ## Current Assignment
 
-PS-0.10E is Accepted: candidate `a6e8b15528df5767dd5368f96c000d8dcfb0d1f1` passed all required jobs in run 38068572196 and is merged to `main` as `d5bcf8b528bd9d7370841fbfb92625a8954fa75d`. PS-0.10F Cross-Domain Assurance remains In Progress and unaccepted. F1-F5 are locally validated; stop for review after F5 and do not begin F6 without a new explicit assignment. Follow docs/PS0_10F_ACCEPTANCE_MATRIX.md; do not add connectors/FHIR Bulk, or perform production migration/rollback.
+PS-0.10E is Accepted: candidate `a6e8b15528df5767dd5368f96c000d8dcfb0d1f1` passed all required jobs in run 38068572196 and is merged to `main` as `d5bcf8b528bd9d7370841fbfb92625a8954fa75d`. F6 Cross-Domain Assurance is locally complete; PS-0.10F remains In Progress and unaccepted pending final acceptance closure. Reconcile docs/PS0_10F_ACCEPTANCE_MATRIX.md and stop for review. Do not begin PS-0.10G, add connectors/FHIR Bulk, or perform production migration/rollback.
 
-The explicit PS-0.10F assignment supersedes historical statements below that domain expansion or FHIR work is deferred. F1-F5 are now locally complete; stop for review and do not begin F6 without a new explicit assignment. FHIR Bulk, new connectors, and production migration/rollback remain out of scope.
+The explicit PS-0.10F6 assignment superseded historical statements below that F6 was unassigned. F6 local gates are complete; stop for review and do not begin PS-0.10G. FHIR Bulk, new connectors, and production migration/rollback remain out of scope.
 
 ## Mandatory context
 
