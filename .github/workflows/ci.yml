@@ -13,6 +13,12 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+      - name: Verify candidate SHA
+        shell: bash
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          printf 'github.sha=%s\nHEAD=%s\n' "$GITHUB_SHA" "$actual_sha"
+          test "$actual_sha" = "$GITHUB_SHA"
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
@@ -29,11 +35,155 @@ jobs:
             dotnet test --project "$project" --no-restore
           done
 
+  windows-package-smoke:
+    needs: build-and-test
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify candidate SHA
+        shell: pwsh
+        run: |
+          $actualSha = (git rev-parse HEAD).Trim()
+          Write-Output "github.sha=$env:GITHUB_SHA"
+          Write-Output "HEAD=$actualSha"
+          if ($LASTEXITCODE -ne 0 -or $actualSha -ne $env:GITHUB_SHA) { throw "Checked-out commit does not match the workflow candidate SHA." }
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Record clean Windows runner resources
+        shell: pwsh
+        run: |
+          $operatingSystem = Get-CimInstance Win32_OperatingSystem
+          $processor = Get-CimInstance Win32_Processor | Select-Object -First 1
+          $driveRoot = [IO.Path]::GetPathRoot($env:RUNNER_TEMP)
+          $drive = [IO.DriveInfo]::new($driveRoot)
+          Write-Output "OS: $($operatingSystem.Caption) $($operatingSystem.Version)"
+          Write-Output "CPU: $($processor.Name); logical processors: $env:NUMBER_OF_PROCESSORS"
+          Write-Output "Memory bytes: $($operatingSystem.TotalVisibleMemorySize * 1KB)"
+          Write-Output "Free disk bytes on ${driveRoot}: $($drive.AvailableFreeSpace)"
+      - name: Build reproducible binary-only evaluation package twice
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-PS-0.10G-win-x64.zip"
+          $repeatArchive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-PS-0.10G-win-x64-repeat.zip"
+          ./scripts/package-evaluation.ps1 -OutputFile $archive
+          ./scripts/package-evaluation.ps1 -OutputFile $repeatArchive
+          $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $repeatHash = (Get-FileHash -LiteralPath $repeatArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($archiveHash -ne $repeatHash) { throw "Two builds from the same clean candidate produced different package hashes." }
+          $packageSize = (Get-Item -LiteralPath $archive).Length
+          Write-Output "Candidate SHA: $env:GITHUB_SHA"
+          Write-Output "Package: $(Split-Path -Leaf $archive)"
+          Write-Output "Package size bytes: $packageSize"
+          Write-Output "Reproducible package SHA-256: $archiveHash"
+      - name: Validate extracted Windows package without Docker (package-only checks)
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-PS-0.10G-win-x64.zip"
+          $extractRoot = Join-Path $env:RUNNER_TEMP "ProofShift Evaluation\windows"
+          $resultFile = Join-Path $env:RUNNER_TEMP "ProofShift Evaluation\windows-package-smoke-result.json"
+          $revision = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $revision -ne $env:GITHUB_SHA) { throw "Could not verify the checked-out candidate SHA." }
+          ./scripts/smoke-evaluation-package.ps1 -ArchivePath $archive -ExtractionRoot $extractRoot `
+            -ResultFile $resultFile -ExpectedRevision $revision -ExpectedPlatform win-x64 -PackageOnly
+      - name: Record Windows runner disk after package validation
+        shell: pwsh
+        run: |
+          $driveRoot = [IO.Path]::GetPathRoot($env:RUNNER_TEMP)
+          $drive = [IO.DriveInfo]::new($driveRoot)
+          Write-Output "Free disk bytes on ${driveRoot}: $($drive.AvailableFreeSpace)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proofshift-evaluation-win-x64-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/ProofShift-Evaluation-PS-0.10G-win-x64.zip
+            ${{ runner.temp }}/ProofShift-Evaluation-PS-0.10G-win-x64.zip.sha256
+            ${{ runner.temp }}/ProofShift Evaluation/windows-package-smoke-result.json
+          if-no-files-found: error
+
+  linux-package-demos:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify candidate SHA
+        shell: bash
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          printf 'github.sha=%s\nHEAD=%s\n' "$GITHUB_SHA" "$actual_sha"
+          test "$actual_sha" = "$GITHUB_SHA"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Verify Linux Docker and record runner resources
+        shell: bash
+        run: |
+          docker_os="$(docker info --format '{{.OSType}}')"
+          printf 'Docker OSType: %s\n' "$docker_os"
+          test "$docker_os" = linux
+          container_os="$(docker run --rm alpine:3.22 uname -s)"
+          printf 'Container kernel: %s\n' "$container_os"
+          test "$container_os" = Linux
+          docker info --format 'Docker server={{.ServerVersion}} CPUs={{.NCPU}} memory_bytes={{.MemTotal}}'
+          printf '\nCPU environment:\n'
+          lscpu | grep -E '^(Architecture|Model name|CPU\(s\)):'
+          printf '\nMemory environment:\n'
+          free --bytes
+          printf '\nRunner disk availability:\n'
+          df --block-size=1 "$RUNNER_TEMP"
+      - name: Build reproducible Linux evaluation package twice
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-PS-0.10G-linux-x64.zip"
+          $repeatArchive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-PS-0.10G-linux-x64-repeat.zip"
+          ./scripts/package-evaluation.ps1 -OutputFile $archive
+          ./scripts/package-evaluation.ps1 -OutputFile $repeatArchive
+          $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $repeatHash = (Get-FileHash -LiteralPath $repeatArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($archiveHash -ne $repeatHash) { throw "Two Linux package builds from the same clean candidate produced different SHA-256 values." }
+          $packageSize = (Get-Item -LiteralPath $archive).Length
+          Write-Output "Candidate SHA: $env:GITHUB_SHA"
+          Write-Output "Package: $(Split-Path -Leaf $archive)"
+          Write-Output "Package size bytes: $packageSize"
+          Write-Output "Reproducible package SHA-256: $archiveHash"
+      - name: Run Docker-backed demos from the extracted Linux package
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-PS-0.10G-linux-x64.zip"
+          $extractRoot = Join-Path $env:RUNNER_TEMP "ProofShift Evaluation/ext"
+          $resultFile = Join-Path $env:RUNNER_TEMP "ProofShift Evaluation/linux-package-smoke-result.json"
+          $revision = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $revision -ne $env:GITHUB_SHA) { throw "Could not verify the checked-out candidate SHA." }
+          ./scripts/smoke-evaluation-package.ps1 -ArchivePath $archive -ExtractionRoot $extractRoot `
+            -ResultFile $resultFile -ExpectedRevision $revision -ExpectedPlatform linux-x64
+      - name: Record Docker resource state after packaged demos
+        shell: bash
+        run: |
+          docker system df
+          printf '\nRunner disk availability after demos:\n'
+          df --block-size=1 "$RUNNER_TEMP"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proofshift-evaluation-linux-x64-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/ProofShift-Evaluation-PS-0.10G-linux-x64.zip
+            ${{ runner.temp }}/ProofShift-Evaluation-PS-0.10G-linux-x64.zip.sha256
+            ${{ runner.temp }}/ProofShift Evaluation/linux-package-smoke-result.json
+          if-no-files-found: error
+
   oracle-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - name: Verify candidate SHA
+        shell: bash
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          printf 'github.sha=%s\nHEAD=%s\n' "$GITHUB_SHA" "$actual_sha"
+          test "$actual_sha" = "$GITHUB_SHA"
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
@@ -58,6 +208,12 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - name: Verify candidate SHA
+        shell: bash
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          printf 'github.sha=%s\nHEAD=%s\n' "$GITHUB_SHA" "$actual_sha"
+          test "$actual_sha" = "$GITHUB_SHA"
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
@@ -76,6 +232,12 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - name: Verify candidate SHA
+        shell: bash
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          printf 'github.sha=%s\nHEAD=%s\n' "$GITHUB_SHA" "$actual_sha"
+          test "$actual_sha" = "$GITHUB_SHA"
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x

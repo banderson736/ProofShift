@@ -65,9 +65,9 @@ public sealed class UtilityPhysicalAssuranceTests
         Assert.Equal(DefectManifest.Length, DefectManifest.Select(defect => defect.Id).Distinct(StringComparer.Ordinal).Count());
         var fixture = CreateFixture(AccountCount);
         Assert.Equal(10_200, fixture.Entities.Sum(entity => entity.Rows.Count) + fixture.Documents.Count);
-        var root = Path.Combine(Path.GetTempPath(), $"proofshift-utility-f2-{Guid.NewGuid():N}");
+        var root = DemoScenarioResultWriter.CreateFixtureRoot("proofshift-utility-f2");
         Directory.CreateDirectory(root);
-        using var cleanup = new TemporaryDirectoryCleanup(root);
+        using var cleanup = new TemporaryDirectoryCleanup(root, !DemoScenarioResultWriter.IsRunningDemo);
         var sourceCsv = Path.Combine(root, "source-csv");
         var sourceFiles = Path.Combine(root, "source-files");
         var targetFiles = Path.Combine(root, "target-files");
@@ -210,6 +210,8 @@ public sealed class UtilityPhysicalAssuranceTests
         await CreatePostgresTemplatesAsync(postgresContainer, fixture, TestContext.Current.CancellationToken);
         var evidenceStore = new FileSystemEvidenceStore(Path.Combine(root, ".proofshift", "verifications"));
         var recoveryStore = new FileSystemRecoveryArtifactStore(Path.Combine(root, ".proofshift", "recovery"));
+        await evidenceStore.SaveAsync(corrected.EvidenceGraph, TestContext.Current.CancellationToken);
+        await evidenceStore.SaveAsync(defective.EvidenceGraph, TestContext.Current.CancellationToken);
         var dryRun = await new DryRunOrchestrator(sourceConnectors, targetConnectors, snapshotStore,
             verification, new RecoveryService(snapshotStore,
                 new RecoveryCompensatorRegistry([new ShadowBaselineRestoreCompensator()])), contextFactory)
@@ -237,6 +239,20 @@ public sealed class UtilityPhysicalAssuranceTests
         Assert.DoesNotContain("Pension.Member", reportJson, StringComparison.Ordinal);
         Assert.DoesNotContain("Justice.Case", reportJson, StringComparison.Ordinal);
         Assert.DoesNotContain("HCM.Worker", reportJson, StringComparison.Ordinal);
+        var demoReport = DemoAssuranceReport.Create(new UtilityPack(), report.ClaimBoundary,
+            capture.Checkpoint.ArtifactCount, capture.Checkpoint.Id.Value.ToString("D"), capture.Checkpoint.ManifestHash!,
+            DefectManifest.Length, corrected, defective, dryRun.Verification, dryRun.Recovery);
+        Assert.Equal(26, demoReport.DefectiveExternalObservation.VerificationFailureCount);
+        Assert.Equal(26, demoReport.DefectiveExternalObservation.EvidenceReferences.Count);
+        Assert.Equal(0, demoReport.CorrectedShadow.VerificationFailureCount);
+        Assert.Equal(0, demoReport.CorrectedShadow.UnaccountedSourceCount);
+        Assert.Equal(0, demoReport.CorrectedShadow.UnexplainedTargetCount);
+        var humanReport = demoReport.ToHumanReadable();
+        Assert.Contains("EXTERNAL TARGET OBSERVATIONS (READ ONLY)", humanReport, StringComparison.Ordinal);
+        Assert.Contains("Source accounting: 10200/10200 accounted; 0 gaps", humanReport, StringComparison.Ordinal);
+        Assert.Contains("Target lineage: 10200/10200 explained; 0 gaps", humanReport, StringComparison.Ordinal);
+        Assert.Contains(demoReport.DefectiveExternalObservation.EvidenceReferences[0].EvidenceId, humanReport, StringComparison.Ordinal);
+        await DemoScenarioResultWriter.WriteIfRequestedAsync(demoReport, TestContext.Current.CancellationToken);
     }
 
     private static UtilityFixture CreateFixture(int accountCount)
@@ -794,11 +810,11 @@ public sealed class UtilityPhysicalAssuranceTests
     private sealed record UtilityDocument(string DocumentId, string AccountId, string RelativePath, byte[] Content, string Sha256);
     private sealed record UtilityFixture(IReadOnlyList<UtilityEntity> Entities, IReadOnlyList<UtilityDocument> Documents);
     private sealed record UtilityDefect(string Id, string Category, string SemanticConcept, string ExpectedRuleId);
-    private sealed class TemporaryDirectoryCleanup(string path) : IDisposable
+    private sealed class TemporaryDirectoryCleanup(string path, bool deleteOnDispose) : IDisposable
     {
         public void Dispose()
         {
-            if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+            DemoScenarioResultWriter.CleanupFixtureRoot(path, deleteOnDispose);
         }
     }
 

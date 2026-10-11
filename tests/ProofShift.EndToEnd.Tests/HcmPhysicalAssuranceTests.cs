@@ -59,9 +59,9 @@ public sealed class HcmPhysicalAssuranceTests
             row["COMP_NO"] == "COMP000001C")["AMOUNT"], NumberStyles.Number, CultureInfo.InvariantCulture));
         Assert.Equal(37.6250m, decimal.Parse(fixture.SourceRows["target-compensation"].Single(row =>
             row["COMP_NO"] == "COMP000002C")["AMOUNT"], NumberStyles.Number, CultureInfo.InvariantCulture));
-        var root = Path.Combine(Path.GetTempPath(), $"proofshift-hcm-f4-{Guid.NewGuid():N}");
+        var root = DemoScenarioResultWriter.CreateFixtureRoot("proofshift-hcm-f4");
         Directory.CreateDirectory(root);
-        using var cleanup = new TemporaryDirectoryCleanup(root);
+        using var cleanup = new TemporaryDirectoryCleanup(root, !DemoScenarioResultWriter.IsRunningDemo);
         await using var sourcePostgres = new PostgreSqlBuilder("postgres:16-alpine").Build();
         try { await sourcePostgres.StartAsync(TestContext.Current.CancellationToken); }
         catch (DockerUnavailableException)
@@ -186,6 +186,8 @@ public sealed class HcmPhysicalAssuranceTests
 
         var evidenceStore = new FileSystemEvidenceStore(Path.Combine(root, ".proofshift", "verifications"));
         var recoveryStore = new FileSystemRecoveryArtifactStore(Path.Combine(root, ".proofshift", "recovery"));
+        await evidenceStore.SaveAsync(corrected.EvidenceGraph, TestContext.Current.CancellationToken);
+        await evidenceStore.SaveAsync(defective.EvidenceGraph, TestContext.Current.CancellationToken);
         var dryRun = await new DryRunOrchestrator(sourceConnectors, targets, checkpointStore, service,
             new RecoveryService(checkpointStore,
                 new RecoveryCompensatorRegistry([new ShadowBaselineRestoreCompensator()])), contexts)
@@ -229,6 +231,15 @@ public sealed class HcmPhysicalAssuranceTests
         Assert.DoesNotContain("Pension.Member", genericReportJson, StringComparison.Ordinal);
         Assert.DoesNotContain("Utility.Account", genericReportJson, StringComparison.Ordinal);
         Assert.DoesNotContain("Fhir.Patient", genericReportJson, StringComparison.Ordinal);
+        var demoReport = DemoAssuranceReport.Create(new HcmPack(), report.ClaimBoundaryText,
+            checkpoint.Checkpoint.ArtifactCount, checkpoint.Checkpoint.Id.Value.ToString("D"), checkpoint.Checkpoint.ManifestHash!,
+            DefectManifest.Length, corrected, defective, dryRun.Verification!, dryRun.Recovery!);
+        Assert.Equal(25, demoReport.DefectiveExternalObservation.VerificationFailureCount);
+        Assert.Equal(25, demoReport.DefectiveExternalObservation.EvidenceReferences.Count);
+        Assert.Equal(0, demoReport.CorrectedShadow.VerificationFailureCount);
+        Assert.Equal(0, demoReport.CorrectedShadow.UnaccountedSourceCount);
+        Assert.Equal(0, demoReport.CorrectedShadow.UnexplainedTargetCount);
+        await DemoScenarioResultWriter.WriteIfRequestedAsync(demoReport, TestContext.Current.CancellationToken);
     }
 
     private static Fixture CreateFixture(int workerCount)
@@ -603,9 +614,9 @@ public sealed class HcmPhysicalAssuranceTests
     private sealed record Fixture(EntitySpec[] Entities, Dictionary<string, List<Dictionary<string, string>>> SourceRows);
     private sealed record HcmDefect(string Id, string Category, string SemanticConcept, string BusinessKey,
         string ExpectedRuleId, EvidenceResult ExpectedOutcome, int ExpectedFindingCount);
-    private sealed class TemporaryDirectoryCleanup(string path) : IDisposable
+    private sealed class TemporaryDirectoryCleanup(string path, bool deleteOnDispose) : IDisposable
     {
-        public void Dispose() { if (Directory.Exists(path)) Directory.Delete(path, recursive: true); }
+        public void Dispose() => DemoScenarioResultWriter.CleanupFixtureRoot(path, deleteOnDispose);
     }
     private sealed class HcmEnvironment(IReadOnlyDictionary<string, string> values) : IEnvironmentVariableProvider
     {

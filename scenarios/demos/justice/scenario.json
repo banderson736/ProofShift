@@ -1,0 +1,153 @@
+{
+  "manifestVersion": 1,
+  "id": "justice",
+  "displayName": "Justice case-management assurance",
+  "domain": "Justice",
+  "pack": {
+    "id": "proofshift.justice",
+    "version": "0.10.0"
+  },
+  "description": "Runs the accepted synthetic Justice physical assurance fixture for independent observation, exact findings, and corrected qualification.",
+  "claimBoundary": "Configured migration invariants only; not law, jurisdiction, court-rule, sentencing, charge-validity, filing-sufficiency, or records-retention validation.",
+  "approximateRuntime": "About 2 minutes based on the accepted local physical test; cold image setup varies and this is not an SLA.",
+  "requirements": {
+    "docker": true,
+    "minimumDotNetSdk": "10.0.100",
+    "minimumFreeDiskBytes": 0,
+    "requiredPorts": [],
+    "requiredFiles": [
+      "tests/ProofShift.EndToEnd.Tests/JusticePhysicalAssuranceTests.cs"
+    ]
+  },
+  "sourceSystems": [
+    "Synthetic PostgreSQL case-management records and filesystem documents"
+  ],
+  "targetSystems": [
+    "Independently populated PostgreSQL/filesystem target",
+    "Isolated PostgreSQL/filesystem shadow target"
+  ],
+  "requiredServices": [
+    "Docker-compatible runtime",
+    "PostgreSQL 16 source test container",
+    "PostgreSQL 16 target test container"
+  ],
+  "artifactScale": {
+    "sourceArtifacts": 16200,
+    "targetArtifacts": 16200,
+    "unit": "artifacts",
+    "notes": "Accepted Justice case-management physical scenario scale; not a throughput claim."
+  },
+  "acceptanceReference": {
+    "indexFile": "docs/PS0_10F_SCENARIO_INDEX.json",
+    "scenarioId": "justice-case-management-f3"
+  },
+  "fixtureSetupSteps": [
+    "Generate deterministic synthetic cases, parties, events, dispositions, and documents.",
+    "Start isolated PostgreSQL source and target test containers and load filesystem documents.",
+    "Independently observe corrected and defect-injected targets, then exercise corrected shadow qualification."
+  ],
+  "defectiveTargetPreparation": "The accepted Justice fixture injects its frozen defects into independently populated target observations; ProofShift does not perform that migration.",
+  "correctedTargetPreparation": "The same accepted fixture verifies a corrected external target and a separate corrected shadow run.",
+  "runStages": [
+    {
+      "id": "justice-physical-assurance",
+      "name": "Run accepted Justice physical assurance",
+      "phase": "External observation, exact Verification findings, Evidence, and corrected Recovery",
+      "runner": "dotnet-test",
+      "workingDirectory": "repository",
+      "arguments": [
+        "--project",
+        "tests/ProofShift.EndToEnd.Tests/ProofShift.EndToEnd.Tests.csproj",
+        "--filter-class",
+        "ProofShift.EndToEnd.Tests.JusticePhysicalAssuranceTests",
+        "--parallel",
+        "none",
+        "--timeout",
+        "20m"
+      ],
+      "expectedOutcome": "success",
+      "expectedExitCode": 0,
+      "timeoutSeconds": 1500,
+      "resultFile": "fixture/assurance-report.json",
+      "outputFile": "logs/justice-physical-test.log",
+      "assertions": [
+        { "pointer": "/packId", "valueType": "string", "expected": "proofshift.justice" },
+        { "pointer": "/checkpointArtifactCount", "valueType": "number", "expected": "16200" },
+        { "pointer": "/seededDefectCount", "valueType": "number", "expected": "15" },
+        { "pointer": "/defectiveExternalObservation/targetArtifactCount", "valueType": "number", "expected": "16201" },
+        { "pointer": "/correctedExternalObservation/targetArtifactCount", "valueType": "number", "expected": "16200" },
+        { "pointer": "/defectiveExternalObservation/verificationFailureCount", "valueType": "number", "expected": "24" },
+        { "pointer": "/correctedShadow/verificationFailureCount", "valueType": "number", "expected": "0" },
+        { "pointer": "/correctedShadow/accountedSourceCount", "valueType": "number", "expected": "16200" },
+        { "pointer": "/correctedShadow/lineagedTargetCount", "valueType": "number", "expected": "16200" },
+        { "pointer": "/correctedShadow/unaccountedSourceCount", "valueType": "number", "expected": "0" },
+        { "pointer": "/correctedShadow/unexplainedTargetCount", "valueType": "number", "expected": "0" },
+        { "pointer": "/correctedShadow/recoveryOutcome", "valueType": "string", "expected": "PASSED" },
+        { "pointer": "/correctedShadow/recoveryRehearsalOutcome", "valueType": "string", "expected": "PASSED" },
+        { "pointer": "/correctedShadow/qualification", "valueType": "string", "expected": "QUALIFIED" }
+      ],
+      "resultBindings": [
+        { "name": "defectiveExternalRunId", "pointer": "/defectiveExternalObservation/verificationRunId", "valueType": "string" },
+        { "name": "defectiveExternalEvidenceFingerprint", "pointer": "/defectiveExternalObservation/evidenceFingerprint", "valueType": "string" },
+        { "name": "correctedExternalRunId", "pointer": "/correctedExternalObservation/verificationRunId", "valueType": "string" },
+        { "name": "correctedShadowRunId", "pointer": "/correctedShadow/verificationRunId", "valueType": "string" },
+        { "name": "correctedDryRunId", "pointer": "/correctedShadow/dryRunId", "valueType": "string" },
+        { "name": "defectiveEvidenceId", "pointer": "/defectiveExternalObservation/evidenceReferences/0/evidenceId", "valueType": "string" },
+        { "name": "seededDefectCount", "pointer": "/seededDefectCount", "valueType": "number" },
+        { "name": "defectiveFindingCount", "pointer": "/defectiveExternalObservation/verificationFailureCount", "valueType": "number" },
+        { "name": "correctedFailureCount", "pointer": "/correctedShadow/verificationFailureCount", "valueType": "number" },
+        { "name": "unaccountedSourceCount", "pointer": "/correctedShadow/unaccountedSourceCount", "valueType": "number" },
+        { "name": "unexplainedTargetCount", "pointer": "/correctedShadow/unexplainedTargetCount", "valueType": "number" },
+        { "name": "recoveryOutcome", "pointer": "/correctedShadow/recoveryOutcome", "valueType": "string" },
+        { "name": "recoveryRehearsalOutcome", "pointer": "/correctedShadow/recoveryRehearsalOutcome", "valueType": "string" },
+        { "name": "failedRecoveryEdges", "pointer": "/correctedShadow/failedRecoveryEdges", "valueType": "number" },
+        { "name": "falseReversibleTransformations", "pointer": "/correctedShadow/falseReversibleTransformations", "valueType": "number" },
+        { "name": "correctedQualification", "pointer": "/correctedShadow/qualification", "valueType": "string" },
+        { "name": "sourceArtifactCount", "pointer": "/checkpointArtifactCount", "valueType": "number" },
+        { "name": "targetArtifactCount", "pointer": "/correctedShadow/targetArtifactCount", "valueType": "number" }
+      ],
+      "environment": {}
+    },
+    {
+      "id": "justice-defective-evidence",
+      "name": "Inspect defective external-target Evidence",
+      "phase": "Evidence navigation",
+      "workingDirectory": "workspace/fixture",
+      "arguments": ["evidence", "evidence.yaml", "--run", "{{demo.defectiveExternalRunId}}", "--json"],
+      "expectedOutcome": "success",
+      "expectedExitCode": 0,
+      "timeoutSeconds": 60,
+      "resultFile": "reports/defective-evidence.json",
+      "assertions": [
+        { "pointer": "/manifest/runId", "valueType": "string", "expected": "{{demo.defectiveExternalRunId}}" },
+        { "pointer": "/manifest/fingerprint", "valueType": "string", "expected": "{{demo.defectiveExternalEvidenceFingerprint}}" }
+      ],
+      "environment": {}
+    },
+    {
+      "id": "justice-corrected-recovery",
+      "name": "Inspect corrected Recovery readiness",
+      "phase": "Recovery readiness",
+      "workingDirectory": "workspace/fixture",
+      "arguments": ["recovery", "recovery.yaml", "--run", "{{demo.correctedDryRunId}}", "--json"],
+      "expectedOutcome": "success",
+      "expectedExitCode": 0,
+      "timeoutSeconds": 60,
+      "resultFile": "reports/corrected-recovery.json",
+      "assertions": [
+        { "pointer": "/status", "valueType": "string", "expected": "qualified" },
+        { "pointer": "/rehearsalOutcome", "valueType": "string", "expected": "passed" },
+        { "pointer": "/failedEdges", "valueType": "number", "expected": "0" }
+      ],
+      "environment": {}
+    }
+  ],
+  "resetStages": [],
+  "reportPaths": [
+    "{{workspace}}/fixture/assurance-report.json",
+    "{{workspace}}/fixture/assurance-report.txt",
+    "{{workspace}}/reports/defective-evidence.json",
+    "{{workspace}}/reports/corrected-recovery.json"
+  ],
+  "resetScope": "scenario-owned-only"
+}

@@ -5,9 +5,9 @@ You are working in **ProofShift**, a migration assurance and evidence platform f
 
 ## Current Assignment
 
-PS-0.10E is Accepted: candidate `a6e8b15528df5767dd5368f96c000d8dcfb0d1f1` passed all required jobs in run 38068572196 and is merged to `main` as `d5bcf8b528bd9d7370841fbfb92625a8954fa75d`. F6 Cross-Domain Assurance is locally complete; PS-0.10F remains In Progress and unaccepted pending final acceptance closure. Reconcile docs/PS0_10F_ACCEPTANCE_MATRIX.md and stop for review. Do not begin PS-0.10G, add connectors/FHIR Bulk, or perform production migration/rollback.
+PS-0.10F Cross-Domain Assurance is Accepted (October 11, 2026), merged to `main` as `77bceb325d925eb41c44b0eb7e3d3e5fb74542b9`. Candidate `e3e437696808a16cda276e58a4460b9a297f0aea` passed GitHub Actions run 38120389177 with 318 passed, 0 failed, 0 skipped across all four required jobs. See docs/PS0_10F_ACCEPTANCE_MATRIX.md.
 
-The explicit PS-0.10F6 assignment superseded historical statements below that F6 was unassigned. F6 local gates are complete; stop for review and do not begin PS-0.10G. FHIR Bulk, new connectors, and production migration/rollback remain out of scope.
+Current assignment: PS-0.10G Demo & Product Packaging formal review only. All 60 gates passed on exact candidate `d3529ccabe04eb1e7b8b3cf2ab643ff8488cf1af` in GitHub Actions [run 38172351820](https://github.com/banderson736/ProofShift/actions/runs/38172351820); all six jobs succeeded, including Windows package-only smoke and five Ubuntu packaged demos. The regression jobs reported 331 passed, 0 failed, 0 skipped. The FHIR boundary correction is smoke-harness-only; scenario/runtime semantics are unchanged. Keep Windows claims package-only and Ubuntu claims limited to packaged Docker evaluation, not general Linux support. Preserve exact scenario semantics. Do not self-accept or merge before the normal review workflow. Use the user's 0.10G scope as authoritative; do not add features or begin PS-1.0, production migration/rollback, connectors, FHIR Bulk, new domain packs, AI-assisted mapping/rules, or a web UI.
 
 ## Mandatory context
 

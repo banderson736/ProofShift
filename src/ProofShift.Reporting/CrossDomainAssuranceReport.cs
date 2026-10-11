@@ -17,15 +17,22 @@ public sealed record CrossDomainAssuranceReport
     public string PackDisplayName { get; }
     public string ClaimBoundary { get; }
     public string VerificationOutcome { get; }
+    public string VerificationRunId { get; }
+    public string VerificationEvidenceFingerprint { get; }
     public string RecoveryOutcome { get; }
     public string RecoveryRehearsalOutcome { get; }
     public string Qualification { get; }
     public IReadOnlyDictionary<string, string> RuntimePackVersions { get; }
     public IReadOnlyDictionary<string, string> RuleVersions { get; }
     public int VerificationFailureCount { get; }
+    public long SourceArtifactCount { get; }
+    public long TargetArtifactCount { get; }
+    public long AccountedSourceCount { get; }
+    public long LineagedTargetCount { get; }
     public int UnaccountedSourceCount { get; }
     public int UnexplainedTargetCount { get; }
     public IReadOnlyDictionary<string, int> FindingsByRuleAndCode { get; }
+    public IReadOnlyList<AssuranceEvidenceReference> EvidenceReferences { get; }
     public IReadOnlyList<AssuranceConceptSummary> Concepts { get; }
     public IReadOnlyList<AssuranceRuleSummary> Rules { get; }
 
@@ -52,17 +59,29 @@ public sealed record CrossDomainAssuranceReport
             ? throw new ArgumentException("A report claim boundary is required.", nameof(claimBoundary))
             : claimBoundary.Trim();
         VerificationOutcome = verification.Run.Outcome.ToString();
+        VerificationRunId = verification.Run.Id.Value.ToString("D");
+        VerificationEvidenceFingerprint = verification.Run.EvidenceFingerprint;
         RecoveryOutcome = recovery.Assessment.Outcome.ToString();
         RecoveryRehearsalOutcome = recovery.Rehearsal.Outcome.ToString();
         Qualification = recovery.Qualification.Status.ToString().ToUpperInvariant();
         var failures = verification.Findings.Where(finding => finding.Result == EvidenceResult.Fail).ToArray();
         VerificationFailureCount = failures.Length;
+        SourceArtifactCount = verification.Run.ProjectionSourceCount;
+        TargetArtifactCount = verification.Run.ProjectionTargetCount;
+        AccountedSourceCount = verification.Ledger.DispositionCount;
+        LineagedTargetCount = verification.Ledger.LineageCount;
         UnaccountedSourceCount = failures.Count(finding => finding.Code == "UnaccountedArtifact");
         UnexplainedTargetCount = failures.Count(finding => finding.Code is "MissingLineage" or "UnexpectedTarget");
         FindingsByRuleAndCode = new ReadOnlyDictionary<string, int>(failures
             .GroupBy(finding => $"{finding.RuleId.Value}:{finding.Code}", StringComparer.Ordinal)
             .OrderBy(group => group.Key, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal));
+        EvidenceReferences = verification.EvidenceGraph.Records
+            .Where(record => record.Result == EvidenceResult.Fail)
+            .OrderBy(record => record.Id.Value)
+            .Select(record => new AssuranceEvidenceReference(record.Id.Value.ToString("D"), record.RuleId.Value,
+                record.Code ?? "UnclassifiedFailure", record.Severity.ToString()))
+            .ToArray();
         Concepts = pack.Metadata.Concepts.OrderBy(concept => concept.SemanticType, StringComparer.Ordinal)
             .Select(concept => new AssuranceConceptSummary(concept.SemanticType, concept.DisplayName, concept.Description)).ToArray();
         Rules = pack.Metadata.RuleProviders.SelectMany(provider => provider.Rules)
@@ -78,3 +97,5 @@ public sealed record CrossDomainAssuranceReport
 public sealed record AssuranceConceptSummary(string SemanticType, string DisplayName, string Description);
 
 public sealed record AssuranceRuleSummary(string Type, string Version, string Description);
+
+public sealed record AssuranceEvidenceReference(string EvidenceId, string RuleId, string Code, string Severity);

@@ -1,0 +1,192 @@
+{
+  "manifestVersion": 1,
+  "id": "pension",
+  "displayName": "Pension modernization assurance",
+  "domain": "Public pension",
+  "pack": {
+    "id": "proofshift.pension",
+    "version": "0.9.0"
+  },
+  "description": "Runs the accepted synthetic Pension physical assurance scenario, including independently observed defects, false-Reverse recovery proof, correction, and persisted reports.",
+  "claimBoundary": "Configured synthetic pension migration invariants only; not regulatory, actuarial, or benefit-calculation certification.",
+  "approximateRuntime": "About 2-4 minutes on a warm local Docker setup based on the accepted physical probe; cold image setup varies and this is not an SLA.",
+  "requirements": {
+    "docker": true,
+    "minimumDotNetSdk": "10.0.100",
+    "minimumFreeDiskBytes": 0,
+    "requiredPorts": [],
+    "requiredFiles": [
+      "tests/ProofShift.EndToEnd.Tests/PensionExternalCorpusVerificationTests.cs"
+    ]
+  },
+  "sourceSystems": [
+    "Synthetic legacy pension records in SQL Server, CSV, and filesystem documents"
+  ],
+  "targetSystems": [
+    "Independently populated PostgreSQL/filesystem observed target",
+    "Isolated PostgreSQL/filesystem shadow target"
+  ],
+  "requiredServices": [
+    "Docker-compatible runtime",
+    "SQL Server 2022 test container",
+    "PostgreSQL 16 test container"
+  ],
+  "artifactScale": {
+    "sourceArtifacts": 8495,
+    "targetArtifacts": 8595,
+    "unit": "artifacts",
+    "notes": "Accepted Pension Fast physical scenario scale; not a reduced demo corpus or throughput claim."
+  },
+  "acceptanceReference": {
+    "indexFile": "docs/PS0_10F_SCENARIO_INDEX.json",
+    "scenarioId": "pension-fast"
+  },
+  "projectPath": "scenarios/pension-modernization/ps010b/proofshift.yaml",
+  "fixtureSetupSteps": [
+    "Generate deterministic synthetic source data.",
+    "Start isolated SQL Server and PostgreSQL test containers.",
+    "Capture the source checkpoint and independently observe corrected and defective target states."
+  ],
+  "defectiveTargetPreparation": "The accepted physical fixture deterministically injects the frozen 149-defect corpus into an independently observed target; ProofShift does not perform that migration.",
+  "correctedTargetPreparation": "The same fixture loads the corrected target and runs the accepted shadow projection/Verification/Recovery path.",
+  "runStages": [
+    {
+      "id": "pension-physical-assurance",
+      "name": "Run accepted physical Pension assurance",
+      "phase": "Source checkpoint, observed target, Verification, Evidence, Recovery, and qualification",
+      "runner": "dotnet-test",
+      "workingDirectory": "repository",
+      "arguments": [
+        "--project",
+        "tests/ProofShift.EndToEnd.Tests/ProofShift.EndToEnd.Tests.csproj",
+        "--filter-class",
+        "ProofShift.EndToEnd.Tests.PensionExternalCorpusVerificationTests",
+        "--parallel",
+        "none",
+        "--timeout",
+        "20m"
+      ],
+      "expectedOutcome": "success",
+      "expectedExitCode": 0,
+      "timeoutSeconds": 1500,
+      "resultFile": "integrated-assurance/demo-summary.json",
+      "outputFile": "logs/pension-physical-test.log",
+      "assertions": [
+        { "pointer": "/checkpointArtifacts", "valueType": "number", "expected": "8495" },
+        { "pointer": "/correctedProjectionTargets", "valueType": "number", "expected": "8595" },
+        { "pointer": "/defectiveBusinessDiscrepancies", "valueType": "number", "expected": "149" },
+        { "pointer": "/correctedBusinessDiscrepancies", "valueType": "number", "expected": "0" },
+        { "pointer": "/unaccountedSources", "valueType": "number", "expected": "0" },
+        { "pointer": "/unexplainedTargets", "valueType": "number", "expected": "0" },
+        { "pointer": "/defectiveQualification", "valueType": "string", "expected": "NOT QUALIFIED" },
+        { "pointer": "/correctedQualification", "valueType": "string", "expected": "QUALIFIED" },
+        { "pointer": "/falseReverseVerificationOutcome", "valueType": "string", "expected": "PASSED" },
+        { "pointer": "/falseReverseQualification", "valueType": "string", "expected": "NOT QUALIFIED" },
+        { "pointer": "/falseReverseRejectedEdges", "valueType": "number", "expected": "2" },
+        { "pointer": "/falseReverseBusinessDiscrepancies", "valueType": "number", "expected": "2" },
+        { "pointer": "/falseReverseVerificationFailures", "valueType": "number", "expected": "0" }
+      ],
+      "resultBindings": [
+        { "name": "defectiveDryRunId", "pointer": "/defectiveDryRunId", "valueType": "string" },
+        { "name": "correctedDryRunId", "pointer": "/correctedDryRunId", "valueType": "string" },
+        { "name": "falseReverseDryRunId", "pointer": "/falseReverseDryRunId", "valueType": "string" },
+        { "name": "checkpointArtifacts", "pointer": "/checkpointArtifacts", "valueType": "number" },
+        { "name": "correctedProjectionTargets", "pointer": "/correctedProjectionTargets", "valueType": "number" },
+        { "name": "defectiveQualification", "pointer": "/defectiveQualification", "valueType": "string" },
+        { "name": "defectiveBusinessDiscrepancies", "pointer": "/defectiveBusinessDiscrepancies", "valueType": "number" },
+        { "name": "correctedQualification", "pointer": "/correctedQualification", "valueType": "string" },
+        { "name": "correctedBusinessDiscrepancies", "pointer": "/correctedBusinessDiscrepancies", "valueType": "number" },
+        { "name": "unaccountedSources", "pointer": "/unaccountedSources", "valueType": "number" },
+        { "name": "unexplainedTargets", "pointer": "/unexplainedTargets", "valueType": "number" },
+        { "name": "falseReverseVerificationOutcome", "pointer": "/falseReverseVerificationOutcome", "valueType": "string" },
+        { "name": "falseReverseVerificationFailures", "pointer": "/falseReverseVerificationFailures", "valueType": "number" },
+        { "name": "falseReverseQualification", "pointer": "/falseReverseQualification", "valueType": "string" },
+        { "name": "falseReverseRejectedEdges", "pointer": "/falseReverseRejectedEdges", "valueType": "number" }
+      ],
+      "environment": {
+        "PS09_INTEGRATED_RUN_DIRECTORY": "{{workspace}}/integrated-assurance"
+      }
+    },
+    {
+      "id": "false-reverse-report",
+      "name": "Explain correct data with unsafe recovery",
+      "phase": "Recovery readiness",
+      "workingDirectory": "workspace/integrated-assurance",
+      "arguments": ["report", "{{demo.falseReverseDryRunId}}", "--json"],
+      "expectedOutcome": "success",
+      "expectedExitCode": 0,
+      "timeoutSeconds": 60,
+      "resultFile": "reports/false-reverse-report.json",
+      "assertions": [
+        { "pointer": "/verificationOutcome", "valueType": "string", "expected": "PASSED" },
+        { "pointer": "/verificationFailureCount", "valueType": "number", "expected": "0" },
+        { "pointer": "/businessDiscrepancyCount", "valueType": "number", "expected": "2" },
+        { "pointer": "/falseReversibleTransformations", "valueType": "number", "expected": "2" },
+        { "pointer": "/failedRecoveryEdges", "valueType": "number", "expected": "2" },
+        { "pointer": "/qualification", "valueType": "string", "expected": "NOT QUALIFIED" }
+      ],
+      "environment": {}
+    },
+    {
+      "id": "defective-report",
+      "name": "Inspect defective target findings",
+      "phase": "Evidence and discrepancy explanation",
+      "workingDirectory": "workspace/integrated-assurance",
+      "arguments": ["report", "{{demo.defectiveDryRunId}}", "--json"],
+      "expectedOutcome": "success",
+      "expectedExitCode": 0,
+      "timeoutSeconds": 60,
+      "resultFile": "reports/defective-report.json",
+      "assertions": [
+        { "pointer": "/qualification", "valueType": "string", "expected": "NOT QUALIFIED" },
+        { "pointer": "/businessDiscrepancyCount", "valueType": "number", "expected": "149" }
+      ],
+      "environment": {}
+    },
+    {
+      "id": "corrected-report",
+      "name": "Inspect corrected qualified target",
+      "phase": "Corrected Verification and qualification",
+      "workingDirectory": "workspace/integrated-assurance",
+      "arguments": ["report", "{{demo.correctedDryRunId}}", "--json"],
+      "expectedOutcome": "success",
+      "expectedExitCode": 0,
+      "timeoutSeconds": 60,
+      "resultFile": "reports/corrected-report.json",
+      "assertions": [
+        { "pointer": "/qualification", "valueType": "string", "expected": "QUALIFIED" },
+        { "pointer": "/verificationFailureCount", "valueType": "number", "expected": "0" },
+        { "pointer": "/businessDiscrepancyCount", "valueType": "number", "expected": "0" },
+        { "pointer": "/unaccountedSources", "valueType": "number", "expected": "0" },
+        { "pointer": "/unexplainedTargets", "valueType": "number", "expected": "0" },
+        { "pointer": "/rehearsalOutcome", "valueType": "string", "expected": "Passed" }
+      ],
+      "environment": {}
+    },
+    {
+      "id": "defective-to-corrected-comparison",
+      "name": "Compare defective and corrected assurance",
+      "phase": "Remediation comparison",
+      "workingDirectory": "workspace/integrated-assurance",
+      "arguments": ["compare", "{{demo.defectiveDryRunId}}", "{{demo.correctedDryRunId}}", "--json"],
+      "expectedOutcome": "success",
+      "expectedExitCode": 0,
+      "timeoutSeconds": 60,
+      "resultFile": "reports/defective-to-corrected.json",
+      "assertions": [
+        { "pointer": "/beforeQualification", "valueType": "string", "expected": "NOT QUALIFIED" },
+        { "pointer": "/afterQualification", "valueType": "string", "expected": "QUALIFIED" },
+        { "pointer": "/qualificationChanged", "valueType": "boolean", "expected": "true" }
+      ],
+      "environment": {}
+    }
+  ],
+  "resetStages": [],
+  "reportPaths": [
+    "{{workspace}}/integrated-assurance/.proofshift/reports/{{demo.falseReverseDryRunId}}.json",
+    "{{workspace}}/integrated-assurance/.proofshift/reports/{{demo.defectiveDryRunId}}.cli.json",
+    "{{workspace}}/integrated-assurance/.proofshift/reports/{{demo.correctedDryRunId}}.cli.json",
+    "{{workspace}}/integrated-assurance/.proofshift/reports/defective-to-corrected-compare.cli.json"
+  ],
+  "resetScope": "scenario-owned-only"
+}

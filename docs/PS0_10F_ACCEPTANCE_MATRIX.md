@@ -1,6 +1,6 @@
 # PS-0.10F Cross-Domain Assurance Acceptance Matrix
 
-Status: F6 Cross-Domain Assurance and all local/remote PS-0.10F gates pass; PS-0.10F remains In Progress and unaccepted pending review. Candidate `e3e437696808a16cda276e58a4460b9a297f0aea` passed GitHub Actions run `38120389177` with 318 passed, 0 failed, 0 skipped across all required jobs. This matrix is authoritative; stop here for review and do not begin PS-0.10G.
+Status: **Accepted October 11, 2026.** Candidate `e3e437696808a16cda276e58a4460b9a297f0aea` passed GitHub Actions run `38120389177` with 318 passed, 0 failed, 0 skipped across all required jobs and was merged to `main` as `77bceb325d925eb41c44b0eb7e3d3e5fb74542b9`. This matrix preserves the acceptance evidence.
 
 | # | Acceptance item | Status | Evidence or gap |
 |---:|---|---|---|
@@ -61,7 +61,7 @@ Status: F6 Cross-Domain Assurance and all local/remote PS-0.10F gates pass; PS-0
 | 55 | Remote CI has zero required skips | PASS | GitHub Actions run `38120389177` on candidate `e3e437696808a16cda276e58a4460b9a297f0aea`: build-and-test 261/261, RemoteStorage 53/53, Db2 2/2, Oracle 2/2; 318 passed, 0 failed, 0 skipped. |
 | 56 | Documentation complete for all packs | PASS | Pack docs, [Utility scope](UTILITY_PACK.md), [cross-domain assurance](PS0_10F_CROSS_DOMAIN_ASSURANCE.md), and [scenario index](PS0_10F_SCENARIO_INDEX.json) record counts, connectors, runtimes, and claim boundaries. |
 | 57 | Dependency review | PASS | F1-F6 added no external NuGet packages; F6 adds only internal `ProofShift.Reporting` → `ProofShift.Packs.Abstractions` project coupling for metadata-driven report construction. |
-| 58 | Final candidate SHA recorded | PASS | Candidate commit `e3e437696808a16cda276e58a4460b9a297f0aea` is pushed on `ps-0.10f-cross-domain-assurance`; not merged. |
+| 58 | Final candidate SHA recorded | PASS | Candidate `e3e437696808a16cda276e58a4460b9a297f0aea`; merged to `main` October 11, 2026 as `77bceb325d925eb41c44b0eb7e3d3e5fb74542b9`. |
 | 59 | PS-0.10G not begun | PASS | No PS-0.10G work started. |
 | 60 | Production migration/rollback not added | PASS | All current work remains assurance/rehearsal only. |
 
@@ -121,4 +121,4 @@ Status: F6 Cross-Domain Assurance and all local/remote PS-0.10F gates pass; PS-0
 
 ## Slice Order
 
-F6 Cross-Domain Assurance and all PS-0.10F acceptance gates pass. PS-0.10F remains In Progress and unaccepted pending review. Do not merge, begin PS-0.10G, add connectors/FHIR Bulk, or perform production migration/rollback.
+PS-0.10F is Accepted and merged as `77bceb325d925eb41c44b0eb7e3d3e5fb74542b9`. The accepted scope is closed; do not reinterpret this matrix as authorization for connectors/FHIR Bulk or production migration/rollback.
