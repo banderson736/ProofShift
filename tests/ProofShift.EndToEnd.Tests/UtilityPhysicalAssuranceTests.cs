@@ -2,6 +2,7 @@ using System.Data;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Containers;
 using Microsoft.Data.SqlClient;
@@ -19,6 +20,7 @@ using ProofShift.Evidence;
 using ProofShift.Graph;
 using ProofShift.Packs.Abstractions;
 using ProofShift.Packs.Utility;
+using ProofShift.Reporting;
 using ProofShift.Projection;
 using ProofShift.Recovery;
 using ProofShift.Snapshots;
@@ -62,6 +64,7 @@ public sealed class UtilityPhysicalAssuranceTests
     {
         Assert.Equal(DefectManifest.Length, DefectManifest.Select(defect => defect.Id).Distinct(StringComparer.Ordinal).Count());
         var fixture = CreateFixture(AccountCount);
+        Assert.Equal(10_200, fixture.Entities.Sum(entity => entity.Rows.Count) + fixture.Documents.Count);
         var root = Path.Combine(Path.GetTempPath(), $"proofshift-utility-f2-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         using var cleanup = new TemporaryDirectoryCleanup(root);
@@ -144,6 +147,14 @@ public sealed class UtilityPhysicalAssuranceTests
         Assert.Equal(capture.Checkpoint!.ArtifactCount, corrected.Ledger.DispositionCount);
         Assert.Equal(expectedTargetCount, corrected.Ledger.LineageCount);
 
+        var correctedRepeat = await VerifyExternalAsync(verification, configuration, graph, capture, fixture, rules, correctedRows,
+            fixture.Documents, new HashSet<string>(StringComparer.Ordinal), contextFactory, postgresTarget, filesystemTarget,
+            postgresContainer, Path.Combine(root, "external-corrected-repeat"));
+        Assert.NotEqual(corrected.Run.Id, correctedRepeat.Run.Id);
+        Assert.Equal(corrected.Run.TargetFingerprint, correctedRepeat.Run.TargetFingerprint);
+        Assert.Equal(corrected.Run.EvidenceFingerprint, correctedRepeat.Run.EvidenceFingerprint);
+        Assert.Equal(corrected.Ledger.Fingerprint, correctedRepeat.Ledger.Fingerprint);
+
         var defectiveRows = CloneRows(correctedRows);
         ApplyDefects(defectiveRows);
         var missingDocuments = new HashSet<string>([fixture.Documents[1].DocumentId], StringComparer.Ordinal);
@@ -186,6 +197,13 @@ public sealed class UtilityPhysicalAssuranceTests
         }.OrderBy(pair => pair.Key, StringComparer.Ordinal),
             meterReadCodeCounts.OrderBy(pair => pair.Key, StringComparer.Ordinal));
         Assert.Equal(2, failures.Count(finding => finding.RuleId.Value == "payment-total"));
+        Assert.Equal(26, failures.Length);
+        Assert.All(failures, finding =>
+        {
+            Assert.Equal("1", finding.RuleVersion);
+            Assert.NotEmpty(finding.Inputs);
+            Assert.False(string.IsNullOrWhiteSpace(finding.Explanation));
+        });
         Assert.Equal(expectedTargetCount - 2, defective.Ledger.LineageCount);
         Assert.Equal(capture.Checkpoint.ArtifactCount, defective.Ledger.DispositionCount);
 
@@ -202,6 +220,23 @@ public sealed class UtilityPhysicalAssuranceTests
         Assert.Equal(VerificationOutcome.Passed, dryRun.Verification!.Run.Outcome);
         Assert.Equal(DryRunQualificationStatus.Qualified, dryRun.Recovery!.Qualification.Status);
         Assert.Equal(0, dryRun.Verification.Findings.Count(finding => finding.Result == EvidenceResult.Fail));
+        var report = CrossDomainAssuranceReport.Create(configuration.Root.Project!.Name!, new UtilityPack(),
+            "Configured Utility migration invariants only; no tariff or regulatory billing certification.",
+            dryRun.Verification, dryRun.Recovery);
+        Assert.Equal("proofshift.utility", report.PackId);
+        Assert.Equal("0.10.0", report.PackVersion);
+        Assert.Equal("QUALIFIED", report.Qualification);
+        Assert.Equal(report.PackVersion, report.RuntimePackVersions[report.PackId]);
+        Assert.NotEmpty(report.RuleVersions);
+        Assert.All(report.RuleVersions.Values, version => Assert.Equal("1", version));
+        Assert.Contains(report.Concepts, concept => concept.SemanticType == "Utility.Account");
+        Assert.Contains(report.Rules, rule => rule.Type == "utility-reference-integrity" && rule.Version == "1");
+        Assert.Contains("no tariff", report.ClaimBoundary, StringComparison.Ordinal);
+        var reportJson = JsonSerializer.Serialize(report);
+        Assert.DoesNotContain("Fhir.Patient", reportJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Pension.Member", reportJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Justice.Case", reportJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("HCM.Worker", reportJson, StringComparison.Ordinal);
     }
 
     private static UtilityFixture CreateFixture(int accountCount)

@@ -26,7 +26,10 @@ public sealed class DomainPackConformanceTests
         "ProofShift.Verification",
         "ProofShift.Evidence",
         "ProofShift.Recovery",
+        "ProofShift.Projection",
+        "ProofShift.Snapshots",
         "ProofShift.Reporting",
+        "ProofShift.Packs.Abstractions",
         "ProofShift.Connectors.Abstractions"
     ];
 
@@ -58,6 +61,66 @@ public sealed class DomainPackConformanceTests
     public void FhirPackSatisfiesTheReusableConformanceContract()
     {
         DomainPackConformanceHarness.AssertConforms(() => new FhirPack());
+    }
+
+    [Fact]
+    public void FivePackRegistryBindsMetadataRulesVersionsAndIsolatedSchemas()
+    {
+        var packs = InstalledPacks();
+        var registry = new PackRegistry(packs);
+        var selections = packs.Select(pack => new PackConfigurationDto(pack.Id, pack.Version)).ToArray();
+        var ruleRegistry = registry.Resolve(selections);
+        var packFactories = packs.SelectMany(pack => pack.RuleFactories.Select(factory => (Pack: pack, Factory: factory))).ToArray();
+        var genericFactories = new GenericVerificationRuleProvider().RuleFactories;
+        var allDescriptors = ruleRegistry.Descriptors.ToDictionary(descriptor => descriptor.Type, StringComparer.Ordinal);
+
+        Assert.Equal(packFactories.Length + genericFactories.Count, allDescriptors.Count);
+        Assert.Equal(packFactories.Length, packFactories.Select(item => item.Factory.Type).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(packFactories.Select(item => (item.Factory.Type, item.Factory.Descriptor.Version)).OrderBy(item => item.Type, StringComparer.Ordinal),
+            packFactories.Select(item => (item.Factory.Type, allDescriptors[item.Factory.Type].Version)).OrderBy(item => item.Type, StringComparer.Ordinal));
+        Assert.Equal(selections.OrderBy(selection => selection.Id, StringComparer.Ordinal),
+            registry.Installed.Select(pack => new PackConfigurationDto(pack.Id, pack.Version)).OrderBy(selection => selection.Id, StringComparer.Ordinal));
+
+        var ruleSet = ruleRegistry.Resolve([new VerificationRuleDefinition(new RuleId("registry-accounting"),
+            "source-artifact-accounting", "1", EvidenceSeverity.Error)]);
+        Assert.Equal(packs.ToDictionary(pack => pack.Id, pack => pack.Version, StringComparer.Ordinal)
+            .Append(new KeyValuePair<string, string>(new GenericVerificationRuleProvider().Id, new GenericVerificationRuleProvider().Version))
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal),
+            ruleSet.ProviderVersions.OrderBy(pair => pair.Key, StringComparer.Ordinal));
+
+        foreach (var pack in packs)
+        {
+            var contribution = Assert.Single(pack.Metadata.ConfigurationSchemaContributions);
+            using var schema = JsonDocument.Parse(contribution.SchemaJson);
+            var schemaTypes = schema.RootElement.GetProperty("properties").GetProperty("rules")
+                .GetProperty("additionalProperties").GetProperty("oneOf").EnumerateArray()
+                .Select(rule => rule.GetProperty("properties").GetProperty("type").GetProperty("const").GetString()!)
+                .Order(StringComparer.Ordinal).ToArray();
+            var packTypes = pack.RuleFactories.Select(factory => factory.Type).Order(StringComparer.Ordinal).ToArray();
+            Assert.Equal(packTypes, contribution.RuleTypes.Order(StringComparer.Ordinal));
+            Assert.Equal(packTypes, schemaTypes);
+            Assert.All(schemaTypes, type => Assert.Contains(pack.RuleFactories, factory => factory.Type == type));
+        }
+
+        var unavailable = Assert.Throws<VerificationRuleException>(() => registry.Resolve([new PackConfigurationDto("proofshift.missing", "1")]));
+        Assert.Equal("PSPACK001", unavailable.Code);
+        var unsupported = Assert.Throws<VerificationRuleException>(() => registry.Resolve([
+            new PackConfigurationDto("proofshift.fhir", "9.9.9")]));
+        Assert.Equal("PSPACK002", unsupported.Code);
+
+        var hcmOnly = registry.Resolve([new PackConfigurationDto("proofshift.hcm", "0.10.0")]);
+        var fhirOnly = registry.Resolve([new PackConfigurationDto("proofshift.fhir", "0.10.0")]);
+        Assert.Contains(fhirOnly.Descriptors, descriptor => descriptor.Type == "fhir-quantity-fidelity");
+        Assert.DoesNotContain(fhirOnly.Descriptors, descriptor => descriptor.Type == "hcm-payroll-reconciliation");
+        Assert.Contains(hcmOnly.Descriptors, descriptor => descriptor.Type == "hcm-payroll-reconciliation");
+        Assert.DoesNotContain(hcmOnly.Descriptors, descriptor => descriptor.Type == "fhir-quantity-fidelity");
+        var foreignRule = Assert.Throws<VerificationRuleException>(() => hcmOnly.Resolve([
+            new VerificationRuleDefinition(new RuleId("foreign-fhir-quantity"), "fhir-quantity-fidelity", "1", EvidenceSeverity.Error,
+                structuredOptions: [new("targetNode", new StringValue("observations")),
+                    new("semanticType", new StringValue("Fhir.Observation")), new("identityField", new StringValue("id")),
+                    new("valueField", new StringValue("value")), new("unitField", new StringValue("unit")),
+                    new("unitSystemField", new StringValue("system")), new("unitCodeField", new StringValue("code"))]) ]));
+        Assert.Equal(VerificationIssueCodes.UnknownRuleType, foreignRule.Code);
     }
 
     [Fact]
@@ -109,7 +172,8 @@ public sealed class DomainPackConformanceTests
         {
             var assembly = Assembly.Load(new AssemblyName(assemblyName));
             Assert.DoesNotContain(assembly.GetReferencedAssemblies(), reference =>
-                reference.Name?.StartsWith("ProofShift.Packs.", StringComparison.Ordinal) == true);
+                reference.Name?.StartsWith("ProofShift.Packs.", StringComparison.Ordinal) == true &&
+                reference.Name != "ProofShift.Packs.Abstractions");
 
             var assemblyBytes = File.ReadAllBytes(assembly.Location);
             foreach (var term in packTerms)
@@ -127,6 +191,22 @@ public sealed class DomainPackConformanceTests
         {
             Assert.DoesNotContain(assembly.GetReferencedAssemblies(), reference =>
                 reference.Name is { } name && concretePackNames.Contains(name) && name != assembly.GetName().Name);
+        }
+    }
+
+    [Fact]
+    public void ConcretePacksDoNotOwnStorageCheckpointEvidenceOrRecoveryEngines()
+    {
+        var concretePacks = InstalledPacks().Select(pack => pack.GetType().Assembly).Distinct().ToArray();
+        foreach (var assembly in concretePacks)
+        {
+            var references = assembly.GetReferencedAssemblies();
+            Assert.DoesNotContain(references, reference => reference.Name?.StartsWith("ProofShift.Connectors.", StringComparison.Ordinal) == true);
+            Assert.DoesNotContain(references, reference => reference.Name is "Npgsql" or "Microsoft.Data.Sqlite" or "Microsoft.Data.Sqlite.Core");
+            Assert.DoesNotContain(assembly.GetTypes(), type => type.Name.EndsWith("VerificationWorkspace", StringComparison.Ordinal) ||
+                type.Name.EndsWith("CheckpointStore", StringComparison.Ordinal) ||
+                type.Name.EndsWith("EvidenceStore", StringComparison.Ordinal) ||
+                type.Name.EndsWith("RecoveryService", StringComparison.Ordinal));
         }
     }
 

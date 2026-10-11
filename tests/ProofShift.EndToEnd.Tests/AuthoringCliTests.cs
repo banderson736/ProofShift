@@ -10,6 +10,9 @@ namespace ProofShift.EndToEnd.Tests;
 
 public sealed class AuthoringCliTests
 {
+    private static readonly string[] ExpectedPackIds =
+        ["proofshift.fhir", "proofshift.hcm", "proofshift.justice", "proofshift.pension", "proofshift.utility"];
+
     [Theory]
     [InlineData("generic")]
     [InlineData("pension")]
@@ -67,30 +70,101 @@ public sealed class AuthoringCliTests
     }
 
     [Fact]
-    public async Task FhirPackIsAvailableThroughGenericAuthoringCommands()
+    public async Task FivePacksShareDeterministicAuthoringAndEffectiveConfiguration()
     {
-        var listing = await RunAsync("packs", "list", "--json");
-        Assert.Equal(0, listing.ExitCode);
-        using var packs = JsonDocument.Parse(listing.Output);
-        var fhir = packs.RootElement.EnumerateArray().Single(pack => pack.GetProperty("id").GetString() == "proofshift.fhir");
-        Assert.Equal("0.10.0", fhir.GetProperty("version").GetString());
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-five-pack-authoring-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var firstPackListing = await RunAsync("packs", "list", "--json");
+            var secondPackListing = await RunAsync("packs", "list", "--json");
+            Assert.Equal(0, firstPackListing.ExitCode);
+            Assert.Equal(firstPackListing.Output, secondPackListing.Output);
+            using var packs = JsonDocument.Parse(firstPackListing.Output);
+            var packEntries = packs.RootElement.EnumerateArray().ToArray();
+            var packIds = packEntries.Select(pack => pack.GetProperty("id").GetString()!).ToArray();
+            Assert.Equal(packIds.Order(StringComparer.Ordinal), packIds);
+            Assert.Equal(ExpectedPackIds, packIds);
 
-        var description = await RunAsync("packs", "describe", "proofshift.fhir", "--json");
-        Assert.Equal(0, description.ExitCode);
-        using var metadata = JsonDocument.Parse(description.Output);
-        Assert.Contains(metadata.RootElement.GetProperty("concepts").EnumerateArray(),
-            concept => concept.GetProperty("semanticType").GetString() == "Fhir.Observation");
+            var firstRuleListing = await RunAsync("rules", "list", "--json");
+            var secondRuleListing = await RunAsync("rules", "list", "--json");
+            Assert.Equal(0, firstRuleListing.ExitCode);
+            Assert.Equal(firstRuleListing.Output, secondRuleListing.Output);
+            using var rules = JsonDocument.Parse(firstRuleListing.Output);
+            var ruleEntries = rules.RootElement.EnumerateArray().ToArray();
+            var ruleTypes = ruleEntries.Select(rule => rule.GetProperty("type").GetString()!).ToArray();
+            Assert.Equal(ruleTypes.Order(StringComparer.Ordinal), ruleTypes);
 
-        var schema = await RunAsync("packs", "schema", "proofshift.fhir");
-        Assert.Equal(0, schema.ExitCode);
-        using var rulesSchema = JsonDocument.Parse(schema.Output);
-        var ruleTypes = rulesSchema.RootElement.GetProperty("properties").GetProperty("rules")
-            .GetProperty("additionalProperties").GetProperty("oneOf").EnumerateArray()
-            .Select(rule => rule.GetProperty("properties").GetProperty("type").GetProperty("const").GetString())
-            .ToHashSet(StringComparer.Ordinal);
-        Assert.Contains("fhir-typed-reference-integrity", ruleTypes);
-        Assert.Contains("fhir-instant-fidelity", ruleTypes);
-        Assert.Contains("fhir-quantity-fidelity", ruleTypes);
+            var allPackSchemaTypes = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var pack in packEntries)
+            {
+                var packId = pack.GetProperty("id").GetString()!;
+                var packVersion = pack.GetProperty("version").GetString()!;
+                var description = await RunAsync("packs", "describe", packId, "--json");
+                Assert.Equal(0, description.ExitCode);
+                using var metadata = JsonDocument.Parse(description.Output);
+                Assert.Equal(packId, metadata.RootElement.GetProperty("id").GetString());
+                Assert.Equal(packVersion, metadata.RootElement.GetProperty("version").GetString());
+                Assert.NotEmpty(metadata.RootElement.GetProperty("concepts").EnumerateArray());
+
+                var ownedRules = metadata.RootElement.GetProperty("ruleProviders").EnumerateArray()
+                    .Single().GetProperty("rules").EnumerateArray()
+                    .Select(rule => (Type: rule.GetProperty("type").GetString()!, Version: rule.GetProperty("version").GetString()!))
+                    .OrderBy(rule => rule.Type, StringComparer.Ordinal).ToArray();
+                Assert.NotEmpty(ownedRules);
+                var representative = await RunAsync("rules", "describe", ownedRules[0].Type, "--json");
+                Assert.Equal(0, representative.ExitCode);
+                using var ruleDescription = JsonDocument.Parse(representative.Output);
+                Assert.Equal(packId, ruleDescription.RootElement.GetProperty("provider").GetString());
+                Assert.Equal(ownedRules[0].Version, ruleDescription.RootElement.GetProperty("version").GetString());
+
+                var schema = await RunAsync("packs", "schema", packId);
+                Assert.Equal(0, schema.ExitCode);
+                using var rulesSchema = JsonDocument.Parse(schema.Output);
+                var schemaTypes = rulesSchema.RootElement.GetProperty("properties").GetProperty("rules")
+                    .GetProperty("additionalProperties").GetProperty("oneOf").EnumerateArray()
+                    .Select(rule => rule.GetProperty("properties").GetProperty("type").GetProperty("const").GetString()!)
+                    .Order(StringComparer.Ordinal).ToArray();
+                Assert.Equal(ownedRules.Select(rule => rule.Type).Order(StringComparer.Ordinal), schemaTypes);
+                foreach (var type in schemaTypes)
+                {
+                    Assert.True(allPackSchemaTypes.Add(type), $"Rule type '{type}' is contributed by multiple pack schemas.");
+                    Assert.Contains(ruleEntries, entry => entry.GetProperty("type").GetString() == type &&
+                        entry.GetProperty("provider").GetString() == packId);
+                }
+
+                var projectRoot = Path.Combine(root, packId[(packId.LastIndexOf('.') + 1)..]);
+                Assert.Equal(0, (await RunAsync("init", projectRoot)).ExitCode);
+                var projectPath = Path.Combine(projectRoot, "proofshift.yaml");
+                await SetPackSelectionAsync(projectPath, packId, packVersion);
+                var effective = await RunAsync("config", "show", projectPath, "--effective", "--json");
+                Assert.Equal(0, effective.ExitCode);
+                using var effectiveConfiguration = JsonDocument.Parse(effective.Output);
+                Assert.Equal(packVersion, effectiveConfiguration.RootElement.GetProperty("packs").GetProperty(packId).GetString());
+                Assert.NotEmpty(effectiveConfiguration.RootElement.GetProperty("rules").EnumerateArray());
+                Assert.Contains(packId, effective.Output, StringComparison.Ordinal);
+                Assert.Contains("PROOFSHIFT_TARGET_CONNECTION", effective.Output, StringComparison.Ordinal);
+                Assert.DoesNotContain("Password=", effective.Output, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
+    private static async Task SetPackSelectionAsync(string path, string packId, string version)
+    {
+        var yaml = new YamlStream();
+        using (var reader = new StringReader(await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken)))
+            yaml.Load(reader);
+        var root = Assert.IsType<YamlMappingNode>(yaml.Documents.Single().RootNode);
+        var pack = new YamlMappingNode
+        {
+            { new YamlScalarNode("id"), new YamlScalarNode(packId) },
+            { new YamlScalarNode("version"), new YamlScalarNode(version) }
+        };
+        root.Children[new YamlScalarNode("packs")] = new YamlSequenceNode(pack);
+        using var writer = new StringWriter();
+        yaml.Save(writer, assignAnchors: false);
+        await File.WriteAllTextAsync(path, writer.ToString(), TestContext.Current.CancellationToken);
     }
 
     [Fact]

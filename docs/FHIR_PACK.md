@@ -8,7 +8,7 @@ The physical scenario streams a normalized NDJSON export through the existing st
 
 The feed has one selected record per resource with `resourceType` and `id`, plus flattened fields for coding, Quantity, and references. This shape is deliberate: the current NDJSON selector supports nested object paths but does not index `coding[]` arrays. It is not a general FHIR JSON parser, Bundle reader, FHIR Bulk transport, or complete R4/profile/US Core validator. No new connector was added.
 
-FHIR-style relative references are configured as `ResourceType/id`. The pack-owned `fhir-typed-reference-integrity` rule checks both the configured resource type and the key against ordered, independently observed target records. The rule does not claim terminology validation, clinical correctness, or medical appropriateness.
+FHIR-style relative references are configured as `ResourceType/id`. The pack-owned `fhir-typed-reference-integrity` rule parses the expected resource type and ID, then delegates the ordered target scan to shared `OrderedReferenceMatcher` mechanics in `Packs.Abstractions`. The rule does not claim terminology validation, clinical correctness, or medical appropriateness.
 
 `fhir-quantity-fidelity` compares a graph-derived exact decimal with configured unit display, unit-system URI, and unit code fields. Code/system transformations are declared in the migration graph and compared through generic attribute verification. `fhir-instant-fidelity` compares the exact graph-derived text and requires an explicit `Z` or `+/-HH:mm` offset. The target stores these selected instants as text because PostgreSQL `timestamptz` preserves an instant but normalizes away the original offset spelling.
 

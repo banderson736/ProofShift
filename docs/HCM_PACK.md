@@ -12,7 +12,7 @@
 
 Generic source accounting, presence, uniqueness, attribute comparison, lineage, unexpected-target, and configured `effective-dated-interval` rules are reused. Pack-owned rules are:
 
-- `hcm-reference-integrity`: descriptor-bound, globally ordered source-reference and referenced-key scans; it performs no lookup per worker or relationship.
+- `hcm-reference-integrity`: descriptor-bound, globally ordered source-reference and referenced-key scans using shared `OrderedReferenceMatcher` mechanics; it performs no lookup per worker or relationship.
 - `hcm-current-employment`: derive the interval covering a configured as-of date from history, requiring exactly one per observed worker rather than trusting an `is_current` flag.
 - `hcm-exact-value-fidelity`: compare compensation/leave quantities as exact `decimal` values.
 - `hcm-payroll-reconciliation`: preserve worker, period, currency, gross, deductions and net exactly and validate the configured equation `gross - deductions = net`. It does not calculate taxes or payroll.

@@ -1,6 +1,6 @@
 # ADR-0027: Domain Pack Conformance and Genericity Guardrails
 
-Status: Proposed (PS-0.10F1; pending review)
+Status: Proposed (PS-0.10F; pending final acceptance review)
 
 ## Context
 
@@ -25,9 +25,9 @@ PS-0.10F begins a cross-domain architecture proof. `IDomainPack` previously expo
 - Every pack can be checked through the same conformance harness before it is used in a physical scenario.
 - Metadata and descriptor drift fail at registry construction instead of silently changing the authoring surface.
 - Domain terminology and report sections can stay in their owning pack while generic Verification, Reporting, and connector abstractions remain pack-neutral.
-- The CLI still has legacy Pension-specific report command flow; pack-neutral report dispatch is required by the later cross-domain reporting gate and is not claimed complete by F1.
-- Pension, Utility, Justice, and HCM packs are installed and checked by the same shared conformance/architecture test surface. Their generic runtime assemblies remain free of concrete pack references and semantic branches. FHIR and final five-pack cross-domain proof remain NOT YET.
+- The CLI still has legacy Pension-specific persisted-report command flow. F6 adds and tests one generic metadata-driven assurance report model across five physical scenarios; this does not claim pack-neutral persisted-report dispatch.
+- All five packs are checked by the same conformance/architecture test surface. Generic runtime projects may depend on the shared `Packs.Abstractions` contract but not concrete packs, and compiled generic binaries remain free of installed domain terms.
 
 ## Validation
 
-The shared conformance and architecture class passes 7/7 with four packs installed. F1 Pension semantic rules pass 4/4; report aggregation passes 1/1; Pension Fast passes exact 149/0 and corrected `QUALIFIED`. F2 Utility and F3 Justice physical gates remain locally validated. F4 HCM passes pack tests 3/3 and physical assurance 1/1 with 14 seeded defects, exactly 25 findings, a 5,000-worker physical fixture, generic effective-date interval reuse, exact decimal payroll/compensation, and corrected `QUALIFIED` Recovery. These are local slice checks, not full PS-0.10F or remote-CI acceptance.
+The shared five-pack conformance/architecture group passes 10/10. The aggregate registry test verifies exact five-pack selection, global rule-type uniqueness, metadata/version binding, fail-closed unknown ID/version, schema isolation, and cross-pack contamination. The real CLI matrix passes all five pack/rule/effective-config surfaces. All five final physical scenarios pass with their frozen exact corpora and corrected `QUALIFIED`; their runtime pack/rule-version metadata is asserted in the generic report model. Focused local checks do not constitute full PS-0.10F acceptance or remote CI.

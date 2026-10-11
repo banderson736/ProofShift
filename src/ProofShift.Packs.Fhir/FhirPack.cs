@@ -127,33 +127,21 @@ public sealed class FhirTypedReferenceIntegrityRule(VerificationRuleDefinition d
         var referenceNode = Option("referenceNode");
         var referenceSemanticType = Option("referenceSemanticType");
         var referenceKeyField = Option("referenceKeyField");
-        var referenceOrder = new VerificationOrderingKey(referenceSemanticType, referenceKeyField, VerificationOrderingRole.Lookup);
-        await using var sources = context.Workspace.ReadArtifactRecordsByKeysAsync(VerificationArtifactRole.ActualTarget,
-            sourceNode, semanticType, [RequiredOrderingKeys.First()], cancellationToken).GetAsyncEnumerator(cancellationToken);
-        await using var references = context.Workspace.ReadArtifactRecordsByKeysAsync(VerificationArtifactRole.ActualTarget,
-            referenceNode, referenceSemanticType, [referenceOrder], cancellationToken).GetAsyncEnumerator(cancellationToken);
-        var hasReference = await references.MoveNextAsync().ConfigureAwait(false);
         var failures = 0;
-        while (await sources.MoveNextAsync().ConfigureAwait(false))
+        await foreach (var match in OrderedReferenceMatcher.ScanAsync(context, sourceNode, semanticType, referenceField,
+            referenceNode, referenceSemanticType, referenceKeyField,
+            record => ParseReferenceKey(ReadText(record, referenceField), expectedResourceType),
+            record => ReadText(record, referenceKeyField), cancellationToken)
+            .WithCancellation(cancellationToken).ConfigureAwait(false))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var source = sources.Current;
-            source.RequireDeclaredField(referenceField);
-            var rawReference = ReadText(source, referenceField);
-            var separator = rawReference.IndexOf('/');
-            var resourceType = separator > 0 && separator == rawReference.LastIndexOf('/') ? rawReference[..separator] : string.Empty;
-            var resourceId = resourceType.Length == 0 ? string.Empty : rawReference[(separator + 1)..];
-            var resolves = StringComparer.Ordinal.Equals(resourceType, expectedResourceType) && resourceId.Length > 0;
-            while (resolves && hasReference && StringComparer.Ordinal.Compare(ReadText(references.Current, referenceKeyField), resourceId) < 0)
-                hasReference = await references.MoveNextAsync().ConfigureAwait(false);
-            resolves &= hasReference && StringComparer.Ordinal.Equals(ReadText(references.Current, referenceKeyField), resourceId);
-            if (resolves) continue;
+            if (match.Resolves) continue;
+            var rawReference = ReadText(match.Source, referenceField);
 
             failures++;
             yield return Finding(context, EvidenceType.Relationship, EvidenceResult.Fail, "FhirReferenceMissing",
-                $"{Id.Value}:{source.NodeKey}:{Fingerprint(rawReference)}",
+                $"{Id.Value}:{match.Source.NodeKey}:{Fingerprint(rawReference)}",
                 "A configured typed resource reference does not resolve to the required resource type and observed target identity.",
-                [ArtifactInput(context, source.NodeKey, source.Artifact)],
+                [ArtifactInput(context, match.Source.NodeKey, match.Source.Artifact)],
                 new EvidenceValue(new StringValue("resolvable typed reference")),
                 new EvidenceValue(new StringValue("missing or wrong resource type")));
         }
@@ -175,6 +163,14 @@ public sealed class FhirTypedReferenceIntegrityRule(VerificationRuleDefinition d
             IntegerValue integer => integer.Value.ToString(CultureInfo.InvariantCulture),
             _ => string.Empty
         };
+    }
+
+    private static string? ParseReferenceKey(string reference, string expectedResourceType)
+    {
+        var separator = reference.IndexOf('/');
+        if (separator <= 0 || separator != reference.LastIndexOf('/') || separator == reference.Length - 1 ||
+            !StringComparer.Ordinal.Equals(reference[..separator], expectedResourceType)) return null;
+        return reference[(separator + 1)..];
     }
 
     private static string Fingerprint(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
