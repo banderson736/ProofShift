@@ -194,11 +194,12 @@ try {
     Push-Location $repositoryRoot
     try {
         Invoke-DotNet @("restore", "tests/ProofShift.EndToEnd.Tests/ProofShift.EndToEnd.Tests.csproj")
+        Invoke-DotNet @("build", "tests/ProofShift.EndToEnd.Tests/ProofShift.EndToEnd.Tests.csproj",
+            "--configuration", "Release", "--no-restore", "-p:ContinuousIntegrationBuild=true")
+
         Invoke-DotNet @("publish", "src/ProofShift.Cli/ProofShift.Cli.csproj", "--configuration", "Release",
             "--no-restore", "--output", (Join-Path $packageRoot "app"), "-p:UseAppHost=false",
             "-p:DebugSymbols=false", "-p:DebugType=None", "-p:ContinuousIntegrationBuild=true")
-        Invoke-DotNet @("build", "tests/ProofShift.EndToEnd.Tests/ProofShift.EndToEnd.Tests.csproj",
-            "--configuration", "Release", "--no-restore", "-p:ContinuousIntegrationBuild=true")
 
         $testOutput = Join-Path $repositoryRoot "tests/ProofShift.EndToEnd.Tests/bin/Release/net10.0"
         if (-not (Test-Path -LiteralPath (Join-Path $testOutput "ProofShift.EndToEnd.Tests.dll"))) {
