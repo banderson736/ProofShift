@@ -1,6 +1,6 @@
 # ADR-0028: Generic effective-dated interval verification
 
-- Status: Proposed for PS-0.10F review
+- Status: Accepted for PS-0.10F (October 11, 2026; merged as `77bceb325d925eb41c44b0eb7e3d3e5fb74542b9`)
 - Date: 2026-10-10
 
 ## Context
@@ -30,4 +30,4 @@ F4 must validate effective-dated employment history without embedding Worker, Em
 
 ## Validation
 
-Verification workspace/interval tests pass 40/40, including valid sequential intervals, inclusive overlap, open-ended history, invalid bounds, and configured continuity. Five-pack conformance/genericity passes 10/10; all five final physical assurance entry points pass, including HCM overlap plus separate boundary-fidelity findings. This confirms no concrete HCM vocabulary in the generic runtime; the ADR remains Proposed pending PS-0.10F review and remote closure.
+Verification workspace/interval tests pass 40/40, including valid sequential intervals, inclusive overlap, open-ended history, invalid bounds, and configured continuity. Five-pack conformance/genericity passes 10/10; all five final physical assurance entry points pass, including HCM overlap plus separate boundary-fidelity findings. This confirms no concrete HCM vocabulary in the generic runtime. Full local and remote acceptance passed; see the [PS-0.10F acceptance matrix](../PS0_10F_ACCEPTANCE_MATRIX.md), including run 38120389177.

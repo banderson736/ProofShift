@@ -29,6 +29,50 @@ jobs:
             dotnet test --project "$project" --no-restore
           done
 
+  evaluation-package-smoke:
+    needs: build-and-test
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Verify Docker prerequisite on clean Windows runner
+        shell: pwsh
+        run: |
+          docker info --format '{{.ServerVersion}}'
+          if ($LASTEXITCODE -ne 0) { throw "A Docker-compatible runtime is required for the packaged physical demos." }
+      - name: Build reproducible binary-only evaluation package twice
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-PS-0.10G.zip"
+          $repeatArchive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-PS-0.10G-repeat.zip"
+          ./scripts/package-evaluation.ps1 -OutputFile $archive
+          ./scripts/package-evaluation.ps1 -OutputFile $repeatArchive
+          $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $repeatHash = (Get-FileHash -LiteralPath $repeatArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($archiveHash -ne $repeatHash) { throw "Two builds from the same clean candidate produced different package hashes." }
+          Write-Output "Reproducible package SHA-256: $archiveHash"
+      - name: Smoke extracted package on clean Windows state
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-PS-0.10G.zip"
+          $extractRoot = Join-Path $env:RUNNER_TEMP "G Evaluation\ext"
+          $resultFile = Join-Path $env:RUNNER_TEMP "G Evaluation\package-smoke-result.json"
+          $revision = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Could not identify the checked-out candidate SHA." }
+          ./scripts/smoke-evaluation-package.ps1 -ArchivePath $archive -ExtractionRoot $extractRoot `
+            -ResultFile $resultFile -ExpectedRevision $revision
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proofshift-evaluation-ps-0.10g
+          path: |
+            ${{ runner.temp }}/ProofShift-Evaluation-PS-0.10G.zip
+            ${{ runner.temp }}/ProofShift-Evaluation-PS-0.10G.zip.sha256
+            ${{ runner.temp }}/G Evaluation/package-smoke-result.json
+          if-no-files-found: error
+
   oracle-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 45

@@ -1,6 +1,6 @@
 {
   "format": "proofshift-ps010f-scenario-index-v1",
-  "status": "F6 locally complete; PS-0.10F remains in progress pending final acceptance closure",
+  "status": "PS-0.10F accepted 2026-10-11; merged as 77bceb325d925eb41c44b0eb7e3d3e5fb74542b9",
   "scenarios": [
     {
       "packId": "proofshift.pension",
@@ -111,11 +111,11 @@
   ],
   "externalTargetObservation": ["proofshift.utility", "proofshift.justice", "proofshift.hcm", "proofshift.fhir"],
   "finalClosureGates": {
-    "fullLocalSuite": "NOT YET",
-    "remoteStorage": "NOT YET",
-    "oracle": "NOT YET",
-    "db2": "NOT YET",
-    "remoteCi": "NOT YET",
-    "candidateCommit": "NOT YET"
+    "fullLocalSuite": "PASS",
+    "remoteStorage": "PASS",
+    "oracle": "PASS",
+    "db2": "PASS",
+    "remoteCi": "PASS",
+    "candidateCommit": "e3e437696808a16cda276e58a4460b9a297f0aea; merged as 77bceb325d925eb41c44b0eb7e3d3e5fb74542b9"
   }
 }

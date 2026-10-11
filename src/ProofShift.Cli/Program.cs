@@ -29,6 +29,11 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        if (args is ["--version"] or ["version"])
+        {
+            Console.WriteLine("ProofShift PS-0.10G");
+            return 0;
+        }
         if (args.Length > 0 && args[0] is "scaffold" or "mapping")
             return await MappingAuthoringCommands.RunAsync(args).ConfigureAwait(false);
         if (args.Length > 0 && args[0] is "explain" or "config")
@@ -39,12 +44,14 @@ internal static class Program
             return await ProjectInitCommand.RunAsync(args).ConfigureAwait(false);
         if (args.Length > 0 && args[0] is "packs" or "rules" or "capabilities" or "connectors")
             return RuleAuthoringCommands.Run(args);
-        if (args.Length >= 2 && string.Equals(args[0], "demo", StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(args[1], "generate", StringComparison.OrdinalIgnoreCase))
-            return await PensionDemoGenerator.GenerateAsync(args.Skip(2).ToArray()).ConfigureAwait(false);
-        if (args.Length >= 2 && string.Equals(args[0], "demo", StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(args[1], "benchmark", StringComparison.OrdinalIgnoreCase))
-            return await PensionDemoGenerator.BenchmarkAsync(args.Skip(2).ToArray()).ConfigureAwait(false);
+        if (args.Length > 0 && string.Equals(args[0], "demo", StringComparison.OrdinalIgnoreCase))
+        {
+            if (args.Length >= 2 && string.Equals(args[1], "generate", StringComparison.OrdinalIgnoreCase))
+                return await PensionDemoGenerator.GenerateAsync(args.Skip(2).ToArray()).ConfigureAwait(false);
+            if (args.Length >= 2 && string.Equals(args[1], "benchmark", StringComparison.OrdinalIgnoreCase))
+                return await PensionDemoGenerator.BenchmarkAsync(args.Skip(2).ToArray()).ConfigureAwait(false);
+            return await DemoCommands.RunAsync(args.Skip(1).ToArray()).ConfigureAwait(false);
+        }
 
         if (args.Length >= 2 && string.Equals(args[0], "report", StringComparison.OrdinalIgnoreCase) &&
             Guid.TryParse(args[1], out _) && args.Skip(2).All(argument => string.Equals(argument, "--json", StringComparison.OrdinalIgnoreCase)))
@@ -1455,7 +1462,7 @@ internal static class Program
         issue.Message);
 
     private static void WriteUsage() =>
-        Console.Error.WriteLine("Usage: proofshift validate <config> [--json] | proofshift plan <config> [--json] | proofshift inspect <config> [--json] | proofshift snapshot <config> [--json] | proofshift project <config> [--checkpoint <id-or-path>] [--json] | proofshift verify <config> --checkpoint <id> --projection <run-id> [--json] | proofshift evidence <config> --run <verification-run-id> [--json] | proofshift recovery <config> --run <dry-run-id> [--json] | proofshift report <config> --run <dry-run-id> [--json] | proofshift report <dry-run-id> [--json, reads current-directory stores] | proofshift compare <config> --before <dry-run-id> --after <dry-run-id> [--json] | proofshift compare <before-dry-run-id> <after-dry-run-id> [--json, reads current-directory stores] | proofshift demo generate <output-directory> [--scale fast|large] [--seed <integer>] | proofshift demo benchmark [--scale fast|large] [--seed <integer>] | proofshift dry-run <config> [--json]");
+        Console.Error.WriteLine("Usage: proofshift validate <config> [--json] | proofshift plan <config> [--json] | proofshift inspect <config> [--json] | proofshift snapshot <config> [--json] | proofshift project <config> [--checkpoint <id-or-path>] [--json] | proofshift verify <config> --checkpoint <id> --projection <run-id> [--json] | proofshift evidence <config> --run <verification-run-id> [--json] | proofshift recovery <config> --run <dry-run-id> [--json] | proofshift report <config> --run <dry-run-id> [--json] | proofshift report <dry-run-id> [--json, reads current-directory stores] | proofshift compare <config> --before <dry-run-id> --after <dry-run-id> [--json] | proofshift compare <before-dry-run-id> <after-dry-run-id> [--json, reads current-directory stores] | proofshift demo list | describe <id> | preflight <id> | run <id> | reset <id> | demo generate <output-directory> [--scale fast|large] [--seed <integer>] | demo benchmark [--scale fast|large] [--seed <integer>] | proofshift dry-run <config> [--json]");
 
     private sealed record SnapshotOutput(
         string CheckpointId,

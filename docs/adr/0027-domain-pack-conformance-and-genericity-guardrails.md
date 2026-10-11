@@ -1,6 +1,6 @@
 # ADR-0027: Domain Pack Conformance and Genericity Guardrails
 
-Status: Proposed (PS-0.10F; pending final acceptance review)
+Status: Accepted for PS-0.10F (October 11, 2026; merged as `77bceb325d925eb41c44b0eb7e3d3e5fb74542b9`)
 
 ## Context
 
@@ -30,4 +30,4 @@ PS-0.10F begins a cross-domain architecture proof. `IDomainPack` previously expo
 
 ## Validation
 
-The shared five-pack conformance/architecture group passes 10/10. The aggregate registry test verifies exact five-pack selection, global rule-type uniqueness, metadata/version binding, fail-closed unknown ID/version, schema isolation, and cross-pack contamination. The real CLI matrix passes all five pack/rule/effective-config surfaces. All five final physical scenarios pass with their frozen exact corpora and corrected `QUALIFIED`; their runtime pack/rule-version metadata is asserted in the generic report model. Focused local checks do not constitute full PS-0.10F acceptance or remote CI.
+The shared five-pack conformance/architecture group passes 10/10. The aggregate registry test verifies exact five-pack selection, global rule-type uniqueness, metadata/version binding, fail-closed unknown ID/version, schema isolation, and cross-pack contamination. The real CLI matrix passes all five pack/rule/effective-config surfaces. All five final physical scenarios pass with their frozen exact corpora and corrected `QUALIFIED`; their runtime pack/rule-version metadata is asserted in the generic report model. Full local and remote acceptance passed; see the [PS-0.10F acceptance matrix](../PS0_10F_ACCEPTANCE_MATRIX.md), including run 38120389177.

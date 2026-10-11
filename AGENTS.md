@@ -4,9 +4,9 @@ PS-0.10C Enterprise Connector & Data-Format Coverage is Accepted after GitHub Ac
 
 ## Current Assignment
 
-PS-0.10E Test Discovery and Acceptance Reconciliation is Accepted: candidate `a6e8b15528df5767dd5368f96c000d8dcfb0d1f1` passed GitHub Actions run 38068572196 and is merged to `main` as `d5bcf8b528bd9d7370841fbfb92625a8954fa75d`. F6 Cross-Domain Assurance is locally complete; PS-0.10F remains In Progress and unaccepted pending final acceptance closure. Review the authoritative [PS-0.10F acceptance matrix](docs/PS0_10F_ACCEPTANCE_MATRIX.md), then stop. Do not begin PS-0.10G, add connectors/FHIR Bulk, or perform production migration/rollback.
+PS-0.10F Cross-Domain Assurance is Accepted (October 11, 2026), merged to `main` as `77bceb325d925eb41c44b0eb7e3d3e5fb74542b9`. Candidate `e3e437696808a16cda276e58a4460b9a297f0aea` passed run 38120389177 with 318 passed, 0 failed, 0 skipped across all four required jobs. The authoritative [PS-0.10F acceptance matrix](docs/PS0_10F_ACCEPTANCE_MATRIX.md) records the evidence.
 
-The explicit PS-0.10F6 assignment superseded historical statements below that F6 was unassigned. F6 local gates are complete; stop for review and do not begin PS-0.10G. FHIR Bulk transport, new connectors, and production migration/rollback remain out of scope.
+Current assignment: PS-0.10G Demo & Product Packaging acceptance closure only. G1-G6 are implemented and locally exercised; all five packaged demos passed after extraction on the existing Windows host, not a fresh machine. Local solution build and tests passed: 328 passed, 0 failed, 3 documented Windows symlink-capability skips. Clean Windows package-smoke, candidate review/SHA, and remote CI remain pending. Linux packaged evaluation is unclaimed. Do not add features or begin PS-1.0, production migration/rollback, connectors, FHIR Bulk, new domain packs, AI-assisted mapping/rules, or a web UI.
 
 This repository is intended to be developed primarily with an IDE coding agent while preserving product/architecture continuity.
 

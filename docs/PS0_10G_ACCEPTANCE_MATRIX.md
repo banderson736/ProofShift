@@ -1,0 +1,116 @@
+# PS-0.10G Demo & Product Packaging Acceptance Matrix
+
+Status: In Progress, assigned October 11, 2026. Accepted baseline: PS-0.10F merge `77bceb325d925eb41c44b0eb7e3d3e5fb74542b9`. G1-G6 are implemented and locally exercised. All five demos passed from the extracted package on the existing Windows host; this is not a fresh-machine proof. The clean Windows package-smoke, vendor integration jobs, final candidate SHA, and final remote CI remain pending. Linux packaged evaluation is explicitly unclaimed. Do not begin PS-1.0 or out-of-scope product/production work.
+
+| # | Acceptance item | Status | Evidence or gap |
+|---:|---|---|---|
+| 1 | PS-0.10F accepted status synchronized | PASS | README, roadmap, status instructions, 0.10F matrix/index, Decisions, and ADR-0027/0028 record acceptance on 2026-10-11 and merge `77bceb325d925eb41c44b0eb7e3d3e5fb74542b9`. |
+| 2 | Generic demo scenario contract | PASS | Strict v1 contract covers pack/version, claim boundary, requirements, systems, accepted-index reference, ordered stages, typed result assertions, reports, and scoped cleanup; a display-name change is tested not to alter the project graph hash. See [Demo Scenario Manifest](demo/DEMO_SCENARIO_MANIFEST.md) and [ADR-0029](adr/0029-generic-demo-scenario-contract.md). |
+| 3 | Deterministic scenario enumeration | PASS | CLI process test builds a temporary two-manifest catalog and verifies ordinal listing and byte-stable repeated JSON output. |
+| 4 | Scenario describe | PASS | CLI process test verifies pack/domain metadata, claim boundary, and accepted defective/corrected expectations resolve from the 0.10F index. |
+| 5 | Requirements preflight | PASS | CLI tests verify missing fixture and occupied-port diagnostics; implementation checks .NET SDK, Docker when required, disk, ports, project/index, and fixture paths. |
+| 6 | Safe scenario reset | PASS | Marker-owned `.proofshift/demos/<id>` reset refuses unowned paths, preserves unrelated scenario data, rejects reparse points, and has host-guarded symlink coverage. That test skips here because Windows denies symlink creation. Project state is materialized inside the owned workspace. |
+| 7 | Reset/repeat behavior | PASS | CLI process test runs, refuses overwrite before reset, resets, reruns, compares stable stage results, and proves the referenced project is copied/used inside the scenario workspace. |
+| 8 | Non-interactive demo lifecycle | PASS | Ordered manifest stages launch ProofShift with argument lists, timeouts, and typed JSON assertions; no shell or prompts. |
+| 9 | Expected defective result and exit codes | PASS | Expected nonzero stage must persist JSON and satisfy assertions; an undeclared nonzero exit fails. Stable CLI/runtime, blocked-preflight, expected-defect, and success outcomes use distinct exits. |
+| 10 | Pension scenario discoverable | PASS | `demo list`, `describe pension`, and `preflight pension` resolve the manifest and accepted `pension-fast` reference. |
+| 11 | Pension exact defective assertions | PASS | Full Docker-backed run asserts 8,495 checkpoint artifacts, 8,595 targets, and exactly 149 defective findings against the accepted index. |
+| 12 | Pension NOT QUALIFIED presentation | PASS | Default output states 149 defective business discrepancies and `NOT QUALIFIED`; the persisted defective report asserts 149. |
+| 13 | Pension Evidence output | PASS | Scenario reports are persisted in the owned workspace; Evidence is verified by the accepted physical fixture and its run-linked report. |
+| 14 | Pension false-Reverse presentation | PASS | False-Reverse report asserts Verification `PASSED` with 0 Verification failures, two rejected Reverse edges, and Recovery qualification `NOT QUALIFIED`. The report taxonomy separately counts those two Recovery findings. |
+| 15 | Pension corrected zero findings | PASS | Corrected report asserts 0 discrepancies, 0 Verification failures, 0 unaccounted sources, and 0 unexplained targets. |
+| 16 | Pension Recovery PASS | PASS | Corrected report asserts Recovery rehearsal `Passed`; the accepted scenario index binds the PASS assessment. |
+| 17 | Pension QUALIFIED result | PASS | Corrected fixture and persisted report both assert `QUALIFIED`. |
+| 18 | Pension repeatability | PASS | Two complete Docker-backed runs succeeded with an ownership-scoped reset between them; the second default-text run reproduced the same semantic counts and all four report stages. |
+| 19 | Utility demo kit | PASS | `demo run utility` executed the accepted physical fixture and completed its owned-workspace output stage. |
+| 20 | Utility exact accepted assertions | PASS | Structured result asserts 14 seeded defects / 26 findings and accepted 10,200 source/target artifacts. |
+| 21 | Utility corrected qualification | PASS | Structured result asserts 0 corrected failures/accounting/lineage gaps, Recovery/rehearsal `PASSED`, `QUALIFIED`. |
+| 22 | Justice demo kit | PASS | `demo run justice` executed the accepted physical fixture and completed its owned-workspace output stage. |
+| 23 | Justice exact accepted assertions | PASS | Structured result asserts 15 seeded defects / 24 findings and accepted 16,200 source/target artifacts. |
+| 24 | Justice corrected qualification | PASS | Structured result asserts 0 corrected failures/accounting/lineage gaps, Recovery/rehearsal `PASSED`, `QUALIFIED`. |
+| 25 | HCM demo kit | PASS | `demo run hcm` executed the accepted physical fixture and completed its owned-workspace output stage. |
+| 26 | HCM exact accepted assertions | PASS | Structured result asserts 14 seeded defects / 25 findings and accepted 40,575 source/target artifacts. |
+| 27 | HCM corrected qualification | PASS | Structured result asserts 0 corrected failures/accounting/lineage gaps, Recovery/rehearsal `PASSED`, `QUALIFIED`. |
+| 28 | FHIR demo kit | PASS | `demo run fhir` executed the accepted physical fixture and completed its owned-workspace output stage. |
+| 29 | FHIR exact accepted assertions | PASS | Structured result asserts 9 seeded defects / 15 findings and accepted 7,000 source/target artifacts. |
+| 30 | FHIR corrected qualification | PASS | Structured result asserts 0 corrected failures/accounting/lineage gaps, Recovery/rehearsal `PASSED`, `QUALIFIED`. |
+| 31 | Domain claim boundaries retained | PASS | All five manifests bind their accepted pack/version and claim boundary to the 0.10F index; descriptions retain each domain's stated exclusions. |
+| 32 | External observation distinct from Projection | PASS | All compact kit descriptions and preparation metadata distinguish independently populated external targets from a separate corrected shadow run; ProofShift is not described as performing the external migration. |
+| 33 | Source accounting presentation | PASS | Pension repeats exact 8,495 checkpoint sources; all four cross-domain human reports show accounted/checkpoint totals and zero corrected accounting gaps. |
+| 34 | Target lineage presentation | PASS | Pension asserts 8,595 corrected targets and zero unexplained targets; all four cross-domain reports show lineaged/target totals and zero corrected lineage gaps. |
+| 35 | Evidence navigation | PASS | Every cross-domain kit runs `evidence --run` on the defective external observation and asserts matching run ID/fingerprint; human reports list stable failed-record Evidence IDs/codes without values. Pension defective/corrected/false-Reverse reports and accepted fixture persist integrity-checked Evidence. |
+| 36 | Generic human-readable report | PASS | Utility, Justice, HCM, and FHIR-style each generated `assurance-report.txt` through the generic report renderer and the clean physical demo path. |
+| 37 | Defective report shows NOT QUALIFIED and why | PASS | Pension default output/report states 149 discrepancies and `NOT QUALIFIED`; all cross-domain reports separate the failed external observation from the corrected qualified shadow, with exact rule/code findings and Evidence references. |
+| 38 | Corrected report shows zero gaps and QUALIFIED | PASS | All five demo paths assert corrected zero Verification/accounting/lineage gaps and corrected `QUALIFIED` Recovery. |
+| 39 | Machine-readable report/output | PASS | All four cross-domain kits persist schema-versioned JSON assurance reports plus Evidence and Recovery inspection JSON; Pension persists the accepted summary, reports, and comparison JSON. |
+| 40 | Pack-correct report terminology | PASS | Generic reports bind pack ID/version/display name and pack-specific claim boundary; the Pension report remains Pension-specific. |
+| 41 | CLI help coverage | PASS | `DemoHelpListsLifecycleCommands` asserts list/describe/preflight/run/reset help; existing process tests cover JSON mode and invalid/blocked cases. |
+| 42 | CLI version output | PASS | `--version` and `version` return `ProofShift PS-0.10G`; process coverage and the extracted package smoke verified the published CLI. |
+| 43 | Actionable operator diagnostics | PASS | Preflight tests distinguish missing fixture/occupied port; failed stage preserves structured exit diagnostics and marker-owned workspace; default runs list named phases, facts, reports, and captured logs. |
+| 44 | Secret redaction preserved | PASS | Focused configuration/runtime/remote-authoring regression: 26 passed, 0 failed; the full G regression remains pending. |
+| 45 | Sample projects validate with normal parser | PASS | All five packaged root project configurations (Pension PS-0.10B, Justice, HCM, Pension PS-0.5, and Pension false-Reverse) validate from the extracted CLI using only explicit synthetic placeholders for declared environment references. False-Reverse retains its existing `PSRULE012` warning. |
+| 46 | Evaluator guide | PASS | [Evaluation guide](EVALUATION.md) documents package requirements, commands, scope, source-free package contents, provenance, and limitations. |
+| 47 | Deterministic presenter runbook | PASS | [Demo runbook](DEMO_RUNBOOK.md) gives ordered presenter, reset/repeat, Evidence, and claim-boundary instructions. |
+| 48 | Reproducible evaluation package build | PASS | The two retained pre-closure final4 archives were rehashed and matched at SHA-256 `6b72a2b54b3173f63467d97a8db8262867a29be1a2c108c8786798e0cfb763aa`. Subsequent evaluator-doc changes alter packaged content; final candidate reproducibility and hash are pending in rows 58/59. |
+| 49 | Package content allowlist/denylist | PASS | Extracted archive contains no `.cs`, `.csproj`, `.pdb`, local `.proofshift`, `.git`, or developer runtime config; only the compiled MTP fixture module is distributed. |
+| 50 | Third-party notices | PASS | Generator reads the actual resolved CLI and fixture-module NuGet graphs; final package contains 28 upstream license/notice text files and no unresolved license metadata entries. |
+| 51 | Windows evaluation path | NOT YET | Existing-host Windows extraction and five demos passed. The required clean Windows package-smoke runner has not completed. |
+| 52 | Linux evaluation path if claimed | PASS | Linux packaged evaluation is explicitly not claimed by PS-0.10G; ordinary Linux regression CI is not treated as product-support evidence. |
+| 53 | Fresh-machine Pension flagship | NOT YET | Existing-host package rehearsal passed, but no fresh ephemeral Windows environment has run the packaged Pension workflow. |
+| 54 | Fresh-machine compact cross-domain demos | NOT YET | Existing-host Utility, Justice, HCM, and FHIR package runs passed; clean-worker packaged runs remain pending. |
+| 55 | No hidden developer state | NOT YET | Final4 contains no source/project/PDB/dev-runtime files and ran from package paths on the development host; clean-worker isolation is not yet proven. |
+| 56 | Measured resource guidance | PASS | Each packaged MTP fixture records elapsed time and 100 ms sampled process peak working set; see the measurements in `docs/EVALUATION.md`. Docker container memory is explicitly excluded. |
+| 57 | Full regression | NOT YET | Local solution build passed. The 9 non-vendor projects passed 271, skipped 3 documented Windows symlink-capability tests, and failed 0 (274 total); RemoteStorage passed 53/53, Oracle 2/2, and Db2 2/2, all with 0 skips. Exact-candidate remote regression remains. |
+| 58 | Remote package/demo smoke CI | NOT YET | Dedicated `windows-latest` job now builds the package twice, requires identical archive hashes, extracts outside the checkout to a path containing spaces, isolates .NET/NuGet state, validates all shipped samples, and runs/asserts all five packaged demos. No remote Actions run has occurred. |
+| 59 | Final candidate SHA | NOT YET | No PS-0.10G candidate commit yet. |
+| 60 | PS-1.0 and production migration/rollback remain unstarted | PASS | Current assignment is PS-0.10G only; no production migration execution or rollback is authorized. |
+
+## G1 Evidence
+
+- The focused CLI build passes with warnings treated as errors.
+- `DemoScenarioCliTests` passes 8 tests with 0 failures; 1 symlink-capability test is skipped because the current Windows host disallows symbolic-link creation. Coverage includes later-stage result-binding expansion, readable binding labels, and structured failures when a declared token is unavailable.
+- Tests exercise deterministic ordinal listing/JSON, describe bound to the accepted 0.10F scenario index, missing-fixture and occupied-port preflight, accepted stage outcomes and exact JSON assertions, refusal of unasserted expected-defect stages, project materialization, graph-hash neutrality for display changes, marker-owned reset, unrelated data preservation, reset/run repeatability, and path boundaries.
+- G2 adds the Pension flagship; G3 adds compact cross-domain kits. G1 PASS is limited to the generic manifest catalog and lifecycle foundation.
+
+## G2 Evidence
+
+- The Pension manifest references accepted `pension-fast` and is validated against its identity and artifact counts. It runs the accepted physical test in an isolated marker-owned workspace, asserts exact summary and report values, captures runner output separately from structured results, and binds run IDs into later ProofShift report/compare stages.
+- Two complete local Docker-backed `demo run pension` executions passed. Each ran the SQL Server/PostgreSQL fixture, the false-Reverse report, defective and corrected reports, and defective-to-corrected comparison. A scoped reset separated the clean repeat.
+- The repeat's human-readable output presents 149 defective findings/`NOT QUALIFIED`, corrected 0 discrepancies/0 unaccounted/0 unexplained/`QUALIFIED`, and false-Reverse Verification `PASSED` with zero Verification failures while Recovery rejects two edges. It lists the machine-readable summary and all report paths without dumping finding records.
+- Local validation: CLI build passed; focused CLI tests passed 8, failed 0, skipped 1 (Windows symlink capability); Pension report aggregation passed 1/1; two full physical demo runs passed. No full solution/vendor/remote CI gate has been run for PS-0.10G yet.
+
+## G3 Evidence
+
+- Utility, Justice, HCM, and FHIR-style manifests reuse their accepted PS-0.10F physical fixtures. Each is fixture-owned and does not borrow a different domain's project configuration. The fixtures write a generic machine/human assurance report only when launched with the runner's workspace-confined result path; ordinary test runs remain unchanged.
+- All four `demo run` commands passed with assertions against accepted artifact counts, exact seeded defect/finding counts, corrected failures, source-accounting and target-lineage gaps, Recovery/rehearsal status, and `QUALIFIED`. The human report separates external observation from corrected shadow Projection/Recovery, lists Evidence references, and omits raw values.
+- Local results: Utility 10,200 artifacts / 14 defects / 26 findings; Justice 16,200 / 15 / 24; HCM 40,575 / 14 / 25; FHIR-style 7,000 / 9 / 15. Every corrected run asserted zero failures/accounting gaps/lineage gaps and Recovery `PASSED` / `QUALIFIED`.
+- All four accepted-index/Docker/SDK preflights passed. No full solution/vendor/remote CI gate has been run for PS-0.10G yet.
+
+## G4 Evidence
+
+- Added a domain-neutral `DemoAssuranceReport` with pack/version/claim binding, checkpoint totals, two explicitly read-only external observations, corrected shadow Verification/Recovery, source accounting, target lineage, stable Evidence IDs/codes/severity, and run/fingerprint references. The report has deterministic JSON and invariant-culture, value-free human-readable output.
+- Each cross-domain physical fixture writes the JSON report and `.txt` sidecar only when the demo runner supplies its workspace-confined result path. Demo runs retain only the report and `.proofshift` Evidence/Recovery artifacts under the marker-owned workspace; normal test runs keep unique temporary roots and clean them.
+- Utility, Justice, FHIR-style, and HCM each completed their final full Docker-backed report flow: exact report assertions, defective Evidence integrity/run/fingerprint inspection, and corrected Recovery CLI output (`QUALIFIED`, rehearsal `PASSED`, 0 failed edges). Their text reports list exact source accounting, target lineage, pack terminology, and Evidence IDs without expected/actual values.
+- Pension retained its generic lifecycle output with exact accepted summary bindings, defective/corrected/false-Reverse report assertions, Recovery distinction, and comparison output. Added `demo help` process coverage. Focused CLI suite: 10 passed, 0 failed, 1 expected Windows symlink-capability skip.
+- No full solution, vendor integration, or remote CI gate has been run for PS-0.10G yet.
+
+## G5 Evidence
+
+- Added `scripts/package-evaluation.ps1`. It restores/builds the CLI and EndToEnd fixture module, publishes the CLI without debug symbols, and creates a source-free ZIP with fixed entry order/timestamps, a package manifest/content digest, and a SHA-256 sidecar. Package-only manifest conversion replaces repository `dotnet-test` project stages with bounded direct MTP binary-module stages; checked-in manifests remain source-project based for development.
+- The allowlist includes the published CLI/runtime assets, compiled MTP fixture module/runtime assets, accepted scenario configs/manifests, evaluation docs, license, and generated third-party notices. The enforced denylist rejects source/project/PDB files, `.runtimeconfig.dev.json`, `.git`, `.proofshift`, `obj`, and build/test output directories; required `clidriver/bin` package runtime files are included and covered by the resolved dependency notices/digest. No vendor database images are included.
+- Two independent final4 builds from unchanged inputs using the guarded stable staging path produced identical ZIP SHA-256 `6b72a2b54b3173f63467d97a8db8262867a29be1a2c108c8786798e0cfb763aa`. The package manifest records the accepted source HEAD plus `sourceWorktreeClean=false` and the exact content digest; this is not a final candidate build. The extracted archive contained zero denied source/debug/developer-state files, five binary-only demo runners, and 28 third-party license/notice texts with no unresolved license metadata.
+- From a clean short Windows extraction root, the final package passed `--version`, catalog/preflight, and Pension/Justice/HCM normal-parser sample validation. Its FHIR physical demo passed exact 9-defect / 15-finding / corrected `QUALIFIED` assertions plus all report/Evidence/Recovery stages. Deep Windows extraction paths can exceed SQLite's legacy file-path limit; `docs/EVALUATION.md` specifies a short extraction path.
+- `evaluation-package-smoke` now runs on a clean `windows-latest` worker. It builds twice and requires identical archive hashes; the separate smoke script extracts outside the checkout to a path with spaces, isolates .NET/NuGet state, checks packaged resources, version/help/catalog/descriptions/preflights, validates all five shipped root projects with synthetic placeholders, runs all five packaged demos, asserts exact outcomes/reports and redaction, and records candidate SHA/package SHA/size and per-scenario results. The remote job has not run yet.
+
+## G6 Evidence
+
+- Extracted the final4 binary-only ZIP to `C:\PS0G-Final4` on the existing Windows rehearsal host, not a separate physical machine. The archive had no source, project, PDB, repository, local `.proofshift`, or developer-runtime files; all commands used the packaged CLI/module and package-root inputs.
+- All five packaged physical demos passed, including their human/JSON report, Evidence, and Recovery stages: Pension 8,495 checkpoint artifacts / 8,595 targets / 149 defective findings / corrected 0; Utility 10,200 artifacts / 14 defects / 26 findings; Justice 16,200 / 15 / 24; HCM 40,575 / 14 / 25; FHIR-style 7,000 / 9 / 15. Each corrected shadow qualified with zero Verification/accounting/lineage gaps. Pension false-Reverse Verification passed with 0 failures while Recovery rejected two unsafe Reverse edges.
+- The final4 ZIP SHA-256 is `6b72a2b54b3173f63467d97a8db8262867a29be1a2c108c8786798e0cfb763aa`; two builds from unchanged inputs matched. Its provenance reports the accepted source HEAD and `sourceWorktreeClean=false`, so it is rehearsal evidence, not a final candidate package.
+- Runtime and sampled process-working-set measurements are recorded in `docs/EVALUATION.md`; CPU, disk high-water, and container memory are unmeasured. Linux packaged evaluation remains unclaimed. Clean Windows package-smoke CI remains pending.
+
+## G7 Local Regression Evidence
+
+- `dotnet build ProofShift.sln --no-restore` succeeded. All 9 test projects used by the CI non-vendor loop passed: 271 passed, 0 failed, 3 skipped (Windows host disallowed symlink creation), 274 total. EndToEnd alone passed 138, skipped 3, failed 0, total 141.
+- One follow-up invocation exited 5 after discovering zero tests; do not treat it as successful validation. The subsequent authoritative discovery check found all 141 EndToEnd tests, and the successful complete EndToEnd run (138 passed, 3 documented Windows symlink-capability skips, 0 failed) is the acceptance evidence. The failed invocation did not enable `--diagnostic`, so no MTP trace was produced; its non-reproduced cause remains unknown.
+- Local RemoteStorage passed 53/53, Oracle 2/2, and Db2 2/2, all with 0 skips. Combined with the non-vendor run, local test totals are 328 passed, 0 failed, and 3 documented Windows symlink-capability skips. Exact-candidate remote regression and clean Windows package-smoke remain pending. No 0.10G acceptance is claimed.

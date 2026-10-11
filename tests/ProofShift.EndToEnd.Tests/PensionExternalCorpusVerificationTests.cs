@@ -379,6 +379,8 @@ public sealed class PensionExternalCorpusVerificationTests
                 correctedPipeline.Verification, correctedPipeline.Recovery, "Synthetic PS-0.9 Fast Corrected");
             var defectiveReport = await BuildPersistedReportAsync(directory, evidenceStore, projectedRecoveryStore,
                 projectedDefectivePipeline.Verification, projectedDefectivePipeline.Recovery, "Synthetic PS-0.9 Fast Defective");
+            var falseReverseReport = await BuildPersistedReportAsync(directory, evidenceStore, projectedRecoveryStore,
+                falseReversePipeline.Verification, falseReversePipeline.Recovery, "Synthetic PS-0.9 Fast False-Reverse");
             Assert.Equal("QUALIFIED", correctedReport.Qualification);
             Assert.Equal("Passed", correctedReport.RehearsalOutcome);
             Assert.Equal(0L, correctedReport.BusinessDiscrepancyCount);
@@ -390,6 +392,13 @@ public sealed class PensionExternalCorpusVerificationTests
             Assert.Equal("FAILED", defectiveReport.VerificationOutcome);
             Assert.Equal(149L, defectiveReport.BusinessDiscrepancyCount);
             Assert.Equal(ExpectedDefects(), defectiveReport.DefectCounts.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal));
+            Assert.Equal("PASSED", falseReverseReport.VerificationOutcome);
+            Assert.Equal(0L, falseReverseReport.VerificationFailureCount);
+            Assert.Equal(2L, falseReverseReport.BusinessDiscrepancyCount);
+            Assert.Equal(2L, falseReverseReport.FalseReversibleTransformations);
+            Assert.Equal(2L, falseReverseReport.FailedRecoveryEdges);
+            Assert.Equal("NOT QUALIFIED", falseReverseReport.Qualification);
+            Assert.Contains("false-reverse", falseReverseReport.Project, StringComparison.OrdinalIgnoreCase);
             var reportDirectory = Path.Combine(directory, ".proofshift", "reports");
             Directory.CreateDirectory(reportDirectory);
             await File.WriteAllTextAsync(Path.Combine(reportDirectory, $"{correctedReport.DryRunId}.json"),
@@ -408,7 +417,10 @@ public sealed class PensionExternalCorpusVerificationTests
             var cliReportingStage = performanceRecorder.StartStage(PerformanceStageKind.Reporting,
                 "CLI human and JSON reports/comparison");
             var repositoryRoot = FindRepositoryRoot(AppContext.BaseDirectory);
-            var cliAssembly = Path.Combine(repositoryRoot, "src", "ProofShift.Cli", "bin", "Debug", "net10.0", "ProofShift.Cli.dll");
+            var configuredCliAssembly = Environment.GetEnvironmentVariable("PROOFSHIFT_DEMO_CLI_PATH");
+            var cliAssembly = !string.IsNullOrWhiteSpace(configuredCliAssembly) && File.Exists(configuredCliAssembly)
+                ? configuredCliAssembly
+                : Path.Combine(repositoryRoot, "src", "ProofShift.Cli", "bin", "Debug", "net10.0", "ProofShift.Cli.dll");
             Assert.True(File.Exists(cliAssembly), $"CLI assembly not found: {cliAssembly}");
             var defectiveHuman = await RunCliAsync(directory, cliAssembly, "report", defectiveReport.DryRunId);
             Assert.True(defectiveHuman.ExitCode == 0, defectiveHuman.StandardError);
@@ -560,6 +572,16 @@ public sealed class PensionExternalCorpusVerificationTests
                 unexplainedTargets = correctedReport.UnexplainedTargets,
                 defectiveQualification = defectiveReport.Qualification,
                 correctedQualification = correctedReport.Qualification,
+                falseReverseVerificationOutcome = falseReverseReport.VerificationOutcome,
+                falseReverseQualification = falseReversePipeline.Recovery.Qualification.Status == DryRunQualificationStatus.NotQualified
+                    ? "NOT QUALIFIED"
+                    : falseReversePipeline.Recovery.Qualification.Status.ToString().ToUpperInvariant(),
+                falseReverseRejectedEdges = falseReversePipeline.Recovery.Assessment.Edges.Count(edge =>
+                    edge.Issues.Any(issue => issue.Code == RecoveryIssueCodes.InvalidReverse)),
+                falseReverseBusinessDiscrepancies = falseReverseReport.BusinessDiscrepancyCount,
+                falseReverseVerificationFailures = falseReverseReport.VerificationFailureCount,
+                falseReverseDryRunId = falseReverseReport.DryRunId,
+                falseReverseReportPath = Path.Combine(".proofshift", "reports", $"{falseReverseReport.DryRunId}.json"),
                 defectiveDryRunId = defectiveReport.DryRunId,
                 correctedDryRunId = correctedReport.DryRunId,
                 sourceFingerprint = correctedReport.SourceFingerprint,
@@ -576,6 +598,11 @@ public sealed class PensionExternalCorpusVerificationTests
                 correctedDryRunFingerprint = correctedReport.DryRunFingerprint,
                 defectiveDryRunFingerprint = defectiveReport.DryRunFingerprint
             };
+            Assert.Equal("PASSED", demoSummary.falseReverseVerificationOutcome);
+            Assert.Equal("NOT QUALIFIED", demoSummary.falseReverseQualification);
+            Assert.Equal(2, demoSummary.falseReverseRejectedEdges);
+            Assert.Equal(0L, demoSummary.falseReverseVerificationFailures);
+            Assert.Equal(2L, demoSummary.falseReverseBusinessDiscrepancies);
             await File.WriteAllTextAsync(Path.Combine(directory, "demo-summary.json"),
                 JsonSerializer.Serialize(demoSummary, DemoJsonOptions),
                 TestContext.Current.CancellationToken);
@@ -591,6 +618,10 @@ public sealed class PensionExternalCorpusVerificationTests
     }
     private static string FindRepositoryRoot(string startDirectory)
     {
+        var demoRoot = Environment.GetEnvironmentVariable("PROOFSHIFT_DEMO_REPOSITORY_ROOT");
+        if (!string.IsNullOrWhiteSpace(demoRoot) &&
+            File.Exists(Path.Combine(demoRoot, "scenarios", "pension-modernization", "ps010b", "proofshift.yaml")))
+            return Path.GetFullPath(demoRoot);
         for (var directory = new DirectoryInfo(startDirectory); directory is not null; directory = directory.Parent)
             if (File.Exists(Path.Combine(directory.FullName, "ProofShift.sln"))) return directory.FullName;
         throw new DirectoryNotFoundException("ProofShift repository root could not be located from the test output directory.");

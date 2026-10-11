@@ -1,0 +1,151 @@
+{
+  "manifestVersion": 1,
+  "id": "fhir",
+  "displayName": "FHIR-style healthcare assurance",
+  "domain": "Healthcare data migration",
+  "pack": {
+    "id": "proofshift.fhir",
+    "version": "0.10.0"
+  },
+  "description": "Runs the accepted selected-field synthetic FHIR-style physical assurance fixture for independent observation, exact findings, and corrected qualification.",
+  "claimBoundary": "Selected synthetic FHIR-style migration invariants only; not FHIR/profile/US Core certification, terminology validation, clinical correctness, or medical appropriateness.",
+  "approximateRuntime": "About 2 minutes based on the accepted local physical test; cold image setup varies and this is not an SLA.",
+  "requirements": {
+    "docker": true,
+    "minimumDotNetSdk": "10.0.100",
+    "minimumFreeDiskBytes": 0,
+    "requiredPorts": [],
+    "requiredFiles": [
+      "tests/ProofShift.EndToEnd.Tests/FhirPhysicalAssuranceTests.cs"
+    ]
+  },
+  "sourceSystems": [
+    "Synthetic selected FHIR-style NDJSON resources and filesystem Binary documents"
+  ],
+  "targetSystems": [
+    "Independently populated PostgreSQL/filesystem target",
+    "Isolated PostgreSQL/filesystem shadow target"
+  ],
+  "requiredServices": [
+    "Docker-compatible runtime",
+    "PostgreSQL 16 target test container"
+  ],
+  "artifactScale": {
+    "sourceArtifacts": 7000,
+    "targetArtifacts": 7000,
+    "unit": "artifacts",
+    "notes": "Accepted selected-field FHIR-style physical scenario scale; not a conformance claim."
+  },
+  "acceptanceReference": {
+    "indexFile": "docs/PS0_10F_SCENARIO_INDEX.json",
+    "scenarioId": "healthcare-fhir-f5"
+  },
+  "fixtureSetupSteps": [
+    "Generate deterministic synthetic NDJSON resources and Binary documents.",
+    "Start an isolated PostgreSQL target test container and load filesystem sources.",
+    "Independently observe corrected and defect-injected targets, then exercise corrected shadow qualification."
+  ],
+  "defectiveTargetPreparation": "The accepted FHIR-style fixture injects its frozen defects into independently populated target observations; ProofShift does not perform that migration.",
+  "correctedTargetPreparation": "The same accepted fixture verifies a corrected external target and a separate corrected shadow run.",
+  "runStages": [
+    {
+      "id": "fhir-physical-assurance",
+      "name": "Run accepted FHIR-style physical assurance",
+      "phase": "External observation, exact Verification findings, Evidence, and corrected Recovery",
+      "runner": "dotnet-test",
+      "workingDirectory": "repository",
+      "arguments": [
+        "--project",
+        "tests/ProofShift.EndToEnd.Tests/ProofShift.EndToEnd.Tests.csproj",
+        "--filter-class",
+        "ProofShift.EndToEnd.Tests.FhirPhysicalAssuranceTests",
+        "--parallel",
+        "none",
+        "--timeout",
+        "20m"
+      ],
+      "expectedOutcome": "success",
+      "expectedExitCode": 0,
+      "timeoutSeconds": 1500,
+      "resultFile": "fixture/assurance-report.json",
+      "outputFile": "logs/fhir-physical-test.log",
+      "assertions": [
+        { "pointer": "/packId", "valueType": "string", "expected": "proofshift.fhir" },
+        { "pointer": "/checkpointArtifactCount", "valueType": "number", "expected": "7000" },
+        { "pointer": "/seededDefectCount", "valueType": "number", "expected": "9" },
+        { "pointer": "/correctedExternalObservation/targetArtifactCount", "valueType": "number", "expected": "7000" },
+        { "pointer": "/defectiveExternalObservation/verificationFailureCount", "valueType": "number", "expected": "15" },
+        { "pointer": "/correctedShadow/verificationFailureCount", "valueType": "number", "expected": "0" },
+        { "pointer": "/correctedShadow/accountedSourceCount", "valueType": "number", "expected": "7000" },
+        { "pointer": "/correctedShadow/lineagedTargetCount", "valueType": "number", "expected": "7000" },
+        { "pointer": "/correctedShadow/unaccountedSourceCount", "valueType": "number", "expected": "0" },
+        { "pointer": "/correctedShadow/unexplainedTargetCount", "valueType": "number", "expected": "0" },
+        { "pointer": "/correctedShadow/recoveryOutcome", "valueType": "string", "expected": "PASSED" },
+        { "pointer": "/correctedShadow/recoveryRehearsalOutcome", "valueType": "string", "expected": "PASSED" },
+        { "pointer": "/correctedShadow/qualification", "valueType": "string", "expected": "QUALIFIED" }
+      ],
+      "resultBindings": [
+        { "name": "defectiveExternalRunId", "pointer": "/defectiveExternalObservation/verificationRunId", "valueType": "string" },
+        { "name": "defectiveExternalEvidenceFingerprint", "pointer": "/defectiveExternalObservation/evidenceFingerprint", "valueType": "string" },
+        { "name": "correctedExternalRunId", "pointer": "/correctedExternalObservation/verificationRunId", "valueType": "string" },
+        { "name": "correctedShadowRunId", "pointer": "/correctedShadow/verificationRunId", "valueType": "string" },
+        { "name": "correctedDryRunId", "pointer": "/correctedShadow/dryRunId", "valueType": "string" },
+        { "name": "defectiveEvidenceId", "pointer": "/defectiveExternalObservation/evidenceReferences/0/evidenceId", "valueType": "string" },
+        { "name": "seededDefectCount", "pointer": "/seededDefectCount", "valueType": "number" },
+        { "name": "defectiveFindingCount", "pointer": "/defectiveExternalObservation/verificationFailureCount", "valueType": "number" },
+        { "name": "correctedFailureCount", "pointer": "/correctedShadow/verificationFailureCount", "valueType": "number" },
+        { "name": "unaccountedSourceCount", "pointer": "/correctedShadow/unaccountedSourceCount", "valueType": "number" },
+        { "name": "unexplainedTargetCount", "pointer": "/correctedShadow/unexplainedTargetCount", "valueType": "number" },
+        { "name": "recoveryOutcome", "pointer": "/correctedShadow/recoveryOutcome", "valueType": "string" },
+        { "name": "recoveryRehearsalOutcome", "pointer": "/correctedShadow/recoveryRehearsalOutcome", "valueType": "string" },
+        { "name": "failedRecoveryEdges", "pointer": "/correctedShadow/failedRecoveryEdges", "valueType": "number" },
+        { "name": "falseReversibleTransformations", "pointer": "/correctedShadow/falseReversibleTransformations", "valueType": "number" },
+        { "name": "correctedQualification", "pointer": "/correctedShadow/qualification", "valueType": "string" },
+        { "name": "sourceArtifactCount", "pointer": "/checkpointArtifactCount", "valueType": "number" },
+        { "name": "targetArtifactCount", "pointer": "/correctedShadow/targetArtifactCount", "valueType": "number" }
+      ],
+      "environment": {}
+    },
+    {
+      "id": "fhir-defective-evidence",
+      "name": "Inspect defective external-target Evidence",
+      "phase": "Evidence navigation",
+      "workingDirectory": "workspace/fixture",
+      "arguments": ["evidence", "evidence.yaml", "--run", "{{demo.defectiveExternalRunId}}", "--json"],
+      "expectedOutcome": "success",
+      "expectedExitCode": 0,
+      "timeoutSeconds": 60,
+      "resultFile": "reports/defective-evidence.json",
+      "assertions": [
+        { "pointer": "/manifest/runId", "valueType": "string", "expected": "{{demo.defectiveExternalRunId}}" },
+        { "pointer": "/manifest/fingerprint", "valueType": "string", "expected": "{{demo.defectiveExternalEvidenceFingerprint}}" }
+      ],
+      "environment": {}
+    },
+    {
+      "id": "fhir-corrected-recovery",
+      "name": "Inspect corrected Recovery readiness",
+      "phase": "Recovery readiness",
+      "workingDirectory": "workspace/fixture",
+      "arguments": ["recovery", "recovery.yaml", "--run", "{{demo.correctedDryRunId}}", "--json"],
+      "expectedOutcome": "success",
+      "expectedExitCode": 0,
+      "timeoutSeconds": 60,
+      "resultFile": "reports/corrected-recovery.json",
+      "assertions": [
+        { "pointer": "/status", "valueType": "string", "expected": "qualified" },
+        { "pointer": "/rehearsalOutcome", "valueType": "string", "expected": "passed" },
+        { "pointer": "/failedEdges", "valueType": "number", "expected": "0" }
+      ],
+      "environment": {}
+    }
+  ],
+  "resetStages": [],
+  "reportPaths": [
+    "{{workspace}}/fixture/assurance-report.json",
+    "{{workspace}}/fixture/assurance-report.txt",
+    "{{workspace}}/reports/defective-evidence.json",
+    "{{workspace}}/reports/corrected-recovery.json"
+  ],
+  "resetScope": "scenario-owned-only"
+}

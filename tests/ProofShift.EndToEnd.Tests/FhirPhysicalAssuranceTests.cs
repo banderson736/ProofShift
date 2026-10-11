@@ -57,9 +57,9 @@ public sealed class FhirPhysicalAssuranceTests
         Assert.Equal(7L * PatientCount, fixture.Entities.Sum(entity => (long)fixture.SourceRows[entity.TargetNode].Count) + fixture.Documents.Count);
         Assert.Equal(0.25m, decimal.Parse(fixture.SourceRows["target-observation"][0]["quantityValue"], CultureInfo.InvariantCulture));
 
-        var root = Path.Combine(Path.GetTempPath(), $"proofshift-fhir-f5-{Guid.NewGuid():N}");
+        var root = DemoScenarioResultWriter.CreateFixtureRoot("proofshift-fhir-f5");
         Directory.CreateDirectory(root);
-        using var cleanup = new TemporaryDirectoryCleanup(root);
+        using var cleanup = new TemporaryDirectoryCleanup(root, !DemoScenarioResultWriter.IsRunningDemo);
         var sourceRecordsRoot = Path.Combine(root, "source-records");
         var sourceFilesRoot = Path.Combine(root, "source-files");
         var targetFilesRoot = Path.Combine(root, "target-files");
@@ -175,6 +175,8 @@ public sealed class FhirPhysicalAssuranceTests
         await WriteDocumentFilesAsync(fixture.Documents, targetFilesRoot, TestContext.Current.CancellationToken);
         var evidenceStore = new FileSystemEvidenceStore(Path.Combine(root, ".proofshift", "verifications"));
         var recoveryStore = new FileSystemRecoveryArtifactStore(Path.Combine(root, ".proofshift", "recovery"));
+        await evidenceStore.SaveAsync(corrected.EvidenceGraph, TestContext.Current.CancellationToken);
+        await evidenceStore.SaveAsync(defective.EvidenceGraph, TestContext.Current.CancellationToken);
         var dryRun = await new DryRunOrchestrator(sourceConnectors, targets, checkpointStore, service,
             new RecoveryService(checkpointStore,
                 new RecoveryCompensatorRegistry([new ShadowBaselineRestoreCompensator()])), contexts)
@@ -219,6 +221,15 @@ public sealed class FhirPhysicalAssuranceTests
         Assert.DoesNotContain("Utility.Account", genericReportJson, StringComparison.Ordinal);
         Assert.DoesNotContain("Justice.Case", genericReportJson, StringComparison.Ordinal);
         Assert.DoesNotContain("HCM.Worker", genericReportJson, StringComparison.Ordinal);
+        var demoReport = DemoAssuranceReport.Create(new FhirPack(), report.ClaimBoundaryText,
+            checkpoint.Checkpoint.ArtifactCount, checkpoint.Checkpoint.Id.Value.ToString("D"), checkpoint.Checkpoint.ManifestHash!,
+            DefectManifest.Length, corrected, defective, dryRun.Verification!, dryRun.Recovery!);
+        Assert.Equal(15, demoReport.DefectiveExternalObservation.VerificationFailureCount);
+        Assert.Equal(15, demoReport.DefectiveExternalObservation.EvidenceReferences.Count);
+        Assert.Equal(0, demoReport.CorrectedShadow.VerificationFailureCount);
+        Assert.Equal(0, demoReport.CorrectedShadow.UnaccountedSourceCount);
+        Assert.Equal(0, demoReport.CorrectedShadow.UnexplainedTargetCount);
+        await DemoScenarioResultWriter.WriteIfRequestedAsync(demoReport, TestContext.Current.CancellationToken);
     }
 
     private static FhirFixture CreateFixture(int count)
@@ -584,9 +595,9 @@ public sealed class FhirPhysicalAssuranceTests
         Dictionary<string, byte[]> Documents);
     private sealed record FhirDefect(string Id, string Category, string SemanticConcept, string BusinessKey, string ExpectedRuleId,
         int ExpectedFindingCount = 1);
-    private sealed class TemporaryDirectoryCleanup(string path) : IDisposable
+    private sealed class TemporaryDirectoryCleanup(string path, bool deleteOnDispose) : IDisposable
     {
-        public void Dispose() { if (Directory.Exists(path)) Directory.Delete(path, recursive: true); }
+        public void Dispose() => DemoScenarioResultWriter.CleanupFixtureRoot(path, deleteOnDispose);
     }
     private sealed class FhirEnvironment(IReadOnlyDictionary<string, string> values) : IEnvironmentVariableProvider
     {

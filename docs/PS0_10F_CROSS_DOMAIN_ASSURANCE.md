@@ -1,6 +1,6 @@
 # PS-0.10F Cross-Domain Assurance
 
-Status: F6 Cross-Domain Assurance locally complete; PS-0.10F remains In Progress pending final acceptance closure. The authoritative exact physical scenario index is [PS0_10F_SCENARIO_INDEX.json](PS0_10F_SCENARIO_INDEX.json). Stop for review here; PS-0.10G and final acceptance publication are out of scope.
+Status: PS-0.10F Accepted October 11, 2026; merge `77bceb325d925eb41c44b0eb7e3d3e5fb74542b9`. The authoritative exact physical scenario index is [PS0_10F_SCENARIO_INDEX.json](PS0_10F_SCENARIO_INDEX.json).
 
 ## Why These Domains
 
@@ -56,8 +56,8 @@ Corrected repeat runs retain the semantic fingerprints already covered by each p
 
 F1-F6 adds no external NuGet package. New F6 code depends only on repository projects. All fixtures and documents are deterministic synthetic data. The generic report aggregates findings rather than copying patient, court, employee, or customer field values into a new report surface.
 
-## ADR and Closure
+## ADR and Acceptance
 
-ADR-0012's external-target boundary matches the tested generic mapped-attribute path. ADR-0027's concrete-pack/core separation is enforced by the expanded dependency and semantic-string checks. ADR-0028's interval rule remains generic and configured. No ADR was added or marked Accepted for F6.
+ADR-0012's external-target boundary matches the tested generic mapped-attribute path. ADR-0027's concrete-pack/core separation is enforced by the expanded dependency and semantic-string checks. ADR-0028's interval rule remains generic and configured. ADR-0027 and ADR-0028 were accepted with PS-0.10F review.
 
-F6 local completion is distinct from PS-0.10F acceptance. The full local suite, RemoteStorage, Oracle, Db2, final remote CI, candidate commit/SHA, and push remain `NOT YET` closure gates and are not run or authorized by this slice. No PS-0.10G work, production migration, or rollback was started.
+The final local suite, RemoteStorage, Oracle, Db2, and remote CI passed; see the [acceptance matrix](PS0_10F_ACCEPTANCE_MATRIX.md). No production migration or rollback was added.
