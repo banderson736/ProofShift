@@ -1,6 +1,6 @@
 # PS-0.10F Cross-Domain Assurance Acceptance Matrix
 
-Status: F6 Cross-Domain Assurance locally complete; PS-0.10F remains In Progress and unaccepted pending final acceptance closure. F1-F6 local gates pass; stop here for review and do not begin PS-0.10G. This matrix is authoritative and records `PASS`, `FAIL`, or `NOT YET`; closure gates remain explicitly identified.
+Status: F6 Cross-Domain Assurance and all local/remote PS-0.10F gates pass; PS-0.10F remains In Progress and unaccepted pending review. Candidate `e3e437696808a16cda276e58a4460b9a297f0aea` passed GitHub Actions run `38120389177` with 318 passed, 0 failed, 0 skipped across all required jobs. This matrix is authoritative; stop here for review and do not begin PS-0.10G.
 
 | # | Acceptance item | Status | Evidence or gap |
 |---:|---|---|---|
@@ -58,10 +58,10 @@ Status: F6 Cross-Domain Assurance locally complete; PS-0.10F remains In Progress
 | 52 | Oracle integration passes | PASS | Dedicated Oracle project: 2 passed, 0 failed, 0 skipped; 4m20.5s including first-time Oracle Free startup. |
 | 53 | Db2 integration passes | PASS | Dedicated Db2 project: 2 passed, 0 failed, 0 skipped; 5m10.4s including first-time Db2 startup. |
 | 54 | Full local suite passes | PASS | All 12 test projects: 318 total, 316 passed, 0 failed, 2 expected Windows symlink-capability skips (both in EndToEnd). |
-| 55 | Remote CI has zero required skips | NOT YET | Final F acceptance CI pending. |
+| 55 | Remote CI has zero required skips | PASS | GitHub Actions run `38120389177` on candidate `e3e437696808a16cda276e58a4460b9a297f0aea`: build-and-test 261/261, RemoteStorage 53/53, Db2 2/2, Oracle 2/2; 318 passed, 0 failed, 0 skipped. |
 | 56 | Documentation complete for all packs | PASS | Pack docs, [Utility scope](UTILITY_PACK.md), [cross-domain assurance](PS0_10F_CROSS_DOMAIN_ASSURANCE.md), and [scenario index](PS0_10F_SCENARIO_INDEX.json) record counts, connectors, runtimes, and claim boundaries. |
 | 57 | Dependency review | PASS | F1-F6 added no external NuGet packages; F6 adds only internal `ProofShift.Reporting` → `ProofShift.Packs.Abstractions` project coupling for metadata-driven report construction. |
-| 58 | Final candidate SHA recorded | NOT YET | No F candidate commit yet. |
+| 58 | Final candidate SHA recorded | PASS | Candidate commit `e3e437696808a16cda276e58a4460b9a297f0aea` is pushed on `ps-0.10f-cross-domain-assurance`; not merged. |
 | 59 | PS-0.10G not begun | PASS | No PS-0.10G work started. |
 | 60 | Production migration/rollback not added | PASS | All current work remains assurance/rehearsal only. |
 
@@ -80,7 +80,7 @@ Status: F6 Cross-Domain Assurance locally complete; PS-0.10F remains In Progress
 - The deterministic physical fixture spans SQL Server, CSV, filesystem documents, and an independently populated PostgreSQL/filesystem target. It includes 1,000 accounts, 2,000 meter reads, and 100 documents.
 - The 14-entry defect manifest produces exactly 26 findings and includes the dangling service-point reference caused by the missing account. Exact assertions cover per-rule findings, including both missing targets, both broken account references, three meter-read value mismatches plus one chronology defect, two payment aggregate groups, and corrected zero-failure behavior.
 - Focused results: conformance 5 passed, 0 failed, 0 skipped; physical Utility scenario 1 passed, 0 failed, 0 skipped. Corrected external state has no failed findings; corrected shadow projection/Recovery is `QUALIFIED`.
-- The final F6 Utility physical rerun passed 1/1 in 1m15.8s, including repeated corrected target/Evidence/ledger fingerprint equality and the generic report. This is a representative correctness probe, not a performance SLA. Final local suite and connector regression gates pass; remote CI remains pending.
+- The final F6 Utility physical rerun passed 1/1 in 1m15.8s, including repeated corrected target/Evidence/ledger fingerprint equality and the generic report. This is a representative correctness probe, not a performance SLA. Final local and remote acceptance gates pass.
 
 ## F3 Evidence
 
@@ -107,7 +107,7 @@ Status: F6 Cross-Domain Assurance locally complete; PS-0.10F remains In Progress
 - The normalized NDJSON fixture uses 1,000 of each tabular resource plus 1,000 filesystem Binary payloads. The existing connector streams selected flattened fields; it does not index FHIR `coding[]` arrays. This is not raw Bundle/Bulk support or FHIR/profile/US Core certification.
 - Pack-owned rules validate configured typed `ResourceType/id` references, exact decimal quantity plus configured unit identity, and offset-bearing instant text. Generic attribute comparison checks graph-derived coding transformations and valid-but-wrong references.
 - Corrected independent external targets pass twice with deterministic target/evidence/ledger fingerprints and verified Binary SHA-256 readback. Nine seeded defects produce exactly 15 findings with the frozen per-rule manifest. Corrected shadow Projection, Evidence and Recovery assessment/rehearsal pass with `QUALIFIED`.
-- Focused results: final F6 FHIR physical assurance 1 passed in 1m33.951s; five-pack CLI authoring 1 passed; shared domain-pack conformance 10 passed, including all five packs and genericity guards. Final local/vendor/remote closure gates remain NOT YET.
+- Focused results: final F6 FHIR physical assurance 1 passed in 1m33.951s; five-pack CLI authoring 1 passed; shared domain-pack conformance 10 passed, including all five packs and genericity guards. Final local suite, vendor integrations and remote CI all pass.
 
 ## F6 Evidence
 
@@ -117,8 +117,8 @@ Status: F6 Cross-Domain Assurance locally complete; PS-0.10F remains In Progress
 - `OrderedReferenceMatcher` in Packs.Abstractions now supplies one ordered streaming merge for Utility, Justice, HCM, and FHIR. Pack-owned key interpretation remains distinct; FHIR alone parses `ResourceType/id`. Final Utility (1m08.974s) and HCM (6m04.936s) physical reruns pass after this shared change.
 - One generic Reporting model is exercised by all five corrected physical scenarios, including runtime pack/rule version maps and foreign-domain label checks. ADR-0012 external-target semantics and ADR-0028 generic date-interval semantics remain unchanged; ADR-0027 remains Proposed pending review.
 - Final physical runtimes: Pension Fast 2m09.934s (2/2 tests), Utility 1m08.974s, Justice 1m36.730s, HCM 6m04.936s, FHIR 1m33.951s. All five physical entry points pass with their frozen exact corpus, corrected zero failures, and `QUALIFIED` Recovery; timings are diagnostic only.
-- Focused cross-domain gates: conformance/architecture 10/10; CLI matrix 1/1 in 8.233s; generic no-Projection-manifest/journal external target test 1/1 in 16.922s; Verification workspace/interval tests 40/40 in 12.449s; all five physical test entry points pass with zero skips. Final full local suite: 318 total, 316 passed, 0 failed, and 2 expected Windows symlink-capability skips. RemoteStorage 53/53, Oracle 2/2, and Db2 2/2 pass with zero skips. Remote CI remains pending.
+- Focused cross-domain gates: conformance/architecture 10/10; CLI matrix 1/1 in 8.233s; generic no-Projection-manifest/journal external target test 1/1 in 16.922s; Verification workspace/interval tests 40/40 in 12.449s; all five physical test entry points pass with zero skips. Final full local suite: 318 total, 316 passed, 0 failed, and 2 expected Windows symlink-capability skips. GitHub Actions run `38120389177` passed the same 318 tests with 0 failures and 0 skips.
 
 ## Slice Order
 
-F6 Cross-Domain Assurance and all local PS-0.10F gates are complete. PS-0.10F remains In Progress and unaccepted pending final candidate CI verification. Do not merge, begin PS-0.10G, add connectors/FHIR Bulk, or perform production migration/rollback.
+F6 Cross-Domain Assurance and all PS-0.10F acceptance gates pass. PS-0.10F remains In Progress and unaccepted pending review. Do not merge, begin PS-0.10G, add connectors/FHIR Bulk, or perform production migration/rollback.
