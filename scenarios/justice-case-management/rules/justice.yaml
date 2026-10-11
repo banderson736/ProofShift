@@ -1,0 +1,11 @@
+"version": 2
+"rules":
+  "case-status":
+    "type": "justice-attribute-equality"
+    "version": "1"
+    "severity": "critical"
+    "targetNode": "target-case"
+    "semanticType": "Justice.Case"
+    "identityField": "case_id"
+    "attribute": "status"
+...

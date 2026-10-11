@@ -1,0 +1,19 @@
+"proofshift": 1
+"project":
+  "id": "hcm-migration-example"
+  "name": "Synthetic HCM Employment Mapping"
+"packs":
+- "id": "proofshift.hcm"
+  "version": "0.10.0"
+"systems":
+  "legacy-hcm":
+    "file": "systems/source.yaml"
+  "hcm-target":
+    "file": "systems/target.yaml"
+"migration":
+  "graph": "migration/graph.yaml"
+"verification":
+  "rules": "rules/hcm.yaml"
+"recovery":
+  "policy": "recovery/policy.yaml"
+...

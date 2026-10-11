@@ -1,0 +1,24 @@
+"version": 2
+"rules":
+  "employment-intervals":
+    "type": "effective-dated-interval"
+    "version": "1"
+    "severity": "critical"
+    "targetNode": "employment"
+    "semanticType": "HCM.Employment"
+    "identityField": "employment_id"
+    "ownerField": "worker_id"
+    "startField": "effective_from"
+    "endField": "effective_to"
+    "requireContinuous": false
+  "current-employment":
+    "type": "hcm-current-employment"
+    "version": "1"
+    "severity": "critical"
+    "targetNode": "employment"
+    "semanticType": "HCM.Employment"
+    "workerField": "worker_id"
+    "startField": "effective_from"
+    "endField": "effective_to"
+    "asOfDate": "2025-01-01"
+...

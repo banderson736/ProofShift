@@ -1,0 +1,9 @@
+"id": "hcm-target"
+"name": "Synthetic HCM Target"
+"role": "shadow-target"
+"storage":
+  "hcm-db":
+    "connector": "postgres"
+    "connection":
+      "secret": "HCM_TARGET_CONNECTION"
+...

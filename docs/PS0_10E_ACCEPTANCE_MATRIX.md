@@ -1,6 +1,6 @@
 # PS-0.10E Acceptance Matrix
 
-Status: In Progress and unaccepted. This reconciliation records evidence available in the current workspace; it does not accept PS-0.10E. A status value is exactly `PASS`, `FAIL`, or `NOT YET`.
+Status: Accepted and merged to `main` as `d5bcf8b528bd9d7370841fbfb92625a8954fa75d`. A status value is exactly `PASS`, `FAIL`, or `NOT YET`.
 
 ## Local Behavior Matrix
 
@@ -81,7 +81,7 @@ Status: In Progress and unaccepted. This reconciliation records evidence availab
 | Worktree/diff review | PASS | Candidate review completed; `git diff --check` passed and the code candidate was merged to `main` as `d5bcf8b528bd9d7370841fbfb92625a8954fa75d`. |
 | Candidate commit and SHA | PASS | PS-0.10E code candidate: `a6e8b15528df5767dd5368f96c000d8dcfb0d1f1`. |
 | Remote CI and push | PASS | GitHub Actions [run 38068572196](https://github.com/banderson736/ProofShift/actions/runs/38068572196) for `a6e8b15528df5767dd5368f96c000d8dcfb0d1f1` passed `build-and-test`, `remote-storage-integration`, `oracle-integration`, and `db2-integration`; all jobs succeeded. Candidate is merged to `main`. |
-| Formal PS-0.10E acceptance | NOT YET | Reserved for formal review; the coding agent does not self-accept this milestone. |
+| Formal PS-0.10E acceptance | PASS | The user confirmed PS-0.10E is accepted and merged to `main`. |
 
 ## Dependency and License Review
 

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>ProofShift.Packs.Hcm</RootNamespace>
+    <AssemblyName>ProofShift.Packs.Hcm</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ProofShift.Domain/ProofShift.Domain.csproj" />
+    <ProjectReference Include="../ProofShift.Packs.Abstractions/ProofShift.Packs.Abstractions.csproj" />
+    <ProjectReference Include="../ProofShift.Recovery/ProofShift.Recovery.csproj" />
+    <ProjectReference Include="../ProofShift.Verification/ProofShift.Verification.csproj" />
+  </ItemGroup>
+</Project>

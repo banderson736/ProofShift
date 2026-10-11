@@ -5,7 +5,9 @@ You are working in **ProofShift**, a migration assurance and evidence platform f
 
 ## Current Assignment
 
-PS-0.10E Test Discovery and Acceptance Reconciliation remains In Progress and unaccepted pending formal review. Code candidate `a6e8b15528df5767dd5368f96c000d8dcfb0d1f1` is merged to `main` as `d5bcf8b528bd9d7370841fbfb92625a8954fa75d`; GitHub Actions run 38068572196 passed all four required jobs. Preserve Parquet semantics; do not add connectors/types, start PS-0.10F, or perform production migration/rollback. The final RemoteStorage project passes 53/53 with zero failures/skips; bounded SFTP enumeration is covered by unit and OpenSSH integration tests. Oracle and Db2 are required existing integration gates, not feature expansion. See docs/PS0_10E_ACCEPTANCE_MATRIX.md.
+PS-0.10E is Accepted: candidate `a6e8b15528df5767dd5368f96c000d8dcfb0d1f1` passed all required jobs in run 38068572196 and is merged to `main` as `d5bcf8b528bd9d7370841fbfb92625a8954fa75d`. PS-0.10F Cross-Domain Assurance remains In Progress and unaccepted. F1-F5 are locally validated; stop for review after F5 and do not begin F6 without a new explicit assignment. Follow docs/PS0_10F_ACCEPTANCE_MATRIX.md; do not add connectors/FHIR Bulk, or perform production migration/rollback.
+
+The explicit PS-0.10F assignment supersedes historical statements below that domain expansion or FHIR work is deferred. F1-F5 are now locally complete; stop for review and do not begin F6 without a new explicit assignment. FHIR Bulk, new connectors, and production migration/rollback remain out of scope.
 
 ## Mandatory context
 

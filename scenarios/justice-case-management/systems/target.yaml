@@ -1,0 +1,9 @@
+"id": "justice-target"
+"name": "Synthetic Justice Target"
+"role": "shadow-target"
+"storage":
+  "case-db":
+    "connector": "postgres"
+    "connection":
+      "secret": "JUSTICE_TARGET_CONNECTION"
+...

@@ -1,0 +1,54 @@
+"version": 1
+"nodes":
+  "legacy-employment":
+    "type": "source"
+    "system": "legacy-hcm"
+    "storage": "hcm-db"
+    "semanticType": "HCM.Employment"
+    "selector":
+      "kind": "table"
+      "properties":
+        "name": "legacy.worker_job"
+      "identity":
+      - "JOB_ROW_ID"
+  "employment":
+    "type": "target"
+    "system": "hcm-target"
+    "storage": "hcm-db"
+    "semanticType": "HCM.Employment"
+    "selector":
+      "kind": "table"
+      "properties":
+        "name": "public.employment"
+      "identity":
+      - "employment_id"
+"edges":
+  "employment-conversion":
+    "from":
+    - "legacy-employment"
+    "to":
+    - "employment"
+    "operation":
+      "type": "transform"
+      "version": "1"
+      "parameters": {}
+      "fields":
+        "employment_id":
+          "source": "JOB_ROW_ID"
+          "pipeline": []
+        "worker_id":
+          "source": "WORKER_NO"
+          "pipeline": []
+        "position_id":
+          "source": "POSITION_CD"
+          "pipeline": []
+        "effective_from":
+          "source": "START_DATE"
+          "pipeline": []
+        "effective_to":
+          "source": "END_DATE"
+          "pipeline": []
+    "recovery":
+      "mode": "restore"
+      "requiresSnapshot": true
+...

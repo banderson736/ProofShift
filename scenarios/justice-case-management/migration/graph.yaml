@@ -1,0 +1,45 @@
+"version": 1
+"nodes":
+  "source-case":
+    "type": "source"
+    "system": "legacy-justice"
+    "storage": "case-db"
+    "semanticType": "Justice.Case"
+    "selector":
+      "kind": "table"
+      "properties":
+        "name": "legacy.case_record"
+      "identity":
+      - "CASE_ID"
+  "target-case":
+    "type": "target"
+    "system": "justice-target"
+    "storage": "case-db"
+    "semanticType": "Justice.Case"
+    "selector":
+      "kind": "table"
+      "properties":
+        "name": "public.case_record"
+      "identity":
+      - "case_id"
+"edges":
+  "case-conversion":
+    "from":
+    - "source-case"
+    "to":
+    - "target-case"
+    "operation":
+      "type": "transform"
+      "version": "1"
+      "parameters": {}
+      "fields":
+        "case_id":
+          "source": "CASE_ID"
+          "pipeline": []
+        "status":
+          "source": "CASE_STATUS_CD"
+          "pipeline": []
+    "recovery":
+      "mode": "restore"
+      "requiresSnapshot": true
+...

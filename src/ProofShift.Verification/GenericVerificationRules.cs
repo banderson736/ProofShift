@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using ProofShift.Domain;
 
 namespace ProofShift.Verification;
@@ -32,6 +34,22 @@ public sealed class GenericVerificationRuleProvider : IVerificationRuleProvider
                 partitionExecution: VerificationPartitionExecution.PartitionPartialWithGlobalMerge,
                 partitionKey: new VerificationPartitionKeyDefinition(VerificationPartitionBasis.ArtifactIdentity,
                     VerificationArtifactRole.ActualTarget))),
+        new("effective-dated-interval", definition => new EffectiveDatedIntervalRule(definition),
+            new("effective-dated-interval", "1", "Validate configured date-valued intervals, overlap, and optional continuity by owner.", VerificationScope.Timeline,
+                [new("targetNode", RuleOptionKind.Text, "Target graph node containing intervals.", Required: true),
+                 new("semanticType", RuleOptionKind.SemanticTypeReference, "Interval semantic type.", Required: true),
+                 new("identityField", RuleOptionKind.FieldReference, "Interval identity field.", Required: true),
+                 new("ownerField", RuleOptionKind.FieldReference, "Business owner used to group intervals.", Required: true),
+                 new("startField", RuleOptionKind.FieldReference, "Inclusive interval start date.", Required: true),
+                 new("endField", RuleOptionKind.FieldReference, "Inclusive interval end date; null denotes open-ended.", Required: true),
+                 new("requireContinuous", RuleOptionKind.Logical, "Require adjacent intervals to meet on consecutive dates.", Default: new BooleanValue(false))],
+                fieldRequirements:
+                [
+                    new RuleFieldRequirement("identityField", VerificationFieldSide.Target),
+                    new RuleFieldRequirement("ownerField", VerificationFieldSide.Target, keyRole: VerificationOrderingRole.Grouping),
+                    new RuleFieldRequirement("startField", VerificationFieldSide.Target, keyRole: VerificationOrderingRole.Ordering),
+                    new RuleFieldRequirement("endField", VerificationFieldSide.Target)
+                ], partitionExecution: VerificationPartitionExecution.Global)),
         new("entity-uniqueness", definition => new EntityUniquenessRule(definition),
             new("entity-uniqueness", "1", "Require unique target identities in the configured graph scope.", VerificationScope.Entity,
                 [new("targetNode", RuleOptionKind.Text, "Target graph node."), new("semanticType", RuleOptionKind.SemanticTypeReference, "Semantic type scope.")],
@@ -39,6 +57,128 @@ public sealed class GenericVerificationRuleProvider : IVerificationRuleProvider
                 partitionKey: new VerificationPartitionKeyDefinition(VerificationPartitionBasis.ArtifactIdentity,
                     VerificationArtifactRole.ActualTarget)))
     ];
+}
+
+public sealed class EffectiveDatedIntervalRule(VerificationRuleDefinition definition) : VerificationRuleBase(definition)
+{
+    public override VerificationScope Scope => VerificationScope.Timeline;
+    public override IReadOnlyCollection<VerificationOrderingKey> RequiredOrderingKeys =>
+    [
+        new VerificationOrderingKey(Option("semanticType"), Option("ownerField"), VerificationOrderingRole.Grouping),
+        new VerificationOrderingKey(Option("semanticType"), Option("startField"), VerificationOrderingRole.Ordering)
+    ];
+
+    public override async IAsyncEnumerable<VerificationFinding> EvaluateAsync(VerificationExecutionContext context,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var identityField = Option("identityField");
+        var ownerField = Option("ownerField");
+        var startField = Option("startField");
+        var endField = Option("endField");
+        var requireContinuous = string.Equals(Option("requireContinuous", "false"), "true", StringComparison.OrdinalIgnoreCase);
+        string? currentOwner = null;
+        DateOnly? previousEnd = null;
+        VerificationArtifactRecord? previousRecord = null;
+        var previousIsOpenEnded = false;
+        var failures = 0;
+        await foreach (var record in context.Workspace.ReadArtifactRecordsByKeysAsync(VerificationArtifactRole.ActualTarget,
+            Option("targetNode"), Option("semanticType"), RequiredOrderingKeys, cancellationToken)
+            .WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var owner = ReadText(record, ownerField);
+            var identity = ReadText(record, identityField);
+            var start = ReadDate(record, startField);
+            var end = ReadDate(record, endField);
+            if (owner.Length == 0 || identity.Length == 0 || !EffectiveDatedIntervalSemantics.IsValid(start, end))
+            {
+                failures++;
+                yield return Finding(context, EvidenceType.Timeline, EvidenceResult.Fail, "EffectiveIntervalInvalid",
+                    $"{Id.Value}:invalid:{Fingerprint(identity)}",
+                    "A configured effective interval requires an owner, identity, valid date start, and a null or non-earlier end date.",
+                    [ArtifactInput(context, record.NodeKey, record.Artifact)], IntervalValue(start, end),
+                    new EvidenceValue(new StringValue("invalid-interval")));
+            }
+            if (!string.Equals(currentOwner, owner, StringComparison.Ordinal))
+            {
+                currentOwner = owner;
+                previousEnd = null;
+                previousRecord = null;
+                previousIsOpenEnded = false;
+            }
+            if (previousRecord is not null && EffectiveDatedIntervalSemantics.Overlaps(previousIsOpenEnded, previousEnd, start))
+            {
+                failures++;
+                yield return Finding(context, EvidenceType.Timeline, EvidenceResult.Fail, "EffectiveIntervalOverlap",
+                    $"{Id.Value}:overlap:{Fingerprint(owner)}:{Fingerprint(identity)}",
+                    "Configured inclusive effective-date intervals overlap or follow an open-ended interval for one owner.",
+                    [ArtifactInput(context, record.NodeKey, previousRecord.Artifact), ArtifactInput(context, record.NodeKey, record.Artifact)],
+                    IntervalValue(ReadDate(previousRecord, startField), previousEnd), IntervalValue(start, end));
+            }
+            else if (EffectiveDatedIntervalSemantics.HasGap(requireContinuous, previousEnd, start))
+            {
+                failures++;
+                var lastDate = previousEnd!.Value;
+                var nextStart = start!.Value;
+                yield return Finding(context, EvidenceType.Timeline, EvidenceResult.Fail, "EffectiveIntervalGap",
+                    $"{Id.Value}:gap:{Fingerprint(owner)}:{Fingerprint(identity)}",
+                    "Configured sequential intervals contain a gap between inclusive effective dates.",
+                    [ArtifactInput(context, record.NodeKey, previousRecord!.Artifact), ArtifactInput(context, record.NodeKey, record.Artifact)],
+                    new EvidenceValue(new DateValue(lastDate.AddDays(1))), new EvidenceValue(new DateValue(nextStart)));
+            }
+            previousRecord = record;
+            previousEnd = end;
+            previousIsOpenEnded = end is null;
+        }
+        if (failures == 0)
+            yield return Finding(context, EvidenceType.Timeline, EvidenceResult.Pass, "EffectiveIntervalsValid",
+                $"{Id.Value}:complete", "Configured date-valued intervals are valid and satisfy owner-level overlap/continuity policy.", context.BindingReferences);
+    }
+
+    private static string ReadText(VerificationArtifactRecord record, string field)
+    {
+        record.RequireDeclaredField(field);
+        return record.Values.TryGetValue(field, out var value) ? value switch
+        {
+            NullValue => string.Empty,
+            StringValue text => text.Value,
+            IntegerValue integer => integer.Value.ToString(CultureInfo.InvariantCulture),
+            _ => string.Empty
+        } : string.Empty;
+    }
+
+    private static DateOnly? ReadDate(VerificationArtifactRecord record, string field)
+    {
+        record.RequireDeclaredField(field);
+        if (!record.Values.TryGetValue(field, out var value) || value is NullValue) return null;
+        return value switch
+        {
+            DateValue date => date.Value,
+            LocalDateTimeValue local => DateOnly.FromDateTime(local.Value),
+            StringValue text when DateOnly.TryParseExact(text.Value, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var parsed) => parsed,
+            _ => null
+        };
+    }
+
+    private static EvidenceValue IntervalValue(DateOnly? start, DateOnly? end) => new(new ObjectValue([
+        new KeyValuePair<string, ValueNode>("start", start is { } from ? new DateValue(from) : new NullValue()),
+        new KeyValuePair<string, ValueNode>("end", end is { } to ? new DateValue(to) : new NullValue())
+    ]));
+
+    private static string Fingerprint(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+}
+
+internal static class EffectiveDatedIntervalSemantics
+{
+    public static bool IsValid(DateOnly? start, DateOnly? end) =>
+        start is not null && (end is null || end >= start);
+
+    public static bool Overlaps(bool previousIsOpenEnded, DateOnly? previousEnd, DateOnly? currentStart) =>
+        previousIsOpenEnded || previousEnd is { } end && currentStart is { } start && start <= end;
+
+    public static bool HasGap(bool requireContinuous, DateOnly? previousEnd, DateOnly? currentStart) =>
+        requireContinuous && previousEnd is { } end && currentStart is { } start && start > end.AddDays(1);
 }
 
 public abstract class VerificationRuleBase : IVerificationRule
@@ -371,47 +511,6 @@ public sealed class AttributeComparisonRule(VerificationRuleDefinition definitio
                 context.BindingReferences, new EvidenceValue(new IntegerValue(compared)),
                 new EvidenceValue(new IntegerValue(matching))));
         return merged.OrderBy(finding => finding.StableKey, StringComparer.Ordinal).ToArray();
-    }
-}
-
-public sealed class MemberAccountingRule(VerificationRuleDefinition definition) : VerificationRuleBase(definition)
-{
-    public override VerificationScope Scope => VerificationScope.Accounting;
-
-    public override async IAsyncEnumerable<VerificationFinding> EvaluateAsync(VerificationExecutionContext context,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
-    {
-        var semanticType = Option("semanticType", "Pension.Member");
-        var memberSources = 0;
-        var unaccounted = 0;
-        var accountedCount = 0;
-        await foreach (var source in context.Workspace.ReadSourceFactsAsync(cancellationToken).ConfigureAwait(false))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (source.SemanticType != semanticType) continue;
-            memberSources++;
-            var isAccounted = source.FailedEntries == 0 &&
-                ((source.ProducedEntries > 0) ^ (source.ExcludedEntries > 0));
-            if (isAccounted)
-            {
-                accountedCount++;
-                continue;
-            }
-            unaccounted++;
-            yield return Finding(context, EvidenceType.Accounting, EvidenceResult.Fail, "UnaccountedSource",
-                $"{Id.Value}:{source.NodeKey}:{source.Artifact.Id.Value}",
-                "Pension member source is unaccounted or has conflicting dispositions.",
-                [ArtifactInput(context, source.NodeKey, source.Artifact)]);
-        }
-
-        if (memberSources == 0)
-            yield return Finding(context, EvidenceType.Accounting, EvidenceResult.NotApplicable, "MemberAccountingNotApplicable",
-                $"{Id.Value}:none", "No source artifacts match the configured pension member semantic type.");
-        else if (accountedCount > 0)
-            yield return Finding(context, EvidenceType.Accounting, EvidenceResult.Pass, "MemberAccounting",
-            $"{Id.Value}:population", $"{accountedCount.ToString(CultureInfo.InvariantCulture)} of {memberSources.ToString(CultureInfo.InvariantCulture)} pension member source artifacts are accounted for.",
-            context.BindingReferences, new EvidenceValue(new IntegerValue(memberSources)),
-            new EvidenceValue(new IntegerValue(accountedCount)));
     }
 }
 

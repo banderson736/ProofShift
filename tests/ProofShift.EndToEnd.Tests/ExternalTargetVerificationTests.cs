@@ -91,6 +91,8 @@ public sealed class ExternalTargetVerificationTests
                 Path.Combine(root, "working"), "0.10-test", [runtime], TestContext.Current.CancellationToken);
             Assert.Equal(VerificationOutcome.Passed, result.Run.Outcome);
             Assert.Equal(1, result.Ledger.LineageCount);
+            Assert.Contains(result.Findings, finding => finding.RuleId.Value == "values" &&
+                finding.Code == "AttributeComparison" && finding.Result == EvidenceResult.Pass);
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
     }

@@ -17,6 +17,10 @@
     <ProjectReference Include="../ProofShift.Verification/ProofShift.Verification.csproj" />
     <ProjectReference Include="../ProofShift.Packs.Abstractions/ProofShift.Packs.Abstractions.csproj" />
     <ProjectReference Include="../ProofShift.Packs.Pension/ProofShift.Packs.Pension.csproj" />
+    <ProjectReference Include="../ProofShift.Packs.Utility/ProofShift.Packs.Utility.csproj" />
+    <ProjectReference Include="../ProofShift.Packs.Justice/ProofShift.Packs.Justice.csproj" />
+    <ProjectReference Include="../ProofShift.Packs.Hcm/ProofShift.Packs.Hcm.csproj" />
+    <ProjectReference Include="../ProofShift.Packs.Fhir/ProofShift.Packs.Fhir.csproj" />
     <ProjectReference Include="../ProofShift.Projection/ProofShift.Projection.csproj" />
     <ProjectReference Include="../ProofShift.Snapshots/ProofShift.Snapshots.csproj" />
     <ProjectReference Include="../ProofShift.Reporting/ProofShift.Reporting.csproj" />

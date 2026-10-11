@@ -874,9 +874,6 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
             JOIN actual_targets a ON a.node_key=e.node_key AND a.identity_hash=e.identity_hash
             JOIN actual_values av ON av.target_seq=a.seq AND av.field=ev.field
             WHERE (SELECT COUNT(*) FROM actual_targets d WHERE d.node_key=a.node_key AND d.identity_hash=a.identity_hash)=1
-              AND EXISTS (SELECT 1 FROM journal_entries j JOIN journal_sources js ON js.journal_seq=j.seq
-                                                    WHERE j.result='produced' AND j.target_id=e.target_id AND j.edge_id=e.edge_id
-                                                        AND js.source_id=e.source_id AND js.source_node_key=e.source_node_key)
             ORDER BY e.node_key,e.identity_hash,e.edge_id,ev.field
             """;
         if (_ruleEvaluationPartition is { } partitionIndex && _partitionCount > 1)
@@ -886,8 +883,6 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
                 .Replace("FROM actual_targets d", $"FROM partition{partitionIndex}.actual_targets d", StringComparison.Ordinal)
                 .Replace("JOIN actual_targets a", $"JOIN partition{partitionIndex}.actual_targets a", StringComparison.Ordinal)
                 .Replace("JOIN actual_values av", $"JOIN partition{partitionIndex}.actual_values av", StringComparison.Ordinal)
-                .Replace("FROM journal_entries j", $"FROM partition{partitionIndex}.journal_entries j", StringComparison.Ordinal)
-                .Replace("JOIN journal_sources js", $"JOIN partition{partitionIndex}.journal_sources js", StringComparison.Ordinal)
                 .Replace("WHERE (SELECT COUNT(*)", $"WHERE {expectedPartition} AND (SELECT COUNT(*)", StringComparison.Ordinal);
         }
         await CaptureQueryPlanAsync("attribute comparisons", command, cancellationToken).ConfigureAwait(false);

@@ -11,6 +11,23 @@ namespace ProofShift.Verification.Tests;
 public sealed class VerificationWorkspaceTests
 {
     [Fact]
+    public void EffectiveDatedIntervalPolicyUsesInclusiveBoundsAndConfiguredContinuity()
+    {
+        var start = new DateOnly(2024, 1, 1);
+        var end = new DateOnly(2024, 1, 31);
+
+        Assert.True(EffectiveDatedIntervalSemantics.IsValid(start, end));
+        Assert.True(EffectiveDatedIntervalSemantics.IsValid(start, null));
+        Assert.False(EffectiveDatedIntervalSemantics.IsValid(end, start));
+        Assert.True(EffectiveDatedIntervalSemantics.Overlaps(false, end, end));
+        Assert.True(EffectiveDatedIntervalSemantics.Overlaps(true, null, new DateOnly(2024, 2, 1)));
+        Assert.False(EffectiveDatedIntervalSemantics.Overlaps(false, end, new DateOnly(2024, 2, 1)));
+        Assert.False(EffectiveDatedIntervalSemantics.HasGap(false, end, new DateOnly(2024, 2, 15)));
+        Assert.False(EffectiveDatedIntervalSemantics.HasGap(true, end, new DateOnly(2024, 2, 1)));
+        Assert.True(EffectiveDatedIntervalSemantics.HasGap(true, end, new DateOnly(2024, 2, 2)));
+    }
+
+    [Fact]
     public void ExecutionPlanMergesDescriptorRequirementsAndExecutionProperties()
     {
         var groupingKey = new VerificationOrderingKey("Test.Person", "member-id", VerificationOrderingRole.Grouping);

@@ -821,6 +821,13 @@ public sealed class VerificationService
         using (var evidenceStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
             "external evidence graph construction"))
         {
+            var duplicateFindingKeys = findings.GroupBy(finding => (finding.RuleId, finding.StableKey))
+                .Where(group => group.Count() > 1)
+                .Select(group => $"{group.Key.RuleId.Value}:{group.Key.StableKey}")
+                .Order(StringComparer.Ordinal).ToArray();
+            if (duplicateFindingKeys.Length > 0)
+                throw new VerificationRuleException("PSEVIDENCE001",
+                    $"External findings contain duplicate rule/stable keys: {string.Join(", ", duplicateFindingKeys)}.");
             var records = findings.Select(finding => ToEvidenceRecord(runId, finding)).ToList();
             var summaryRule = new RuleId(SystemRuleId);
             var summaryInputs = context.BindingReferences

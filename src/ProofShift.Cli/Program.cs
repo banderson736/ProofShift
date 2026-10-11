@@ -12,7 +12,6 @@ using ProofShift.Evidence;
 using ProofShift.Graph;
 using ProofShift.Packs.Pension;
 using ProofShift.Projection;
-using ProofShift.Reporting;
 using ProofShift.Recovery;
 using ProofShift.Snapshots;
 using ProofShift.Domain;
@@ -38,7 +37,7 @@ internal static class Program
             return await DiscoveryCommands.RunAsync(args).ConfigureAwait(false);
         if (args.Length > 0 && args[0] == "init")
             return await ProjectInitCommand.RunAsync(args).ConfigureAwait(false);
-        if (args.Length > 0 && args[0] is "rules" or "capabilities" or "connectors")
+        if (args.Length > 0 && args[0] is "packs" or "rules" or "capabilities" or "connectors")
             return RuleAuthoringCommands.Run(args);
         if (args.Length >= 2 && string.Equals(args[0], "demo", StringComparison.OrdinalIgnoreCase) &&
             string.Equals(args[1], "generate", StringComparison.OrdinalIgnoreCase))

@@ -1,0 +1,9 @@
+"id": "legacy-hcm"
+"name": "Synthetic Legacy HCM"
+"role": "source"
+"storage":
+  "hcm-db":
+    "connector": "postgres"
+    "connection":
+      "secret": "HCM_SOURCE_CONNECTION"
+...

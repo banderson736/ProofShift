@@ -4,7 +4,7 @@ using ProofShift.Domain;
 using ProofShift.Evidence;
 using ProofShift.Recovery;
 
-namespace ProofShift.Reporting;
+namespace ProofShift.Packs.Pension;
 
 public sealed record PensionAssuranceReport
 {

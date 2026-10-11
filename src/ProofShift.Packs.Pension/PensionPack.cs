@@ -9,10 +9,11 @@ public sealed class PensionPack : IDomainPack
     private static readonly string[] ScopeOptionNames = ["sourceNode", "targetNode", "semanticType"];
     public string Id => "proofshift.pension";
     public string Version => "0.9.0";
+    public DomainPackMetadata Metadata { get; }
 
     public IReadOnlyCollection<VerificationRuleFactory> RuleFactories { get; } =
     [
-        Factory("pension-member-accounting", definition => new MemberAccountingRule(definition), [], []),
+        Factory("pension-member-accounting", definition => new PensionMemberAccountingRule(definition), [], []),
         Factory("pension-member-uniqueness", definition => new MemberUniquenessRule(definition), ["businessKey"],
             [Field("businessKey", VerificationFieldSide.Target, "Pension.Member", keyRole: VerificationOrderingRole.Grouping,
                 defaultFields: ["member_id"])],
@@ -97,6 +98,40 @@ public sealed class PensionPack : IDomainPack
             [Field("attribute", VerificationFieldSide.Target, defaultFields: ["code"]),
              Field("businessKey", VerificationFieldSide.Target, keyRole: VerificationOrderingRole.Grouping, defaultFields: ["id"])])
     ];
+
+    public PensionPack()
+    {
+        Metadata = new DomainPackMetadata(Id, Version, "Public Pension Assurance",
+        [
+            new("Pension.Beneficiary", "Beneficiary", "A person or organization entitled to a member benefit."),
+            new("Pension.BenefitPayment", "Benefit payment", "A payment issued for a pension benefit."),
+            new("Pension.Contribution", "Contribution", "A contribution transaction associated with a pension account."),
+            new("Pension.Document", "Document", "A document or historical export preserved through migration."),
+            new("Pension.Employment", "Employment", "An employment period or event in member history."),
+            new("Pension.HistoricalExport", "Historical export", "A retained export representing prior system history."),
+            new("Pension.Member", "Member", "A person with pension-system membership."),
+            new("Pension.RetirementElection", "Retirement election", "A member retirement election and its effective choice."),
+            new("Pension.ServiceCredit", "Service credit", "A service period or credited service amount.")
+        ],
+        [new DomainPackRuleProviderMetadata(Id, Version, RuleFactories.Select(factory =>
+            new DomainPackRuleMetadata(factory.Type, factory.Descriptor.Version, factory.Descriptor.Description)))],
+        [new PackConfigurationSchemaContribution("verification.rules",
+            RuleConfigurationSchema.Generate(RuleFactories.Select(factory => factory.Descriptor)).ToJsonString(),
+            RuleFactories.Select(factory => factory.Type))],
+        [
+            new("reporting.pension-assurance", "Pension assurance report", "Summarize Pension-specific defects and readiness evidence."),
+            new("verification.semantic-rules", "Semantic verification rules", "Evaluate configured pension migration invariants."),
+            new("verification.external-target", "Independent target observation", "Verify an externally prepared target through generic observations.")
+        ],
+        [
+            new("packs.describe", "Describe pack", "Expose deterministic pack identity, concepts, rules, and capabilities."),
+            new("compare", "Compare runs", "Attribute defect changes between Pension assurance runs."),
+            new("report", "Report", "Summarize Pension assurance findings and recovery readiness."),
+            new("rules.describe", "Describe rules", "Expose rule descriptions and supported versions."),
+            new("rules.list", "List rules", "List installed rules for the selected pack."),
+            new("schema", "Generate schema", "Generate configuration schema from provider-owned rule descriptors.")
+        ]);
+    }
 
     private static VerificationRuleFactory Factory(string type, Func<VerificationRuleDefinition, ProofShift.Verification.IVerificationRule> create,
         string[] optionNames, RuleFieldRequirement[] fieldRequirements,

@@ -1,5 +1,9 @@
 using ProofShift.Packs.Abstractions;
 using ProofShift.Packs.Pension;
+using ProofShift.Packs.Utility;
+using ProofShift.Packs.Justice;
+using ProofShift.Packs.Hcm;
+using ProofShift.Packs.Fhir;
 using ProofShift.Verification;
 using ProofShift.Configuration;
 using ProofShift.Engine;
@@ -28,7 +32,7 @@ internal static class CliComposition
             new ParquetSourceConnector([new LocalFileStoreFactory(), new S3StoreFactory(), new AzureBlobStoreFactory(), new SftpStoreFactory()])],
         [new PostgresShadowTargetConnector(), new FilesystemShadowTargetConnector()]);
 
-    internal static PackRegistry Packs() => new([new PensionPack()]);
+    internal static PackRegistry Packs() => new([new PensionPack(), new UtilityPack(), new JusticePack(), new HcmPack(), new FhirPack()]);
 
     internal static IReadOnlyCollection<RuleDescriptor> InstalledRuleDescriptors() =>
         new GenericVerificationRuleProvider().RuleFactories.Select(factory => factory.Descriptor)

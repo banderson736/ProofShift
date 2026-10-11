@@ -1,0 +1,19 @@
+"proofshift": 1
+"project":
+  "id": "justice-case-management-example"
+  "name": "Synthetic Justice Case Mapping"
+"packs":
+- "id": "proofshift.justice"
+  "version": "0.10.0"
+"systems":
+  "legacy-justice":
+    "file": "systems/source.yaml"
+  "justice-target":
+    "file": "systems/target.yaml"
+"migration":
+  "graph": "migration/graph.yaml"
+"verification":
+  "rules": "rules/justice.yaml"
+"recovery":
+  "policy": "recovery/policy.yaml"
+...

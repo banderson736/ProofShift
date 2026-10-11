@@ -25,6 +25,10 @@
     <ProjectReference Include="../../src/ProofShift.Connectors.Csv/ProofShift.Connectors.Csv.csproj" />
     <ProjectReference Include="../../src/ProofShift.Connectors.Abstractions/ProofShift.Connectors.Abstractions.csproj" />
     <ProjectReference Include="../../src/ProofShift.Packs.Pension/ProofShift.Packs.Pension.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Packs.Utility/ProofShift.Packs.Utility.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Packs.Justice/ProofShift.Packs.Justice.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Packs.Hcm/ProofShift.Packs.Hcm.csproj" />
+    <ProjectReference Include="../../src/ProofShift.Packs.Fhir/ProofShift.Packs.Fhir.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Testcontainers.PostgreSql" />

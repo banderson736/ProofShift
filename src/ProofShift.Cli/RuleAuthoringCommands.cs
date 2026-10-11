@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ProofShift.Packs.Abstractions;
 using ProofShift.Verification;
 
 namespace ProofShift.Cli;
@@ -12,6 +13,52 @@ internal static class RuleAuthoringCommands
         var json = args.Contains("--json", StringComparer.Ordinal);
         var arguments = args.Where(argument => argument != "--json").ToArray();
         var descriptors = CliComposition.InstalledRuleDescriptors();
+        var installedPacks = CliComposition.Packs().Installed;
+        if (arguments is ["packs", "list"])
+        {
+            var entries = installedPacks.OrderBy(pack => pack.Id, StringComparer.Ordinal).Select(pack => new
+            {
+                pack.Id, pack.Version, pack.Metadata.DisplayName,
+                conceptCount = pack.Metadata.Concepts.Count,
+                ruleTypes = pack.RuleFactories.Select(factory => factory.Type).Order(StringComparer.Ordinal)
+            }).ToArray();
+            if (json) Console.WriteLine(JsonSerializer.Serialize(entries, JsonOptions));
+            else foreach (var entry in entries) Console.WriteLine($"{entry.Id} {entry.Version}: {entry.DisplayName} ({entry.conceptCount} concepts)");
+            return 0;
+        }
+        if (arguments is ["packs", "describe", var packId])
+        {
+            var pack = FindPack(installedPacks, packId);
+            if (pack is null)
+            {
+                Console.Error.WriteLine("PSPACK001: Domain pack is not installed. Use packs list to inspect available packs.");
+                return 1;
+            }
+            if (json) Console.WriteLine(JsonSerializer.Serialize(pack.Metadata, JsonOptions));
+            else
+            {
+                Console.WriteLine($"{pack.Id} version {pack.Version}: {pack.Metadata.DisplayName}");
+                foreach (var concept in pack.Metadata.Concepts)
+                    Console.WriteLine($"Concept: {concept.SemanticType} ({concept.DisplayName})");
+                foreach (var rule in pack.Metadata.RuleProviders.SelectMany(provider => provider.Rules))
+                    Console.WriteLine($"Rule: {rule.Type} {rule.Version}: {rule.Description}");
+                foreach (var capability in pack.Metadata.Capabilities)
+                    Console.WriteLine($"Capability: {capability.Id}: {capability.Description}");
+            }
+            return 0;
+        }
+        if (arguments is ["packs", "schema", var schemaPackId])
+        {
+            var pack = FindPack(installedPacks, schemaPackId);
+            if (pack is null)
+            {
+                Console.Error.WriteLine("PSPACK001: Domain pack is not installed. Use packs list to inspect available packs.");
+                return 1;
+            }
+            Console.WriteLine(RuleConfigurationSchema.Generate(pack.RuleFactories.Select(factory => factory.Descriptor))
+                .ToJsonString(JsonOptions));
+            return 0;
+        }
         if (arguments is ["capabilities"])
         {
             var connectors = CliComposition.Connectors().Capabilities;
@@ -91,7 +138,14 @@ internal static class RuleAuthoringCommands
             }
             return 0;
         }
-        Console.Error.WriteLine("Usage: proofshift rules list|describe <type>|schema [--json]; proofshift connectors schema <id>; proofshift capabilities [--json]");
+        Console.Error.WriteLine("Usage: proofshift packs list|describe <id>|schema <id> [--json]; proofshift rules list|describe <type>|schema [--json]; proofshift connectors schema <id>; proofshift capabilities [--json]");
         return 2;
+    }
+
+    private static IDomainPack? FindPack(IReadOnlyCollection<IDomainPack> packs, string requestedId)
+    {
+        var matches = packs.Where(pack => pack.Id == requestedId ||
+            pack.Id[(pack.Id.LastIndexOf('.') + 1)..] == requestedId).ToArray();
+        return matches.Length == 1 ? matches[0] : null;
     }
 }

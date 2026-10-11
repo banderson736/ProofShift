@@ -67,6 +67,33 @@ public sealed class AuthoringCliTests
     }
 
     [Fact]
+    public async Task FhirPackIsAvailableThroughGenericAuthoringCommands()
+    {
+        var listing = await RunAsync("packs", "list", "--json");
+        Assert.Equal(0, listing.ExitCode);
+        using var packs = JsonDocument.Parse(listing.Output);
+        var fhir = packs.RootElement.EnumerateArray().Single(pack => pack.GetProperty("id").GetString() == "proofshift.fhir");
+        Assert.Equal("0.10.0", fhir.GetProperty("version").GetString());
+
+        var description = await RunAsync("packs", "describe", "proofshift.fhir", "--json");
+        Assert.Equal(0, description.ExitCode);
+        using var metadata = JsonDocument.Parse(description.Output);
+        Assert.Contains(metadata.RootElement.GetProperty("concepts").EnumerateArray(),
+            concept => concept.GetProperty("semanticType").GetString() == "Fhir.Observation");
+
+        var schema = await RunAsync("packs", "schema", "proofshift.fhir");
+        Assert.Equal(0, schema.ExitCode);
+        using var rulesSchema = JsonDocument.Parse(schema.Output);
+        var ruleTypes = rulesSchema.RootElement.GetProperty("properties").GetProperty("rules")
+            .GetProperty("additionalProperties").GetProperty("oneOf").EnumerateArray()
+            .Select(rule => rule.GetProperty("properties").GetProperty("type").GetProperty("const").GetString())
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("fhir-typed-reference-integrity", ruleTypes);
+        Assert.Contains("fhir-instant-fidelity", ruleTypes);
+        Assert.Contains("fhir-quantity-fidelity", ruleTypes);
+    }
+
+    [Fact]
     public async Task CapabilitiesReportEnterpriseReadersAsReadOnlyWithNoShadowWrite()
     {
         var result = await RunAsync("capabilities", "--json");
