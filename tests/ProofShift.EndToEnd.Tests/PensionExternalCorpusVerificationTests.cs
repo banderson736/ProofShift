@@ -428,7 +428,9 @@ public sealed class PensionExternalCorpusVerificationTests
                 correctedPipeline.Recovery.Id, TestContext.Current.CancellationToken);
             var defectiveHuman = await RunCliAsync(directory, cliAssembly, "report", defectiveReport.DryRunId);
             Assert.True(defectiveHuman.ExitCode == 0, defectiveHuman.StandardError);
-            Assert.Contains("Business Discrepancies: 149", defectiveHuman.StandardOutput);
+            var discrepancyLine = defectiveHuman.StandardOutput.Split('\n')
+                .FirstOrDefault(line => line.StartsWith("Business Discrepancies:", StringComparison.Ordinal));
+            Assert.Equal("Business Discrepancies: 149", discrepancyLine);
             Assert.Contains("RESULT: NOT QUALIFIED", defectiveHuman.StandardOutput);
             var correctedHuman = await RunCliAsync(directory, cliAssembly, "report", correctedReport.DryRunId);
             Assert.True(correctedHuman.ExitCode == 0, correctedHuman.StandardError);
@@ -442,7 +444,7 @@ public sealed class PensionExternalCorpusVerificationTests
             using var defectiveMachineJson = JsonDocument.Parse(defectiveMachine.StandardOutput);
             using var correctedMachineJson = JsonDocument.Parse(correctedMachine.StandardOutput);
             Assert.Equal("proofshift.pension", defectiveMachineJson.RootElement.GetProperty("packId").GetString());
-            Assert.Equal("0.10.0", defectiveMachineJson.RootElement.GetProperty("packVersion").GetString());
+            Assert.Equal(new PensionPack().Version, defectiveMachineJson.RootElement.GetProperty("packVersion").GetString());
             Assert.Equal(new PensionPack().Metadata.ClaimBoundary,
                 defectiveMachineJson.RootElement.GetProperty("claimBoundary").GetString());
             Assert.Equal("NOT QUALIFIED", defectiveMachineJson.RootElement.GetProperty("qualification").GetString());

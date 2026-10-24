@@ -4,7 +4,7 @@ project:
   name: Synthetic Pension PS-0.5 Shadow Projection
 pack:
   id: proofshift.pension
-  version: "0.10.0"
+  version: "0.9.0"
 systems:
   legacy:
     file: systems/source.yaml

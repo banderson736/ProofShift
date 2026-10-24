@@ -24,7 +24,8 @@ internal static class PersistedAssuranceReportTestHelper
         var recoveryStore = new FileSystemRecoveryArtifactStore(
             Path.Combine(artifactDirectory, ".proofshift", "recovery"));
         var recovery = await recoveryStore.ReadSummaryAsync(dryRunId, cancellationToken);
-        var cliProjectDirectory = Path.Combine(Path.GetTempPath(), $"proofshift-report-cli-{Guid.NewGuid():N}");
+        var cliRootDirectory = Path.Combine(Path.GetTempPath(), $"proofshift-report-cli-{Guid.NewGuid():N}");
+        var cliProjectDirectory = Path.Combine(cliRootDirectory, projectName);
         try
         {
             var cliStoreRoot = Path.Combine(cliProjectDirectory, ".proofshift");
@@ -104,8 +105,8 @@ internal static class PersistedAssuranceReportTestHelper
         }
         finally
         {
-            if (Directory.Exists(cliProjectDirectory))
-                Directory.Delete(cliProjectDirectory, recursive: true);
+            if (Directory.Exists(cliRootDirectory))
+                Directory.Delete(cliRootDirectory, recursive: true);
         }
     }
 
