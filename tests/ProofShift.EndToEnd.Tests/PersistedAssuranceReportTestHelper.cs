@@ -33,7 +33,7 @@ internal static class PersistedAssuranceReportTestHelper
             CopyDirectory(Path.Combine(artifactDirectory, ".proofshift", "verifications",
                     recovery.VerificationRunId.Value.ToString("N")),
                 Path.Combine(cliStoreRoot, "verifications", recovery.VerificationRunId.Value.ToString("N")));
-            CopyDirectory(Path.Combine(artifactDirectory, ".proofshift", "checkpoints",
+            CopyDirectory(Path.Combine(artifactDirectory, "checkpoints",
                     recovery.CheckpointId.Value.ToString("N")),
                 Path.Combine(cliStoreRoot, "checkpoints", recovery.CheckpointId.Value.ToString("N")));
             CopyDirectory(Path.Combine(verificationProjectDirectory, ".proofshift", "projections",
@@ -104,6 +104,17 @@ internal static class PersistedAssuranceReportTestHelper
         }
     }
 
+    public static async Task StageCheckpointForCliAsync(string artifactDirectory, DryRunId dryRunId,
+        CancellationToken cancellationToken)
+    {
+        var recoveryStore = new FileSystemRecoveryArtifactStore(
+            Path.Combine(artifactDirectory, ".proofshift", "recovery"));
+        var recovery = await recoveryStore.ReadSummaryAsync(dryRunId, cancellationToken);
+        var checkpointId = recovery.CheckpointId.Value.ToString("N");
+        CopyDirectory(Path.Combine(artifactDirectory, "checkpoints", checkpointId),
+            Path.Combine(artifactDirectory, ".proofshift", "checkpoints", checkpointId));
+    }
+
     public static async Task<PersistedAssuranceReport> BuildAsync(string artifactDirectory,
         string verificationProjectDirectory, string projectName, IDomainPack pack, DryRunId dryRunId,
         CancellationToken cancellationToken)
@@ -111,8 +122,7 @@ internal static class PersistedAssuranceReportTestHelper
         var recoveryStore = new FileSystemRecoveryArtifactStore(
             Path.Combine(artifactDirectory, ".proofshift", "recovery"));
         var recovery = await recoveryStore.ReadSummaryAsync(dryRunId, cancellationToken);
-        var checkpointStore = new FileSystemSnapshotStore(
-            Path.Combine(artifactDirectory, ".proofshift", "checkpoints"));
+        var checkpointStore = new FileSystemSnapshotStore(Path.Combine(artifactDirectory, "checkpoints"));
         var checkpoint = await checkpointStore.ReadManifestAsync(
             recovery.CheckpointId.Value.ToString("D"), cancellationToken);
         var projection = await ProjectionRunManifestStore.ReadAsync(verificationProjectDirectory,

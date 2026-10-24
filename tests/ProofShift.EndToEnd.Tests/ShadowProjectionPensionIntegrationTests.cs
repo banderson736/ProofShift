@@ -709,7 +709,8 @@ public sealed class ShadowProjectionPensionIntegrationTests
                 recoveryReportJson.RootElement.GetProperty("dryRunFingerprint").GetString());
 
             var assuranceReport = await RunCliAsync(cli, fixture, environment, "report", "--run", dryRunId!, "--json");
-            Assert.Equal(0, assuranceReport.ExitCode);
+            Assert.True(assuranceReport.ExitCode == 0,
+                $"Persisted assurance report failed with exit code {assuranceReport.ExitCode}. stdout: {assuranceReport.StandardOutput} stderr: {assuranceReport.StandardError}");
             Assert.DoesNotContain(sqlBuilder.ConnectionString, assuranceReport.StandardOutput, StringComparison.Ordinal);
             Assert.DoesNotContain(postgresContainer.GetConnectionString(), assuranceReport.StandardOutput, StringComparison.Ordinal);
             using var assuranceReportJson = JsonDocument.Parse(assuranceReport.StandardOutput);

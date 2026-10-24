@@ -1041,7 +1041,7 @@ internal static class Program
     private static bool IsPersistedReportFailure(Exception exception) =>
         exception is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or
             FormatException or VerificationRuleException or ProjectionManifestException or RecoveryException or
-            JsonException or DbException;
+            SnapshotStoreException or JsonException or DbException;
 
     private static void WriteAssuranceReport(PersistedAssuranceReport report, bool jsonOutput)
     {

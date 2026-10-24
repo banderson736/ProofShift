@@ -422,6 +422,10 @@ public sealed class PensionExternalCorpusVerificationTests
                 ? configuredCliAssembly
                 : Path.Combine(repositoryRoot, "src", "ProofShift.Cli", "bin", "Debug", "net10.0", "ProofShift.Cli.dll");
             Assert.True(File.Exists(cliAssembly), $"CLI assembly not found: {cliAssembly}");
+            await PersistedAssuranceReportTestHelper.StageCheckpointForCliAsync(directory,
+                projectedDefectivePipeline.Recovery.Id, TestContext.Current.CancellationToken);
+            await PersistedAssuranceReportTestHelper.StageCheckpointForCliAsync(directory,
+                correctedPipeline.Recovery.Id, TestContext.Current.CancellationToken);
             var defectiveHuman = await RunCliAsync(directory, cliAssembly, "report", defectiveReport.DryRunId);
             Assert.True(defectiveHuman.ExitCode == 0, defectiveHuman.StandardError);
             Assert.Contains("Business Discrepancies: 149", defectiveHuman.StandardOutput);
