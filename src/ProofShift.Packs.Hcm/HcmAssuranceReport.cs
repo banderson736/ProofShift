@@ -8,7 +8,7 @@ namespace ProofShift.Packs.Hcm;
 public sealed record HcmAssuranceReport
 {
     public const string FormatVersion = "proofshift-hcm-assurance-report-v1";
-    public const string ClaimBoundary = "Configured migration invariants only; this report does not validate payroll tax, tax withholding, benefits or labor-law compliance, accounting certification, or complete payroll-engine correctness.";
+    public const string ClaimBoundary = HcmPack.ClaimBoundary;
 
     public string Format { get; }
     public string Project { get; }

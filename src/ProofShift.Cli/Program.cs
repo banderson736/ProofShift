@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Globalization;
+using System.Data.Common;
 using ProofShift.Configuration;
 using ProofShift.Connectors.Abstractions;
 using ProofShift.Connectors.Csv;
@@ -15,6 +16,8 @@ using ProofShift.Projection;
 using ProofShift.Recovery;
 using ProofShift.Snapshots;
 using ProofShift.Domain;
+using ProofShift.Packs.Abstractions;
+using ProofShift.Reporting;
 using ProofShift.Verification;
 
 namespace ProofShift.Cli;
@@ -56,7 +59,7 @@ internal static class Program
         if (args.Length >= 2 && string.Equals(args[0], "report", StringComparison.OrdinalIgnoreCase) &&
             Guid.TryParse(args[1], out _) && args.Skip(2).All(argument => string.Equals(argument, "--json", StringComparison.OrdinalIgnoreCase)))
         {
-            return await ReadPersistedPensionReportAsync(Directory.GetCurrentDirectory(), args[1],
+            return await ReadStandaloneAssuranceReportAsync(Directory.GetCurrentDirectory(), args[1],
                 args.Skip(2).Any(argument => string.Equals(argument, "--json", StringComparison.OrdinalIgnoreCase))).ConfigureAwait(false);
         }
 
@@ -64,7 +67,7 @@ internal static class Program
             Guid.TryParse(args[1], out _) && Guid.TryParse(args[2], out _) &&
             args.Skip(3).All(argument => string.Equals(argument, "--json", StringComparison.OrdinalIgnoreCase)))
         {
-            return await ComparePersistedPensionRunsAsync(Directory.GetCurrentDirectory(), args[1], args[2],
+            return await CompareStandaloneAssuranceRunsAsync(Directory.GetCurrentDirectory(), args[1], args[2],
                 args.Skip(3).Any(argument => string.Equals(argument, "--json", StringComparison.OrdinalIgnoreCase))).ConfigureAwait(false);
         }
 
@@ -171,13 +174,13 @@ internal static class Program
 
         if (string.Equals(args[0], "report", StringComparison.OrdinalIgnoreCase) && verificationRun is not null)
         {
-            return await ReadPensionReportAsync(args[1], verificationRun, jsonOutput).ConfigureAwait(false);
+            return await ReadAssuranceReportAsync(args[1], verificationRun, jsonOutput).ConfigureAwait(false);
         }
 
         if (string.Equals(args[0], "compare", StringComparison.OrdinalIgnoreCase) &&
             beforeDryRun is not null && afterDryRun is not null)
         {
-            return await ComparePensionRunsAsync(args[1], beforeDryRun, afterDryRun, jsonOutput).ConfigureAwait(false);
+            return await CompareAssuranceRunsAsync(args[1], beforeDryRun, afterDryRun, jsonOutput).ConfigureAwait(false);
         }
 
         WriteUsage();
@@ -862,154 +865,197 @@ internal static class Program
         Console.WriteLine($"RESULT: {(output.Outcome == "qualified" ? "QUALIFIED DRY RUN" : "DRY RUN NOT QUALIFIED")}");
     }
 
-    private static async Task<int> ReadPensionReportAsync(string path, string dryRunId, bool jsonOutput)
-    {
-        try
-        {
-            var report = await LoadPensionReportAsync(path, dryRunId).ConfigureAwait(false);
-            if (jsonOutput) Console.WriteLine(JsonSerializer.Serialize(report, JsonOptions));
-            else WritePensionReport(report);
-            return 0;
-        }
-        catch
-        {
-            Console.Error.WriteLine("Pension assurance report could not be assembled or failed integrity/context verification.");
-            return 1;
-        }
-    }
-
-    private static async Task<int> ReadPersistedPensionReportAsync(string projectDirectory, string dryRunId, bool jsonOutput)
-    {
-        try
-        {
-            if (!Guid.TryParse(dryRunId, out var parsed)) return 2;
-            var report = await LoadPersistedPensionReportAsync(projectDirectory, new DryRunId(parsed),
-                Path.GetFileName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(projectDirectory)))).ConfigureAwait(false);
-            if (jsonOutput) Console.WriteLine(JsonSerializer.Serialize(report, JsonOptions));
-            else WritePensionReport(report);
-            return 0;
-        }
-        catch
-        {
-            Console.Error.WriteLine("Persisted pension assurance artifacts could not be read or failed integrity verification.");
-            return 1;
-        }
-    }
-
-    private static async Task<int> ComparePensionRunsAsync(string path, string beforeDryRunId,
-        string afterDryRunId, bool jsonOutput)
-    {
-        try
-        {
-            var before = await LoadPensionReportAsync(path, beforeDryRunId).ConfigureAwait(false);
-            var after = await LoadPensionReportAsync(path, afterDryRunId).ConfigureAwait(false);
-            var comparison = PensionAssuranceReportBuilder.Compare(before, after);
-            if (jsonOutput) Console.WriteLine(JsonSerializer.Serialize(comparison, JsonOptions));
-            else
-            {
-                Console.WriteLine("ProofShift Pension Dry-Run Comparison");
-                Console.WriteLine($"Before: {comparison.BeforeQualification} ({comparison.BeforeDryRunId})");
-                Console.WriteLine($"After: {comparison.AfterQualification} ({comparison.AfterDryRunId})");
-                Console.WriteLine($"Evidence Fingerprint Changed: {comparison.EvidenceFingerprintChanged}");
-                Console.WriteLine($"Recovery Evidence Fingerprint Changed: {comparison.RecoveryEvidenceFingerprintChanged}");
-                Console.WriteLine($"Dry-Run Fingerprint Changed: {comparison.DryRunFingerprintChanged}");
-                Console.WriteLine($"Source Fingerprint Changed: {comparison.SourceFingerprintChanged}");
-                Console.WriteLine($"Projection Fingerprint Changed: {comparison.ProjectionFingerprintChanged}");
-                Console.WriteLine($"Configuration / Graph / Rules / Recovery Policy Changed: {comparison.ConfigurationHashChanged} / {comparison.GraphHashChanged} / {comparison.RuleSetFingerprintChanged} / {comparison.RecoveryPolicyFingerprintChanged}");
-                Console.WriteLine($"Qualification Changed: {comparison.QualificationChanged}");
-                foreach (var attribution in comparison.DifferenceAttribution) Console.WriteLine($"Difference Attribution: {attribution}");
-                foreach (var (code, count) in comparison.DefectsResolved) Console.WriteLine($"Resolved {code}: {count}");
-                foreach (var (code, count) in comparison.DefectsIntroduced) Console.WriteLine($"Introduced {code}: {count}");
-            }
-            return 0;
-        }
-        catch
-        {
-            Console.Error.WriteLine("Pension runs could not be compared or failed integrity/context verification.");
-            return 1;
-        }
-    }
-
-    private static async Task<int> ComparePersistedPensionRunsAsync(string projectDirectory, string beforeDryRunId,
-        string afterDryRunId, bool jsonOutput)
-    {
-        try
-        {
-            if (!Guid.TryParse(beforeDryRunId, out var beforeId) || !Guid.TryParse(afterDryRunId, out var afterId)) return 2;
-            var projectName = Path.GetFileName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(projectDirectory)));
-            var before = await LoadPersistedPensionReportAsync(projectDirectory, new DryRunId(beforeId), projectName).ConfigureAwait(false);
-            var after = await LoadPersistedPensionReportAsync(projectDirectory, new DryRunId(afterId), projectName).ConfigureAwait(false);
-            var comparison = PensionAssuranceReportBuilder.Compare(before, after);
-            if (jsonOutput) Console.WriteLine(JsonSerializer.Serialize(comparison, JsonOptions));
-            else
-            {
-                Console.WriteLine("ProofShift Pension Dry-Run Comparison");
-                Console.WriteLine($"Before: {comparison.BeforeQualification} ({comparison.BeforeDryRunId})");
-                Console.WriteLine($"After: {comparison.AfterQualification} ({comparison.AfterDryRunId})");
-                Console.WriteLine($"Source Fingerprint Changed: {comparison.SourceFingerprintChanged}");
-                Console.WriteLine($"Graph Hash Changed: {comparison.GraphHashChanged}");
-                Console.WriteLine($"Projection Fingerprint Changed: {comparison.ProjectionFingerprintChanged}");
-                Console.WriteLine($"Rule Set Fingerprint Changed: {comparison.RuleSetFingerprintChanged}");
-                Console.WriteLine($"Recovery Policy Fingerprint Changed: {comparison.RecoveryPolicyFingerprintChanged}");
-                Console.WriteLine($"Evidence / Recovery / Dry-Run Fingerprints Changed: {comparison.EvidenceFingerprintChanged} / {comparison.RecoveryEvidenceFingerprintChanged} / {comparison.DryRunFingerprintChanged}");
-                foreach (var (code, count) in comparison.DefectsResolved) Console.WriteLine($"Resolved {code}: {count}");
-                foreach (var (code, count) in comparison.DefectsIntroduced) Console.WriteLine($"Introduced {code}: {count}");
-                Console.WriteLine($"Qualification Changed: {comparison.QualificationChanged}");
-                foreach (var attribution in comparison.DifferenceAttribution) Console.WriteLine($"Difference Attribution: {attribution}");
-            }
-            return 0;
-        }
-        catch
-        {
-            Console.Error.WriteLine("Persisted pension runs could not be compared or failed integrity verification.");
-            return 1;
-        }
-    }
-
-    private static async Task<PensionAssuranceReport> LoadPensionReportAsync(string configurationPath, string dryRunId)
+    private static async Task<int> ReadAssuranceReportAsync(string configurationPath, string dryRunId, bool jsonOutput)
     {
         if (!Guid.TryParse(dryRunId, out var parsedDryRunId))
-            throw new ArgumentException("Dry-run identifier must be a GUID.", nameof(dryRunId));
-        var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(configurationPath))
-            ?? throw new InvalidOperationException("Project configuration directory is unavailable.");
-        var loaded = await new ConfigurationLoader().LoadAsync(configurationPath).ConfigureAwait(false);
-        if (loaded.Configuration is null) throw new InvalidDataException("Report configuration is invalid.");
-        var compilation = MigrationGraphCompiler.Compile(loaded.Configuration);
-        if (!compilation.IsValid || compilation.Graph is null)
-            throw new InvalidDataException("Report migration graph is invalid.");
+        {
+            Console.Error.WriteLine("Dry-run identifier must be a GUID.");
+            return 2;
+        }
+        try
+        {
+            var loaded = await new ConfigurationLoader().LoadAsync(configurationPath).ConfigureAwait(false);
+            if (!loaded.IsValid || loaded.Configuration is null)
+                throw new InvalidDataException("Report configuration is invalid.");
+            var configuration = loaded.Configuration;
+            var compilation = MigrationGraphCompiler.Compile(configuration);
+            if (!compilation.IsValid || compilation.Graph is null)
+                throw new InvalidDataException("Report migration graph is invalid.");
+            var pack = ResolveConfiguredReportPack(configuration);
+            var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(configurationPath))
+                ?? throw new InvalidOperationException("Project configuration directory is unavailable.");
+            var report = await LoadPersistedAssuranceReportAsync(projectDirectory, new DryRunId(parsedDryRunId),
+                configuration.Root.Project?.Name ?? Path.GetFileName(projectDirectory), pack,
+                configuration.Root.Project?.Id, configuration.ConfigurationHash, compilation.Graph.GraphHash)
+                .ConfigureAwait(false);
+            WriteAssuranceReport(report, jsonOutput);
+            return 0;
+        }
+        catch (Exception exception) when (IsPersistedReportFailure(exception))
+        {
+            Console.Error.WriteLine($"Persisted assurance report failed: {exception.Message}");
+            return 1;
+        }
+    }
+
+    private static async Task<int> ReadStandaloneAssuranceReportAsync(string projectDirectory, string dryRunId, bool jsonOutput)
+    {
+        if (!Guid.TryParse(dryRunId, out var parsedDryRunId)) return 2;
+        try
+        {
+            var report = await LoadPersistedAssuranceReportAsync(projectDirectory, new DryRunId(parsedDryRunId),
+                Path.GetFileName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(projectDirectory))),
+                expectedPack: null, expectedProjectId: null, expectedConfigurationHash: null,
+                expectedGraphHash: null).ConfigureAwait(false);
+            WriteAssuranceReport(report, jsonOutput);
+            return 0;
+        }
+        catch (Exception exception) when (IsPersistedReportFailure(exception))
+        {
+            Console.Error.WriteLine($"Persisted assurance artifacts failed validation: {exception.Message}");
+            return 1;
+        }
+    }
+
+    private static async Task<int> CompareAssuranceRunsAsync(string configurationPath, string beforeDryRunId,
+        string afterDryRunId, bool jsonOutput)
+    {
+        if (!Guid.TryParse(beforeDryRunId, out var beforeId) || !Guid.TryParse(afterDryRunId, out var afterId))
+        {
+            Console.Error.WriteLine("Dry-run identifiers must be GUIDs.");
+            return 2;
+        }
+        try
+        {
+            var loaded = await new ConfigurationLoader().LoadAsync(configurationPath).ConfigureAwait(false);
+            if (!loaded.IsValid || loaded.Configuration is null)
+                throw new InvalidDataException("Comparison configuration is invalid.");
+            var configuration = loaded.Configuration;
+            var compilation = MigrationGraphCompiler.Compile(configuration);
+            if (!compilation.IsValid || compilation.Graph is null)
+                throw new InvalidDataException("Comparison migration graph is invalid.");
+            var pack = ResolveConfiguredReportPack(configuration);
+            var projectDirectory = Path.GetDirectoryName(Path.GetFullPath(configurationPath))
+                ?? throw new InvalidOperationException("Project configuration directory is unavailable.");
+            var projectName = configuration.Root.Project?.Name ?? Path.GetFileName(projectDirectory);
+            var expectedProjectId = configuration.Root.Project?.Id;
+            var before = await LoadPersistedAssuranceReportAsync(projectDirectory, new DryRunId(beforeId),
+                projectName, pack, expectedProjectId, expectedConfigurationHash: null,
+                expectedGraphHash: null).ConfigureAwait(false);
+            var after = await LoadPersistedAssuranceReportAsync(projectDirectory, new DryRunId(afterId),
+                projectName, pack, expectedProjectId, expectedConfigurationHash: null,
+                expectedGraphHash: null).ConfigureAwait(false);
+            WriteAssuranceComparison(PersistedAssuranceRunComparison.Create(before, after), jsonOutput);
+            return 0;
+        }
+        catch (Exception exception) when (IsPersistedReportFailure(exception))
+        {
+            Console.Error.WriteLine($"Persisted assurance comparison failed: {exception.Message}");
+            return 1;
+        }
+    }
+
+    private static async Task<int> CompareStandaloneAssuranceRunsAsync(string projectDirectory,
+        string beforeDryRunId, string afterDryRunId, bool jsonOutput)
+    {
+        if (!Guid.TryParse(beforeDryRunId, out var beforeId) || !Guid.TryParse(afterDryRunId, out var afterId)) return 2;
+        try
+        {
+            var projectName = Path.GetFileName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(projectDirectory)));
+            var before = await LoadPersistedAssuranceReportAsync(projectDirectory, new DryRunId(beforeId),
+                projectName, expectedPack: null, expectedProjectId: null, expectedConfigurationHash: null,
+                expectedGraphHash: null).ConfigureAwait(false);
+            var after = await LoadPersistedAssuranceReportAsync(projectDirectory, new DryRunId(afterId),
+                projectName, expectedPack: null, expectedProjectId: null, expectedConfigurationHash: null,
+                expectedGraphHash: null).ConfigureAwait(false);
+            WriteAssuranceComparison(PersistedAssuranceRunComparison.Create(before, after), jsonOutput);
+            return 0;
+        }
+        catch (Exception exception) when (IsPersistedReportFailure(exception))
+        {
+            Console.Error.WriteLine($"Persisted assurance comparison failed: {exception.Message}");
+            return 1;
+        }
+    }
+
+    private static async Task<PersistedAssuranceReport> LoadPersistedAssuranceReportAsync(string projectDirectory,
+        DryRunId dryRunId, string projectName, IDomainPack? expectedPack, string? expectedProjectId,
+        string? expectedConfigurationHash, string? expectedGraphHash)
+    {
+        var cancellationToken = CancellationToken.None;
         var recoveryStore = new FileSystemRecoveryArtifactStore(Path.Combine(projectDirectory, ".proofshift", "recovery"));
-        var recovery = await recoveryStore.ReadSummaryAsync(new DryRunId(parsedDryRunId), CancellationToken.None).ConfigureAwait(false);
-        if (loaded.Configuration.ConfigurationHash != recovery.ConfigurationHash || compilation.Graph.GraphHash != recovery.GraphHash)
+        var recovery = await recoveryStore.ReadSummaryAsync(dryRunId, cancellationToken).ConfigureAwait(false);
+        var checkpointStore = new FileSystemSnapshotStore(Path.Combine(projectDirectory, ".proofshift", "checkpoints"));
+        var checkpoint = await checkpointStore.ReadManifestAsync(
+            recovery.CheckpointId.Value.ToString("D", CultureInfo.InvariantCulture), cancellationToken).ConfigureAwait(false);
+        var projection = await ProjectionRunManifestStore.ReadAsync(projectDirectory, recovery.ProjectionRunId,
+            cancellationToken).ConfigureAwait(false);
+        if (projection.Status != ProjectionStatus.Succeeded ||
+            projection.ManifestHash != recovery.ProjectionManifestHash ||
+            (expectedProjectId is not null && projection.ProjectId != expectedProjectId) ||
+            string.IsNullOrWhiteSpace(projection.ProjectId) ||
+            projection.ConfigurationHash != recovery.ConfigurationHash ||
+            projection.GraphHash != recovery.GraphHash ||
+            projection.CheckpointId != recovery.CheckpointId.Value.ToString("D", CultureInfo.InvariantCulture) ||
+            projection.CheckpointManifestHash != recovery.CheckpointManifestHash ||
+            projection.CheckpointSourceFingerprint != recovery.SourceFingerprint ||
+            projection.ProjectionFingerprint != recovery.ProjectionFingerprint)
+            throw new InvalidDataException("Projection manifest does not match the persisted Recovery assessment or selected project.");
+        if ((expectedConfigurationHash is not null && projection.ConfigurationHash != expectedConfigurationHash) ||
+            (expectedGraphHash is not null && projection.GraphHash != expectedGraphHash))
             throw new InvalidDataException("Current configuration or graph does not match the selected dry run.");
-        return await BuildPersistedPensionReportAsync(projectDirectory, new DryRunId(parsedDryRunId),
-            loaded.Configuration.Root.Project?.Name ?? Path.GetFileName(projectDirectory), recovery).ConfigureAwait(false);
-    }
 
-    private static async Task<PensionAssuranceReport> LoadPersistedPensionReportAsync(string projectDirectory,
-        DryRunId dryRunId, string projectName)
-    {
-        var recoveryStore = new FileSystemRecoveryArtifactStore(Path.Combine(projectDirectory, ".proofshift", "recovery"));
-        var recovery = await recoveryStore.ReadSummaryAsync(dryRunId, CancellationToken.None).ConfigureAwait(false);
-        return await BuildPersistedPensionReportAsync(projectDirectory, dryRunId, projectName, recovery).ConfigureAwait(false);
-    }
-
-    private static async Task<PensionAssuranceReport> BuildPersistedPensionReportAsync(string projectDirectory,
-        DryRunId dryRunId, string projectName, RecoveryArtifactSummary recovery)
-    {
         var evidenceStore = new FileSystemEvidenceStore(Path.Combine(projectDirectory, ".proofshift", "verifications"));
-        if (!await evidenceStore.VerifyIntegrityAsync(recovery.VerificationRunId, CancellationToken.None).ConfigureAwait(false))
+        if (!await evidenceStore.VerifyIntegrityAsync(recovery.VerificationRunId, cancellationToken).ConfigureAwait(false))
             throw new InvalidDataException("Verification evidence integrity verification failed.");
-        var manifest = await evidenceStore.ReadManifestAsync(recovery.VerificationRunId, CancellationToken.None).ConfigureAwait(false);
-        return await PensionAssuranceReportBuilder.BuildAsync(projectName, dryRunId, manifest,
-            evidenceStore.ReadRecordsAsync(recovery.VerificationRunId, CancellationToken.None), recovery,
-            CancellationToken.None).ConfigureAwait(false);
+        var manifest = await evidenceStore.ReadManifestAsync(recovery.VerificationRunId, cancellationToken).ConfigureAwait(false);
+        var pack = expectedPack ?? ResolvePersistedReportPack(manifest);
+        var ledgerStore = await SqliteVerificationLedgerStore.OpenAsync(projectDirectory, recovery.VerificationLedger,
+            cancellationToken).ConfigureAwait(false);
+        await using (ledgerStore.ConfigureAwait(false))
+        {
+            var ledger = await ledgerStore.ReadSummaryAsync(cancellationToken).ConfigureAwait(false);
+            return await PersistedAssuranceReportBuilder.BuildAsync(projection.ProjectId, projectName, dryRunId,
+                pack, manifest, evidenceStore.ReadRecordsAsync(recovery.VerificationRunId, cancellationToken),
+                recovery, checkpoint, ledger, cancellationToken).ConfigureAwait(false);
+        }
+
     }
 
-    private static void WritePensionReport(PensionAssuranceReport report)
+    private static IDomainPack ResolveConfiguredReportPack(LoadedProjectConfiguration configuration)
     {
-        Console.WriteLine("ProofShift Public Pension Migration Assurance");
+        if (configuration.Root.Packs.Count != 1)
+            throw new InvalidDataException("Persisted reports require exactly one configured domain pack.");
+        return CliComposition.Packs().ResolvePack(configuration.Root.Packs.Single());
+    }
+
+    private static IDomainPack ResolvePersistedReportPack(EvidenceStoreManifest manifest)
+    {
+        var providers = manifest.VerificationContext?.ProviderVersions
+            ?.Where(pair => pair.Key != "proofshift.verification.generic").ToArray() ?? [];
+        if (providers.Length != 1)
+            throw new InvalidDataException("Persisted report context must identify exactly one domain pack.");
+        return CliComposition.Packs().ResolvePack(new PackConfigurationDto(providers[0].Key, providers[0].Value));
+    }
+
+    private static bool IsPersistedReportFailure(Exception exception) =>
+        exception is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or
+            FormatException or VerificationRuleException or ProjectionManifestException or RecoveryException or
+            JsonException or DbException;
+
+    private static void WriteAssuranceReport(PersistedAssuranceReport report, bool jsonOutput)
+    {
+        if (jsonOutput)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(report, JsonOptions));
+            return;
+        }
+        Console.WriteLine("ProofShift Domain-Neutral Migration Assurance");
         Console.WriteLine();
         Console.WriteLine("EXECUTIVE SUMMARY");
+        Console.WriteLine($"Project: {report.ProjectName} ({report.ProjectId})");
+        Console.WriteLine($"Domain Pack: {report.PackDisplayName} ({report.PackId}@{report.PackVersion})");
+        Console.WriteLine($"Claim Boundary: {report.ClaimBoundary}");
         Console.WriteLine($"Qualification: {report.Qualification}");
         Console.WriteLine($"Verification: {report.VerificationOutcome}; {report.VerificationFailureCount} failed evidence records; {report.WarningCount} warnings");
         Console.WriteLine($"Business Discrepancies: {report.BusinessDiscrepancyCount}");
@@ -1017,37 +1063,60 @@ internal static class Program
         Console.WriteLine("MIGRATION SCOPE");
         Console.WriteLine($"Configuration: {report.ConfigurationHash}");
         Console.WriteLine($"Migration Graph: {report.GraphHash}");
-        Console.WriteLine($"Source Checkpoint: {report.SourceFingerprint}");
-        Console.WriteLine($"Projection: {report.ProjectionFingerprint}");
+        Console.WriteLine($"Source Checkpoint: {report.CheckpointId}; {report.CheckpointManifestHash}");
+        Console.WriteLine($"Source Fingerprint: {report.SourceFingerprint}");
+        if (report.ProjectionRunId is not null)
+            Console.WriteLine($"Projection: {report.ProjectionRunId}; {report.ProjectionFingerprint}");
+        Console.WriteLine($"Recovery Projection Binding: {report.RecoveryProjectionRunId}; manifest {report.ProjectionManifestHash}");
+        if (report.ObservationId is not null)
+            Console.WriteLine($"Target Observation: {report.ObservationId}; {report.ObservationRunId}; {report.TargetFingerprint}");
         Console.WriteLine($"Rule Set: {report.RuleSetFingerprint}");
+        Console.WriteLine($"Verification Ledger: {report.VerificationLedgerFingerprint}");
+        Console.WriteLine($"Source Accounting: {report.SourceAccountingStatus} ({report.AccountedSourceCount}/{report.SourceArtifactCount}, {report.SourceAccountingGapCount} gaps)");
+        Console.WriteLine($"Target Lineage: {report.TargetLineageStatus} ({report.LineagedTargetCount}/{report.TargetArtifactCount}, {report.TargetLineageGapCount} gaps)");
         Console.WriteLine();
-        Console.WriteLine("BUSINESS DISCREPANCIES");
-        foreach (var (category, count) in report.DefectCounts)
-            Console.WriteLine($"{category}: {count.ToString(CultureInfo.InvariantCulture)}");
-        Console.WriteLine();
-        foreach (var section in report.Sections)
-            Console.WriteLine($"{section.Name}: {section.FailedFindings} exceptions, {section.PassedFindings} passed findings, {section.WarningFindings} warnings");
-        Console.WriteLine($"Unaccounted Sources: {report.UnaccountedSources}");
-        Console.WriteLine($"Unexplained Targets: {report.UnexplainedTargets}");
+        Console.WriteLine("FINDINGS");
+        foreach (var (key, count) in report.FindingsByRuleAndCode)
+            Console.WriteLine($"{key}: {count.ToString(CultureInfo.InvariantCulture)}");
+        if (report.FindingsByRuleAndCode.Count == 0) Console.WriteLine("None.");
         Console.WriteLine();
         Console.WriteLine("RECOVERY READINESS");
-        Console.WriteLine($"Rehearsal: {report.RehearsalOutcome}");
+        Console.WriteLine($"Assessment / Rehearsal: {report.RecoveryAssessmentOutcome} / {report.RecoveryRehearsalOutcome}");
+        Console.WriteLine($"Assessment / Plan / Rehearsal Fingerprints: {report.RecoveryAssessmentFingerprint} / {report.RecoveryPlanFingerprint} / {report.RecoveryRehearsalFingerprint}");
         Console.WriteLine($"Recoverable Artifacts: {report.RecoverableArtifacts}/{report.AffectedRecoveryArtifacts}");
         Console.WriteLine($"Irrecoverable / Unknown Artifacts: {report.IrrecoverableArtifacts} / {report.UnknownRecoveryArtifacts}");
-        Console.WriteLine($"Failed Recovery Edges: {report.FailedRecoveryEdges}");
-        foreach (var coverage in report.RecoveryBySemanticType)
-            Console.WriteLine($"{coverage.SemanticType}: {coverage.RecoverableArtifacts}/{coverage.AffectedArtifacts} recoverable");
+        Console.WriteLine($"Failed / False-Reversible Edges: {report.FailedRecoveryEdges} / {report.FalseReversibleEdges}");
+        if (report.RecoveryCoveragePercentage is { } percentage)
+            Console.WriteLine($"Recovery Coverage: {percentage.ToString(CultureInfo.InvariantCulture)}%");
         foreach (var reason in report.RecoveryReasons) Console.WriteLine($"Recovery Finding: {reason}");
-        Console.WriteLine();
-        Console.WriteLine("EXCEPTIONS");
-        foreach (var exception in report.Exceptions)
-            Console.WriteLine($"{exception.Code} [{exception.Severity}] Evidence {exception.EvidenceId}: {exception.Explanation}");
-        if (report.Exceptions.Count == 0) Console.WriteLine("None.");
         Console.WriteLine();
         Console.WriteLine($"VERIFICATION EVIDENCE: {report.VerificationEvidenceFingerprint}");
         Console.WriteLine($"RECOVERY EVIDENCE: {report.RecoveryEvidenceFingerprint}");
         Console.WriteLine($"DRY-RUN FINGERPRINT: {report.DryRunFingerprint}");
         Console.WriteLine($"RESULT: {(report.Qualification == "QUALIFIED" ? "QUALIFIED DRY RUN" : "NOT QUALIFIED")}");
+    }
+
+    private static void WriteAssuranceComparison(PersistedAssuranceRunComparison comparison, bool jsonOutput)
+    {
+        if (jsonOutput)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(comparison, JsonOptions));
+            return;
+        }
+        Console.WriteLine("ProofShift Domain-Neutral Assurance Comparison");
+        Console.WriteLine($"Before: {comparison.BeforeQualification} ({comparison.BeforeDryRunId})");
+        Console.WriteLine($"After: {comparison.AfterQualification} ({comparison.AfterDryRunId})");
+        Console.WriteLine($"Configuration / Graph Changed: {comparison.ConfigurationHashChanged} / {comparison.GraphHashChanged}");
+        Console.WriteLine($"Source Fingerprint / Checkpoint Semantics Changed: {comparison.SourceFingerprintChanged} / {comparison.CheckpointSemanticsChanged}");
+        Console.WriteLine($"Projection / Observation Semantics Changed: {comparison.ProjectionSemanticsChanged} / {comparison.ObservationSemanticsChanged}");
+        Console.WriteLine($"Rules / Verification Evidence Changed: {comparison.RuleSetFingerprintChanged} / {comparison.VerificationEvidenceFingerprintChanged}");
+        Console.WriteLine($"Recovery Policy / Evidence / Readiness Changed: {comparison.RecoveryPolicyFingerprintChanged} / {comparison.RecoveryEvidenceFingerprintChanged} / {comparison.RecoveryReadinessChanged}");
+        Console.WriteLine($"Dry-Run Fingerprint Changed: {comparison.DryRunFingerprintChanged}");
+        Console.WriteLine($"Source Accounting / Target Lineage Gaps Changed: {comparison.SourceAccountingGapsChanged} / {comparison.TargetLineageGapsChanged}");
+        Console.WriteLine($"Qualification Changed: {comparison.QualificationChanged}");
+        foreach (var attribution in comparison.DifferenceAttribution) Console.WriteLine($"Difference Attribution: {attribution}");
+        foreach (var (finding, count) in comparison.FindingsResolved) Console.WriteLine($"Resolved {finding}: {count}");
+        foreach (var (finding, count) in comparison.FindingsIntroduced) Console.WriteLine($"Introduced {finding}: {count}");
     }
 
     private static async Task<int> ReadRecoveryAsync(string path, string dryRunId, bool jsonOutput)

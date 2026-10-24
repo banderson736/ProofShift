@@ -708,28 +708,28 @@ public sealed class ShadowProjectionPensionIntegrationTests
             Assert.Equal(dryRunJson.RootElement.GetProperty("dryRunFingerprint").GetString(),
                 recoveryReportJson.RootElement.GetProperty("dryRunFingerprint").GetString());
 
-            var pensionReport = await RunCliAsync(cli, fixture, environment, "report", "--run", dryRunId!, "--json");
-            Assert.Equal(0, pensionReport.ExitCode);
-            Assert.DoesNotContain(sqlBuilder.ConnectionString, pensionReport.StandardOutput, StringComparison.Ordinal);
-            Assert.DoesNotContain(postgresContainer.GetConnectionString(), pensionReport.StandardOutput, StringComparison.Ordinal);
-            using var pensionReportJson = JsonDocument.Parse(pensionReport.StandardOutput);
-            Assert.Equal("proofshift-pension-assurance-report-v1", pensionReportJson.RootElement.GetProperty("format").GetString());
-            Assert.Equal("QUALIFIED", pensionReportJson.RootElement.GetProperty("qualification").GetString());
-            Assert.Equal(0, pensionReportJson.RootElement.GetProperty("businessDiscrepancyCount").GetInt64());
-            var defectCounts = pensionReportJson.RootElement.GetProperty("defectCounts");
-            Assert.Equal(18, defectCounts.EnumerateObject().Count());
-            Assert.All(defectCounts.EnumerateObject(), category => Assert.Equal(0, category.Value.GetInt64()));
+            var assuranceReport = await RunCliAsync(cli, fixture, environment, "report", "--run", dryRunId!, "--json");
+            Assert.Equal(0, assuranceReport.ExitCode);
+            Assert.DoesNotContain(sqlBuilder.ConnectionString, assuranceReport.StandardOutput, StringComparison.Ordinal);
+            Assert.DoesNotContain(postgresContainer.GetConnectionString(), assuranceReport.StandardOutput, StringComparison.Ordinal);
+            using var assuranceReportJson = JsonDocument.Parse(assuranceReport.StandardOutput);
+            Assert.Equal("proofshift-persisted-assurance-report-v1", assuranceReportJson.RootElement.GetProperty("format").GetString());
+            Assert.Equal("proofshift.pension", assuranceReportJson.RootElement.GetProperty("packId").GetString());
+            Assert.Equal("QUALIFIED", assuranceReportJson.RootElement.GetProperty("qualification").GetString());
+            Assert.Equal(0, assuranceReportJson.RootElement.GetProperty("businessDiscrepancyCount").GetInt64());
             Assert.Equal(dryRunJson.RootElement.GetProperty("verificationEvidenceFingerprint").GetString(),
-                pensionReportJson.RootElement.GetProperty("verificationEvidenceFingerprint").GetString());
-            Assert.Empty(pensionReportJson.RootElement.GetProperty("exceptions").EnumerateArray());
+                assuranceReportJson.RootElement.GetProperty("verificationEvidenceFingerprint").GetString());
+            Assert.Empty(assuranceReportJson.RootElement.GetProperty("evidenceReferences").EnumerateArray());
 
             var sameRunComparison = await RunCliAsync(cli, fixture, environment, "compare",
                 "--before", dryRunId!, "--after", dryRunId!, "--json");
             Assert.Equal(0, sameRunComparison.ExitCode);
             using var comparisonJson = JsonDocument.Parse(sameRunComparison.StandardOutput);
-            Assert.False(comparisonJson.RootElement.GetProperty("evidenceFingerprintChanged").GetBoolean());
-            Assert.Empty(comparisonJson.RootElement.GetProperty("defectsResolved").EnumerateObject());
-            Assert.Empty(comparisonJson.RootElement.GetProperty("defectsIntroduced").EnumerateObject());
+            Assert.Equal("proofshift-persisted-assurance-comparison-v1",
+                comparisonJson.RootElement.GetProperty("format").GetString());
+            Assert.False(comparisonJson.RootElement.GetProperty("verificationEvidenceFingerprintChanged").GetBoolean());
+            Assert.Empty(comparisonJson.RootElement.GetProperty("findingsResolved").EnumerateObject());
+            Assert.Empty(comparisonJson.RootElement.GetProperty("findingsIntroduced").EnumerateObject());
 
             var snapshot = await RunCliAsync(cli, fixture, environment, "snapshot", "--json");
             Assert.Equal(0, snapshot.ExitCode);

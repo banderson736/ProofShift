@@ -46,21 +46,7 @@ public sealed partial class FileSystemSnapshotStore : IMaterializedSnapshotStore
         var directory = Guid.TryParse(checkpointIdOrPath, out var checkpointId) && checkpointId != Guid.Empty
             ? ResolveCheckpointDirectory(checkpointIdOrPath)
             : Path.GetFullPath(checkpointIdOrPath);
-        var state = await ReadStateAsync(directory, cancellationToken).ConfigureAwait(false);
-        if (state.Status != "complete")
-            throw new SnapshotStoreException(SnapshotIssueCodes.CheckpointNotComplete, "Only complete checkpoints can be replayed.");
-        byte[] bytes;
-        try
-        {
-            bytes = await File.ReadAllBytesAsync(Path.Combine(directory, "manifest.json"), cancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            throw new SnapshotStoreException(SnapshotIssueCodes.IntegrityFailure, "Checkpoint manifest is missing or unreadable.");
-        }
-        var manifest = SnapshotManifestCodec.Decode(bytes);
-        if (state.CheckpointId != manifest.Id.Value.ToString("N", CultureInfo.InvariantCulture))
-            throw new SnapshotStoreException(SnapshotIssueCodes.IntegrityFailure, "Checkpoint state and manifest identities differ.");
+        var manifest = await ReadManifestAsync(checkpointIdOrPath, cancellationToken).ConfigureAwait(false);
         foreach (var endpoint in manifest.Endpoints)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -95,9 +81,39 @@ public sealed partial class FileSystemSnapshotStore : IMaterializedSnapshotStore
                 throw new SnapshotStoreException(SnapshotIssueCodes.SourceFingerprintMismatch, "Checkpoint source set does not match its manifest.");
         }
 
+        return new LoadedCheckpoint(directory, manifest);
+    }
+
+    public async Task<SourceCheckpoint> ReadManifestAsync(string checkpointIdOrPath, CancellationToken cancellationToken)
+    {
+        var directory = Guid.TryParse(checkpointIdOrPath, out var checkpointId) && checkpointId != Guid.Empty
+            ? ResolveCheckpointDirectory(checkpointIdOrPath)
+            : Path.GetFullPath(checkpointIdOrPath);
+        var state = await ReadStateAsync(directory, cancellationToken).ConfigureAwait(false);
+        if (state.Status != "complete")
+            throw new SnapshotStoreException(SnapshotIssueCodes.CheckpointNotComplete, "Only complete checkpoints can be replayed.");
+        byte[] bytes;
+        try
+        {
+            bytes = await File.ReadAllBytesAsync(Path.Combine(directory, "manifest.json"), cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            throw new SnapshotStoreException(SnapshotIssueCodes.IntegrityFailure, "Checkpoint manifest is missing or unreadable.");
+        }
+        var manifest = SnapshotManifestCodec.Decode(bytes);
+        if (state.CheckpointId != manifest.Id.Value.ToString("N", CultureInfo.InvariantCulture))
+            throw new SnapshotStoreException(SnapshotIssueCodes.IntegrityFailure, "Checkpoint state and manifest identities differ.");
+        foreach (var endpoint in manifest.Endpoints)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var segmentPath = ResolveContainedPath(directory, endpoint.SegmentReference);
+            if (!File.Exists(segmentPath))
+                throw new SnapshotStoreException(SnapshotIssueCodes.IntegrityFailure, "Checkpoint segment is missing.");
+        }
         if (SnapshotFingerprints.AggregateSourceFingerprint(manifest.GraphHash, manifest.Endpoints) != manifest.SourceFingerprint)
             throw new SnapshotStoreException(SnapshotIssueCodes.SourceFingerprintMismatch, "Aggregate checkpoint source fingerprint does not match its manifest.");
-        return new LoadedCheckpoint(directory, manifest);
+        return manifest;
     }
 
     public Task DeleteAsync(string checkpointIdOrPath, CancellationToken cancellationToken)

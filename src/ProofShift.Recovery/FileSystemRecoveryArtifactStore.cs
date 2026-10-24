@@ -13,6 +13,9 @@ public sealed record RecoveryArtifactSummary
 {
     public DryRunId Id { get; }
     public RunId VerificationRunId { get; }
+    public RunId ProjectionRunId { get; }
+    public string ProjectionManifestHash { get; }
+    public CheckpointId CheckpointId { get; }
     public string ConfigurationHash { get; }
     public string GraphHash { get; }
     public string CheckpointManifestHash { get; }
@@ -27,6 +30,8 @@ public sealed record RecoveryArtifactSummary
     public string RehearsalFingerprint { get; }
     public string VerificationEvidenceFingerprint { get; }
     public string RecoveryEvidenceFingerprint { get; }
+    public RecoveryAssessmentOutcome AssessmentOutcome { get; }
+    public ProofShift.Verification.VerificationLedgerStoreReceipt VerificationLedger { get; }
     public long ExecutedEdges { get; }
     public long ReverseEdges { get; }
     public long RestoreEdges { get; }
@@ -51,10 +56,15 @@ public sealed record RecoveryArtifactSummary
         long reverseEdges, long restoreEdges, long compensateEdges, long irreversibleEdges, long falseReversibleEdges,
         long affectedArtifacts, long recoverableArtifacts, long irrecoverableArtifacts, long unknownArtifacts,
         decimal? recoverablePercentage, long failedEdges, string rehearsalOutcome,
-        IReadOnlyList<string> reasons, IEnumerable<RecoverySemanticTypeCoverage> bySemanticType)
+        IReadOnlyList<string> reasons, IEnumerable<RecoverySemanticTypeCoverage> bySemanticType,
+        RecoveryAssessmentOutcome assessmentOutcome, RunId projectionRunId, string projectionManifestHash,
+        CheckpointId checkpointId, ProofShift.Verification.VerificationLedgerStoreReceipt verificationLedger)
     {
         Id = id;
         VerificationRunId = verificationRunId;
+        ProjectionRunId = projectionRunId;
+        ProjectionManifestHash = projectionManifestHash;
+        CheckpointId = checkpointId;
         ConfigurationHash = configurationHash;
         GraphHash = graphHash;
         CheckpointManifestHash = checkpointManifestHash;
@@ -69,6 +79,8 @@ public sealed record RecoveryArtifactSummary
         RehearsalFingerprint = rehearsalFingerprint;
         VerificationEvidenceFingerprint = verificationEvidenceFingerprint;
         RecoveryEvidenceFingerprint = recoveryEvidenceFingerprint;
+        AssessmentOutcome = assessmentOutcome;
+        VerificationLedger = verificationLedger ?? throw new ArgumentNullException(nameof(verificationLedger));
         ExecutedEdges = executedEdges;
         ReverseEdges = reverseEdges;
         RestoreEdges = restoreEdges;
@@ -203,7 +215,10 @@ public sealed class FileSystemRecoveryArtifactStore : IRecoveryArtifactStore
             assessment.FailedEdges, rehearsal.Outcome,
             qualification.Reasons.Select(reason => $"{reason.Code}: {reason.Message}").ToArray(),
             assessment.SemanticTypeCoverage.Select(item => new RecoverySemanticTypeCoverage(item.SemanticType,
-                item.AffectedArtifacts, item.RecoverableArtifacts, item.RecoverablePercentage)));
+                item.AffectedArtifacts, item.RecoverableArtifacts, item.RecoverablePercentage)),
+            Enum.Parse<RecoveryAssessmentOutcome>(assessment.Outcome, ignoreCase: true),
+            new RunId(Guid.ParseExact(assessment.ProjectionRunId, "D")), assessment.ProjectionManifestHash,
+            new CheckpointId(Guid.ParseExact(assessment.CheckpointId, "D")), assessment.VerificationLedger);
     }
 
     private string GetDirectory(DryRunId id)

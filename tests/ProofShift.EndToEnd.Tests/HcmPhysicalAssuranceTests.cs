@@ -218,6 +218,17 @@ public sealed class HcmPhysicalAssuranceTests
         Assert.DoesNotContain("Utility.Account", JsonSerializer.Serialize(report), StringComparison.Ordinal);
         var genericReport = CrossDomainAssuranceReport.Create(configuration.Root.Project!.Name!, new HcmPack(),
             report.ClaimBoundaryText, dryRun.Verification!, dryRun.Recovery!);
+        var persistedReport = await PersistedAssuranceReportTestHelper.BuildAsync(root,
+            Path.Combine(root, "projected-corrected"), configuration.Root.Project.Name!, new HcmPack(),
+            dryRun.Recovery!.Id, TestContext.Current.CancellationToken);
+        Assert.Equal("proofshift.hcm", persistedReport.PackId);
+        Assert.Equal(new HcmPack().Metadata.ClaimBoundary, persistedReport.ClaimBoundary);
+        Assert.Equal("QUALIFIED", persistedReport.Qualification);
+        Assert.Empty(persistedReport.FindingsByRuleAndCode);
+        await PersistedAssuranceReportTestHelper.AssertCliReportAndComparisonAsync(root,
+            Path.Combine(root, "projected-corrected"), configuration.Root.Project.Name!,
+            new HcmPack().Id, new HcmPack().Version, new HcmPack().Metadata.ClaimBoundary,
+            dryRun.Recovery!.Id, TestContext.Current.CancellationToken);
         Assert.Equal("proofshift.hcm", genericReport.PackId);
         Assert.Equal("0.10.0", genericReport.PackVersion);
         Assert.Equal("QUALIFIED", genericReport.Qualification);

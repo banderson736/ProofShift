@@ -208,6 +208,17 @@ public sealed class FhirPhysicalAssuranceTests
         Assert.DoesNotContain("HCM.Worker", JsonSerializer.Serialize(report), StringComparison.Ordinal);
         var genericReport = CrossDomainAssuranceReport.Create(configuration.Root.Project!.Name!, new FhirPack(),
             report.ClaimBoundaryText, dryRun.Verification!, dryRun.Recovery!);
+        var persistedReport = await PersistedAssuranceReportTestHelper.BuildAsync(root,
+            Path.Combine(root, "projected-corrected"), configuration.Root.Project.Name!, new FhirPack(),
+            dryRun.Recovery!.Id, TestContext.Current.CancellationToken);
+        Assert.Equal("proofshift.fhir", persistedReport.PackId);
+        Assert.Equal(new FhirPack().Metadata.ClaimBoundary, persistedReport.ClaimBoundary);
+        Assert.Equal("QUALIFIED", persistedReport.Qualification);
+        Assert.Empty(persistedReport.FindingsByRuleAndCode);
+        await PersistedAssuranceReportTestHelper.AssertCliReportAndComparisonAsync(root,
+            Path.Combine(root, "projected-corrected"), configuration.Root.Project.Name!,
+            new FhirPack().Id, new FhirPack().Version, new FhirPack().Metadata.ClaimBoundary,
+            dryRun.Recovery!.Id, TestContext.Current.CancellationToken);
         Assert.Equal("proofshift.fhir", genericReport.PackId);
         Assert.Equal("0.10.0", genericReport.PackVersion);
         Assert.Equal("QUALIFIED", genericReport.Qualification);

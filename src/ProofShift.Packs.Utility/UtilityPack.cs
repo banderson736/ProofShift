@@ -10,6 +10,7 @@ namespace ProofShift.Packs.Utility;
 
 public sealed class UtilityPack : IDomainPack
 {
+    public const string ClaimBoundary = "Configured Utility migration invariants only; no tariff or regulatory billing certification.";
     public string Id => "proofshift.utility";
     public string Version => "0.10.0";
 
@@ -88,7 +89,7 @@ public sealed class UtilityPack : IDomainPack
             new("rules.list", "List rules", "List Utility assurance rules."),
             new("rules.describe", "Describe rules", "Describe Utility rules and versions."),
             new("schema", "Generate schema", "Generate Utility rule configuration schema.")
-        ]);
+        ], ClaimBoundary);
     }
 
     private static VerificationRuleFactory Factory(string type,

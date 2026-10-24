@@ -80,6 +80,11 @@ public sealed class DomainPackConformanceTests
             packFactories.Select(item => (item.Factory.Type, allDescriptors[item.Factory.Type].Version)).OrderBy(item => item.Type, StringComparer.Ordinal));
         Assert.Equal(selections.OrderBy(selection => selection.Id, StringComparer.Ordinal),
             registry.Installed.Select(pack => new PackConfigurationDto(pack.Id, pack.Version)).OrderBy(selection => selection.Id, StringComparer.Ordinal));
+        foreach (var pack in packs)
+        {
+            Assert.False(string.IsNullOrWhiteSpace(pack.Metadata.ClaimBoundary));
+            Assert.Same(pack, registry.ResolvePack(new PackConfigurationDto(pack.Id, pack.Version)));
+        }
 
         var ruleSet = ruleRegistry.Resolve([new VerificationRuleDefinition(new RuleId("registry-accounting"),
             "source-artifact-accounting", "1", EvidenceSeverity.Error)]);
@@ -133,7 +138,8 @@ public sealed class DomainPackConformanceTests
             [new DomainPackRuleProviderMetadata(pack.Id, pack.Version,
                 pack.RuleFactories.Select(factory => new DomainPackRuleMetadata(factory.Type, "unavailable",
                     factory.Descriptor.Description)))],
-            metadata.ConfigurationSchemaContributions, metadata.Capabilities, metadata.AuthoringMetadata));
+            metadata.ConfigurationSchemaContributions, metadata.Capabilities, metadata.AuthoringMetadata,
+            metadata.ClaimBoundary));
 
         Assert.Throws<ArgumentException>(() => new PackRegistry([inconsistent]));
     }
@@ -148,7 +154,7 @@ public sealed class DomainPackConformanceTests
             metadata.Concepts, metadata.RuleProviders,
             [new PackConfigurationSchemaContribution(contribution.Id, contribution.SchemaJson,
                 contribution.RuleTypes.Take(contribution.RuleTypes.Count - 1))],
-            metadata.Capabilities, metadata.AuthoringMetadata);
+            metadata.Capabilities, metadata.AuthoringMetadata, metadata.ClaimBoundary);
         var inconsistent = new MetadataMismatchPack(pack, incomplete);
 
         Assert.Throws<ArgumentException>(() => new PackRegistry([inconsistent]));
@@ -241,6 +247,7 @@ internal static class DomainPackConformanceHarness
         Assert.Equal(pack.Id, metadata.Id);
         Assert.Equal(pack.Version, metadata.Version);
         Assert.False(string.IsNullOrWhiteSpace(metadata.DisplayName));
+        Assert.False(string.IsNullOrWhiteSpace(metadata.ClaimBoundary));
         Assert.NotEmpty(metadata.Concepts);
         Assert.NotEmpty(metadata.RuleProviders);
         Assert.NotEmpty(metadata.ConfigurationSchemaContributions);

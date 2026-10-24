@@ -10,6 +10,7 @@ namespace ProofShift.Packs.Justice;
 
 public sealed class JusticePack : IDomainPack
 {
+    public const string ClaimBoundary = "Configured migration invariants only; this report does not validate law, jurisdiction, court rules, sentencing, charge validity, filing sufficiency, or records retention.";
     public string Id => "proofshift.justice";
     public string Version => "0.10.0";
     public IReadOnlyCollection<VerificationRuleFactory> RuleFactories { get; }
@@ -65,7 +66,7 @@ public sealed class JusticePack : IDomainPack
             new("rules.list", "List rules", "List Justice assurance rules."),
             new("rules.describe", "Describe rules", "Describe Justice rules and versions."),
             new("schema", "Generate schema", "Generate Justice rule configuration schema.")
-        ]);
+        ], ClaimBoundary);
     }
 
     private static VerificationRuleFactory CreateAttributeEqualityFactory()

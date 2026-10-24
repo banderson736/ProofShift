@@ -216,6 +216,17 @@ public sealed class JusticePhysicalAssuranceTests
         Assert.Contains("does not validate law", reportJson, StringComparison.Ordinal);
         var genericReport = CrossDomainAssuranceReport.Create(configuration.Root.Project!.Name!, new JusticePack(),
             report.ClaimBoundary, dryRun.Verification!, dryRun.Recovery!);
+        var persistedReport = await PersistedAssuranceReportTestHelper.BuildAsync(root,
+            Path.Combine(root, "projected-corrected"), configuration.Root.Project.Name!, new JusticePack(),
+            dryRun.Recovery!.Id, TestContext.Current.CancellationToken);
+        Assert.Equal("proofshift.justice", persistedReport.PackId);
+        Assert.Equal(new JusticePack().Metadata.ClaimBoundary, persistedReport.ClaimBoundary);
+        Assert.Equal("QUALIFIED", persistedReport.Qualification);
+        Assert.Empty(persistedReport.FindingsByRuleAndCode);
+        await PersistedAssuranceReportTestHelper.AssertCliReportAndComparisonAsync(root,
+            Path.Combine(root, "projected-corrected"), configuration.Root.Project.Name!,
+            new JusticePack().Id, new JusticePack().Version, new JusticePack().Metadata.ClaimBoundary,
+            dryRun.Recovery!.Id, TestContext.Current.CancellationToken);
         Assert.Equal("proofshift.justice", genericReport.PackId);
         Assert.Equal("0.10.0", genericReport.PackVersion);
         Assert.Equal("QUALIFIED", genericReport.Qualification);

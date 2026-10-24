@@ -67,7 +67,8 @@ public sealed record EvidenceVerificationContext(string ConfigurationHash, strin
     string CheckpointId, string CheckpointManifestHash, string SourceFingerprint, string RuleSetFingerprint,
     string? ProjectionRunId = null, string? ProjectionFingerprint = null,
     string? ObservationId = null, string? ObservationRunId = null, string? TargetFingerprint = null,
-    string? VerificationLedgerFingerprint = null);
+    string? VerificationLedgerFingerprint = null,
+    IReadOnlyDictionary<string, string>? ProviderVersions = null);
 
 public static class EvidenceGraphCanonicalizer
 {

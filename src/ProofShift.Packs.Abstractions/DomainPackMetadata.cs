@@ -8,6 +8,7 @@ public sealed record DomainPackMetadata
     public string Id { get; }
     public string Version { get; }
     public string DisplayName { get; }
+    public string ClaimBoundary { get; }
     public DomainList<DomainPackConceptMetadata> Concepts { get; }
     public DomainList<DomainPackRuleProviderMetadata> RuleProviders { get; }
     public DomainList<PackConfigurationSchemaContribution> ConfigurationSchemaContributions { get; }
@@ -19,11 +20,13 @@ public sealed record DomainPackMetadata
         IEnumerable<DomainPackRuleProviderMetadata> ruleProviders,
         IEnumerable<PackConfigurationSchemaContribution> configurationSchemaContributions,
         IEnumerable<DomainPackFeatureMetadata> capabilities,
-        IEnumerable<DomainPackFeatureMetadata> authoringMetadata)
+        IEnumerable<DomainPackFeatureMetadata> authoringMetadata,
+        string claimBoundary)
     {
         Id = Required(id, nameof(id));
         Version = Required(version, nameof(version));
         DisplayName = Required(displayName, nameof(displayName));
+        ClaimBoundary = Required(claimBoundary, nameof(claimBoundary));
         Concepts = new DomainList<DomainPackConceptMetadata>((concepts ?? throw new ArgumentNullException(nameof(concepts)))
             .OrderBy(concept => concept.SemanticType, StringComparer.Ordinal));
         RuleProviders = new DomainList<DomainPackRuleProviderMetadata>((ruleProviders ?? throw new ArgumentNullException(nameof(ruleProviders)))

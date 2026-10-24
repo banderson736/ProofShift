@@ -549,7 +549,8 @@ public sealed class VerificationService
                     binding.CheckpointId.Value.ToString("D", CultureInfo.InvariantCulture), binding.CheckpointManifestHash,
                     binding.SourceFingerprint, ruleSet.Fingerprint,
                     binding.ProjectionRunId.Value.ToString("D", CultureInfo.InvariantCulture), binding.ProjectionFingerprint,
-                    VerificationLedgerFingerprint: ledgerStore.Receipt.Fingerprint));
+                    VerificationLedgerFingerprint: ledgerStore.Receipt.Fingerprint,
+                    ProviderVersions: ruleSet.ProviderVersions));
             evidenceStage?.AddArtifacts(records.Count);
         }
         var runtime = new VerificationRuntimeFingerprint(proofShiftVersion, binding, ruleSet.ProviderVersions,
@@ -848,7 +849,8 @@ public sealed class VerificationService
                     ObservationId: observation.ObservationId,
                     ObservationRunId: observation.ObservationRunId.Value.ToString("D", CultureInfo.InvariantCulture),
                     TargetFingerprint: observedTarget.Fingerprint,
-                    VerificationLedgerFingerprint: ledgerStore.Receipt.Fingerprint));
+                    VerificationLedgerFingerprint: ledgerStore.Receipt.Fingerprint,
+                    ProviderVersions: ruleSet.ProviderVersions));
             evidenceStage?.AddArtifacts(records.Count);
         }
         var runtimeFingerprint = ExternalRuntimeFingerprint(configuration, graph, observation, ruleSet, proofShiftVersion);

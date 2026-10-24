@@ -437,9 +437,16 @@ public sealed class PensionExternalCorpusVerificationTests
             Assert.True(correctedMachine.ExitCode == 0, correctedMachine.StandardError);
             using var defectiveMachineJson = JsonDocument.Parse(defectiveMachine.StandardOutput);
             using var correctedMachineJson = JsonDocument.Parse(correctedMachine.StandardOutput);
+            Assert.Equal("proofshift.pension", defectiveMachineJson.RootElement.GetProperty("packId").GetString());
+            Assert.Equal("0.10.0", defectiveMachineJson.RootElement.GetProperty("packVersion").GetString());
+            Assert.Equal(new PensionPack().Metadata.ClaimBoundary,
+                defectiveMachineJson.RootElement.GetProperty("claimBoundary").GetString());
             Assert.Equal("NOT QUALIFIED", defectiveMachineJson.RootElement.GetProperty("qualification").GetString());
             Assert.Equal(149L, defectiveMachineJson.RootElement.GetProperty("businessDiscrepancyCount").GetInt64());
-            Assert.Equal(18, defectiveMachineJson.RootElement.GetProperty("defectCounts").EnumerateObject().Count());
+            Assert.Equal(149L, defectiveMachineJson.RootElement.GetProperty("findingsByRuleAndCode").EnumerateObject()
+                .Sum(property => property.Value.GetInt64()));
+            Assert.DoesNotContain("\"expected\"", defectiveMachine.StandardOutput, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("\"actual\"", defectiveMachine.StandardOutput, StringComparison.OrdinalIgnoreCase);
             Assert.Equal("QUALIFIED", correctedMachineJson.RootElement.GetProperty("qualification").GetString());
             Assert.Equal(0L, correctedMachineJson.RootElement.GetProperty("businessDiscrepancyCount").GetInt64());
             await File.WriteAllTextAsync(Path.Combine(reportDirectory, $"{defectiveReport.DryRunId}.cli.json"),
@@ -456,7 +463,11 @@ public sealed class PensionExternalCorpusVerificationTests
                 defectiveReport.DryRunId, correctedReport.DryRunId, "--json");
             Assert.True(compareMachine.ExitCode == 0, compareMachine.StandardError);
             using var comparisonJson = JsonDocument.Parse(compareMachine.StandardOutput);
-            Assert.Equal(149L, comparisonJson.RootElement.GetProperty("defectsResolved").EnumerateObject()
+            Assert.Equal("proofshift-persisted-assurance-comparison-v1",
+                comparisonJson.RootElement.GetProperty("format").GetString());
+            Assert.False(comparisonJson.RootElement.GetProperty("sourceFingerprintChanged").GetBoolean());
+            Assert.False(comparisonJson.RootElement.GetProperty("checkpointSemanticsChanged").GetBoolean());
+            Assert.Equal(149L, comparisonJson.RootElement.GetProperty("findingsResolved").EnumerateObject()
                 .Sum(property => property.Value.GetInt64()));
             await File.WriteAllTextAsync(Path.Combine(reportDirectory, "defective-to-corrected-compare.cli.json"),
                 compareMachine.StandardOutput, TestContext.Current.CancellationToken);
