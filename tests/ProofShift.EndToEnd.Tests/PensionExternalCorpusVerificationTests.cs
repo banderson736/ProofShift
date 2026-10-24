@@ -430,7 +430,7 @@ public sealed class PensionExternalCorpusVerificationTests
             Assert.True(defectiveHuman.ExitCode == 0, defectiveHuman.StandardError);
             var discrepancyLine = defectiveHuman.StandardOutput.Split('\n')
                 .FirstOrDefault(line => line.StartsWith("Business Discrepancies:", StringComparison.Ordinal));
-            Assert.Equal("Business Discrepancies: 213", discrepancyLine);
+            Assert.Equal("Business Discrepancies: 149", discrepancyLine);
             Assert.Contains("RESULT: NOT QUALIFIED", defectiveHuman.StandardOutput);
             var correctedHuman = await RunCliAsync(directory, cliAssembly, "report", correctedReport.DryRunId);
             Assert.True(correctedHuman.ExitCode == 0, correctedHuman.StandardError);
@@ -448,7 +448,8 @@ public sealed class PensionExternalCorpusVerificationTests
             Assert.Equal(new PensionPack().Metadata.ClaimBoundary,
                 defectiveMachineJson.RootElement.GetProperty("claimBoundary").GetString());
             Assert.Equal("NOT QUALIFIED", defectiveMachineJson.RootElement.GetProperty("qualification").GetString());
-            Assert.Equal(213L, defectiveMachineJson.RootElement.GetProperty("businessDiscrepancyCount").GetInt64());
+            Assert.Equal(149L, defectiveMachineJson.RootElement.GetProperty("businessDiscrepancyCount").GetInt64());
+            Assert.Equal(213L, defectiveMachineJson.RootElement.GetProperty("verificationFailureCount").GetInt64());
             Assert.Equal(213L, defectiveMachineJson.RootElement.GetProperty("findingsByRuleAndCode").EnumerateObject()
                 .Sum(property => property.Value.GetInt64()));
             PersistedAssuranceReportTestHelper.AssertNoExpectedOrActualProperties(defectiveMachine.StandardOutput);

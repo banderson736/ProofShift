@@ -82,7 +82,7 @@ internal static class PersistedAssuranceReportTestHelper
             Assert.Equal(packVersion, reportRoot.GetProperty("packVersion").GetString());
             Assert.Equal(claimBoundary, reportRoot.GetProperty("claimBoundary").GetString());
             Assert.Equal("QUALIFIED", reportRoot.GetProperty("qualification").GetString());
-            Assert.Equal("Passed", reportRoot.GetProperty("verificationOutcome").GetString());
+            Assert.Equal("PASSED", reportRoot.GetProperty("verificationOutcome").GetString());
             Assert.Equal("COMPLETE", reportRoot.GetProperty("sourceAccountingStatus").GetString());
             Assert.Equal("COMPLETE", reportRoot.GetProperty("targetLineageStatus").GetString());
             Assert.Equal("Passed", reportRoot.GetProperty("recoveryAssessmentOutcome").GetString());

@@ -66,7 +66,8 @@ public sealed class JusticePack : IDomainPack
             new("rules.list", "List rules", "List Justice assurance rules."),
             new("rules.describe", "Describe rules", "Describe Justice rules and versions."),
             new("schema", "Generate schema", "Generate Justice rule configuration schema.")
-        ], ClaimBoundary);
+        ], ClaimBoundary, new BusinessDiscrepancyAggregationMetadata(
+            BusinessDiscrepancyEvidenceMode.AllFailedEvidence));
     }
 
     private static VerificationRuleFactory CreateAttributeEqualityFactory()

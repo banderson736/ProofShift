@@ -83,6 +83,7 @@ public sealed class DomainPackConformanceTests
         foreach (var pack in packs)
         {
             Assert.False(string.IsNullOrWhiteSpace(pack.Metadata.ClaimBoundary));
+            Assert.NotNull(pack.Metadata.BusinessDiscrepancyAggregation);
             Assert.Same(pack, registry.ResolvePack(new PackConfigurationDto(pack.Id, pack.Version)));
         }
 
@@ -129,6 +130,34 @@ public sealed class DomainPackConformanceTests
     }
 
     [Fact]
+    public void InstalledPacksSupplyNeutralBusinessDiscrepancyAggregationMetadata()
+    {
+        var packs = InstalledPacks().ToDictionary(pack => pack.Id, StringComparer.Ordinal);
+        var pensionAggregation = packs["proofshift.pension"].Metadata.BusinessDiscrepancyAggregation;
+        var selectedCode = Assert.Single(pensionAggregation.EvidenceCodes.Take(1));
+        var evidenceCounts = new Dictionary<string, long>(StringComparer.Ordinal)
+        {
+            [selectedCode] = 3,
+            ["NotSelectedByPack"] = 11
+        };
+
+        Assert.Equal(BusinessDiscrepancyEvidenceMode.SelectedEvidenceCodes, pensionAggregation.EvidenceMode);
+        Assert.Equal(PensionAssuranceReportBuilder.BusinessDiscrepancyEvidenceCodes,
+            pensionAggregation.EvidenceCodes);
+        Assert.True(pensionAggregation.IncludeFalseReversibleEdges);
+        Assert.Equal(5L, pensionAggregation.Aggregate(evidenceCounts, falseReversibleEdges: 2));
+
+        foreach (var packId in new[] { "proofshift.utility", "proofshift.justice", "proofshift.hcm", "proofshift.fhir" })
+        {
+            var aggregation = packs[packId].Metadata.BusinessDiscrepancyAggregation;
+            Assert.Equal(BusinessDiscrepancyEvidenceMode.AllFailedEvidence, aggregation.EvidenceMode);
+            Assert.Empty(aggregation.EvidenceCodes);
+            Assert.False(aggregation.IncludeFalseReversibleEdges);
+            Assert.Equal(14L, aggregation.Aggregate(evidenceCounts, falseReversibleEdges: 2));
+        }
+    }
+
+    [Fact]
     public void PackRegistryRejectsMetadataThatDoesNotMatchTheInstalledProvider()
     {
         var pack = new PensionPack();
@@ -139,7 +168,7 @@ public sealed class DomainPackConformanceTests
                 pack.RuleFactories.Select(factory => new DomainPackRuleMetadata(factory.Type, "unavailable",
                     factory.Descriptor.Description)))],
             metadata.ConfigurationSchemaContributions, metadata.Capabilities, metadata.AuthoringMetadata,
-            metadata.ClaimBoundary));
+            metadata.ClaimBoundary, metadata.BusinessDiscrepancyAggregation));
 
         Assert.Throws<ArgumentException>(() => new PackRegistry([inconsistent]));
     }
@@ -154,7 +183,8 @@ public sealed class DomainPackConformanceTests
             metadata.Concepts, metadata.RuleProviders,
             [new PackConfigurationSchemaContribution(contribution.Id, contribution.SchemaJson,
                 contribution.RuleTypes.Take(contribution.RuleTypes.Count - 1))],
-            metadata.Capabilities, metadata.AuthoringMetadata, metadata.ClaimBoundary);
+            metadata.Capabilities, metadata.AuthoringMetadata, metadata.ClaimBoundary,
+            metadata.BusinessDiscrepancyAggregation);
         var inconsistent = new MetadataMismatchPack(pack, incomplete);
 
         Assert.Throws<ArgumentException>(() => new PackRegistry([inconsistent]));
@@ -248,6 +278,7 @@ internal static class DomainPackConformanceHarness
         Assert.Equal(pack.Version, metadata.Version);
         Assert.False(string.IsNullOrWhiteSpace(metadata.DisplayName));
         Assert.False(string.IsNullOrWhiteSpace(metadata.ClaimBoundary));
+        Assert.NotNull(metadata.BusinessDiscrepancyAggregation);
         Assert.NotEmpty(metadata.Concepts);
         Assert.NotEmpty(metadata.RuleProviders);
         Assert.NotEmpty(metadata.ConfigurationSchemaContributions);

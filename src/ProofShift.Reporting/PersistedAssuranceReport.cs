@@ -79,7 +79,8 @@ public sealed record PersistedAssuranceReport
     internal PersistedAssuranceReport(string projectId, string projectName, DryRunId dryRunId,
         IDomainPack pack, EvidenceStoreManifest manifest, RecoveryArtifactSummary recovery,
         SourceCheckpoint checkpoint, VerificationLedgerSummary ledger, IReadOnlyDictionary<string, string> ruleVersions,
-        string verificationOutcome, long verificationFailures, long warnings, IReadOnlyDictionary<string, long> findings,
+        string verificationOutcome, long verificationFailures, long warnings, long businessDiscrepancies,
+        IReadOnlyDictionary<string, long> findings,
         IReadOnlyList<AssuranceEvidenceReference> references)
     {
         Format = FormatVersion;
@@ -126,7 +127,7 @@ public sealed record PersistedAssuranceReport
         DryRunFingerprint = recovery.DryRunFingerprint;
         VerificationFailureCount = verificationFailures;
         WarningCount = warnings;
-        BusinessDiscrepancyCount = verificationFailures;
+        BusinessDiscrepancyCount = businessDiscrepancies;
         RuleVersions = ReadOnly(ruleVersions);
         SourceArtifactCount = ledger.SourceCount;
         SourceAccountingGapCount = Math.Max(
@@ -194,6 +195,7 @@ public static class PersistedAssuranceReportBuilder
 
         var ruleVersions = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var findings = new SortedDictionary<string, long>(StringComparer.Ordinal);
+        var failuresByCode = new SortedDictionary<string, long>(StringComparer.Ordinal);
         var references = new List<AssuranceEvidenceReference>();
         long recordCount = 0;
         long failures = 0;
@@ -224,9 +226,9 @@ public static class PersistedAssuranceReportBuilder
                     throw new InvalidDataException("Persisted Evidence contains multiple Verification summary records.");
                 verificationOutcome = evidenceResult switch
                 {
-                    EvidenceResult.Fail => "Failed",
-                    EvidenceResult.Warning => "PassedWithWarnings",
-                    EvidenceResult.Pass => "Passed",
+                    EvidenceResult.Fail => "FAILED",
+                    EvidenceResult.Warning => "PASSED WITH WARNINGS",
+                    EvidenceResult.Pass => "PASSED",
                     _ => throw new InvalidDataException("Persisted Evidence summary has an unsupported result.")
                 };
                 continue;
@@ -235,6 +237,7 @@ public static class PersistedAssuranceReportBuilder
             if (evidenceResult != EvidenceResult.Fail) continue;
 
             failures++;
+            failuresByCode[code] = failuresByCode.GetValueOrDefault(code) + 1;
             var key = $"{ruleId}:{code}";
             findings[key] = findings.GetValueOrDefault(key) + 1;
             references.Add(new AssuranceEvidenceReference(recordId, ruleId, code,
@@ -247,8 +250,11 @@ public static class PersistedAssuranceReportBuilder
             throw new InvalidDataException("Persisted Evidence has no Verification summary record.");
 
         references.Sort((left, right) => StringComparer.Ordinal.Compare(left.EvidenceId, right.EvidenceId));
+        var businessDiscrepancies = pack.Metadata.BusinessDiscrepancyAggregation.Aggregate(
+            failuresByCode, recovery.FalseReversibleEdges);
         return new PersistedAssuranceReport(projectId, projectName, dryRunId, pack, manifest, recovery,
-            checkpoint, ledger, ruleVersions, verificationOutcome, failures, warnings, findings, references);
+            checkpoint, ledger, ruleVersions, verificationOutcome, failures, warnings, businessDiscrepancies,
+            findings, references);
     }
 
     private static void ValidateBindings(string projectId, DryRunId dryRunId, IDomainPack pack,

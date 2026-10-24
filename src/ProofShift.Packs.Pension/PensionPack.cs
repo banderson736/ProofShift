@@ -131,7 +131,10 @@ public sealed class PensionPack : IDomainPack
             new("rules.describe", "Describe rules", "Expose rule descriptions and supported versions."),
             new("rules.list", "List rules", "List installed rules for the selected pack."),
             new("schema", "Generate schema", "Generate configuration schema from provider-owned rule descriptors.")
-        ], ClaimBoundary);
+        ], ClaimBoundary, new BusinessDiscrepancyAggregationMetadata(
+            BusinessDiscrepancyEvidenceMode.SelectedEvidenceCodes,
+            PensionAssuranceReportBuilder.BusinessDiscrepancyEvidenceCodes,
+            includeFalseReversibleEdges: true));
     }
 
     private static VerificationRuleFactory Factory(string type, Func<VerificationRuleDefinition, ProofShift.Verification.IVerificationRule> create,

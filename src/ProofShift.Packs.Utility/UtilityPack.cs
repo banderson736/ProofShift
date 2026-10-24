@@ -89,7 +89,8 @@ public sealed class UtilityPack : IDomainPack
             new("rules.list", "List rules", "List Utility assurance rules."),
             new("rules.describe", "Describe rules", "Describe Utility rules and versions."),
             new("schema", "Generate schema", "Generate Utility rule configuration schema.")
-        ], ClaimBoundary);
+        ], ClaimBoundary, new BusinessDiscrepancyAggregationMetadata(
+            BusinessDiscrepancyEvidenceMode.AllFailedEvidence));
     }
 
     private static VerificationRuleFactory Factory(string type,

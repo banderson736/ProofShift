@@ -52,7 +52,8 @@ public sealed class HcmPack : IDomainPack
             new("rules.list", "List rules", "List HCM assurance rules."),
             new("rules.describe", "Describe rules", "Describe HCM rules and versions."),
             new("schema", "Generate schema", "Generate HCM rule configuration schema.")
-        ], ClaimBoundary);
+        ], ClaimBoundary, new BusinessDiscrepancyAggregationMetadata(
+            BusinessDiscrepancyEvidenceMode.AllFailedEvidence));
     }
 
     private static VerificationRuleFactory CreateReferenceFactory()

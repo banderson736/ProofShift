@@ -14,6 +14,7 @@ public sealed record DomainPackMetadata
     public DomainList<PackConfigurationSchemaContribution> ConfigurationSchemaContributions { get; }
     public DomainList<DomainPackFeatureMetadata> Capabilities { get; }
     public DomainList<DomainPackFeatureMetadata> AuthoringMetadata { get; }
+    public BusinessDiscrepancyAggregationMetadata BusinessDiscrepancyAggregation { get; }
 
     public DomainPackMetadata(string id, string version, string displayName,
         IEnumerable<DomainPackConceptMetadata> concepts,
@@ -21,12 +22,15 @@ public sealed record DomainPackMetadata
         IEnumerable<PackConfigurationSchemaContribution> configurationSchemaContributions,
         IEnumerable<DomainPackFeatureMetadata> capabilities,
         IEnumerable<DomainPackFeatureMetadata> authoringMetadata,
-        string claimBoundary)
+        string claimBoundary,
+        BusinessDiscrepancyAggregationMetadata businessDiscrepancyAggregation)
     {
         Id = Required(id, nameof(id));
         Version = Required(version, nameof(version));
         DisplayName = Required(displayName, nameof(displayName));
         ClaimBoundary = Required(claimBoundary, nameof(claimBoundary));
+        BusinessDiscrepancyAggregation = businessDiscrepancyAggregation
+            ?? throw new ArgumentNullException(nameof(businessDiscrepancyAggregation));
         Concepts = new DomainList<DomainPackConceptMetadata>((concepts ?? throw new ArgumentNullException(nameof(concepts)))
             .OrderBy(concept => concept.SemanticType, StringComparer.Ordinal));
         RuleProviders = new DomainList<DomainPackRuleProviderMetadata>((ruleProviders ?? throw new ArgumentNullException(nameof(ruleProviders)))
@@ -54,6 +58,65 @@ public sealed record DomainPackMetadata
         var items = values.ToArray();
         if (items.Any(string.IsNullOrWhiteSpace) || items.Distinct(StringComparer.Ordinal).Count() != items.Length)
             throw new ArgumentException($"Pack metadata {name} must be non-empty and unique.");
+    }
+}
+
+public enum BusinessDiscrepancyEvidenceMode
+{
+    AllFailedEvidence,
+    SelectedEvidenceCodes
+}
+
+public sealed record BusinessDiscrepancyAggregationMetadata
+{
+    public BusinessDiscrepancyEvidenceMode EvidenceMode { get; }
+    public DomainList<string> EvidenceCodes { get; }
+    public bool IncludeFalseReversibleEdges { get; }
+
+    public BusinessDiscrepancyAggregationMetadata(BusinessDiscrepancyEvidenceMode evidenceMode,
+        IEnumerable<string>? evidenceCodes = null, bool includeFalseReversibleEdges = false)
+    {
+        if (!Enum.IsDefined(evidenceMode))
+            throw new ArgumentOutOfRangeException(nameof(evidenceMode));
+
+        var codes = (evidenceCodes ?? []).Select(code =>
+            string.IsNullOrWhiteSpace(code)
+                ? throw new ArgumentException("Discrepancy evidence codes must be non-empty.", nameof(evidenceCodes))
+                : code.Trim()).ToArray();
+        if (codes.Distinct(StringComparer.Ordinal).Count() != codes.Length)
+            throw new ArgumentException("Discrepancy evidence codes must be unique.", nameof(evidenceCodes));
+        if (evidenceMode == BusinessDiscrepancyEvidenceMode.AllFailedEvidence && codes.Length != 0)
+            throw new ArgumentException("All-failure aggregation cannot also select evidence codes.", nameof(evidenceCodes));
+        if (evidenceMode == BusinessDiscrepancyEvidenceMode.SelectedEvidenceCodes && codes.Length == 0)
+            throw new ArgumentException("Selected-code aggregation requires at least one evidence code.", nameof(evidenceCodes));
+
+        EvidenceMode = evidenceMode;
+        EvidenceCodes = new DomainList<string>(codes.Order(StringComparer.Ordinal));
+        IncludeFalseReversibleEdges = includeFalseReversibleEdges;
+    }
+
+    public long Aggregate(IReadOnlyDictionary<string, long> failedEvidenceByCode, long falseReversibleEdges)
+    {
+        ArgumentNullException.ThrowIfNull(failedEvidenceByCode);
+        ArgumentOutOfRangeException.ThrowIfNegative(falseReversibleEdges);
+        if (failedEvidenceByCode.Values.Any(count => count < 0))
+            throw new ArgumentOutOfRangeException(nameof(failedEvidenceByCode), "Evidence counts must not be negative.");
+
+        long count = 0;
+        if (EvidenceMode == BusinessDiscrepancyEvidenceMode.AllFailedEvidence)
+        {
+            foreach (var evidenceCount in failedEvidenceByCode.Values)
+                count = checked(count + evidenceCount);
+        }
+        else
+        {
+            foreach (var code in EvidenceCodes)
+                count = checked(count + failedEvidenceByCode.GetValueOrDefault(code));
+        }
+
+        return IncludeFalseReversibleEdges
+            ? checked(count + falseReversibleEdges)
+            : count;
     }
 }
 

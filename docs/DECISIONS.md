@@ -210,3 +210,8 @@ Evaluator demos are discovered from strict, versioned manifests in the CLI/packa
 Status: Proposed for PS-0.11A
 
 Ordinary persisted reporting resolves exactly one configured pack/version and renders its pack-owned claim boundary from required metadata. Persisted Evidence context records the Verification provider versions used, outside semantic Evidence canonicalization; Recovery exposes already-persisted assessment and ledger bindings through a read-only summary. Reports validate persisted Evidence, Recovery, ledger, Projection, and current project context without rerunning Verification. Comparisons require the same project and exact pack while allowing historical configuration/graph changes to be attributed. See [ADR-0030](adr/0030-generic-persisted-report-context.md) and [PS-0.11A](PS0_11A_GENERIC_OPERATOR_REPORTING.md).
+
+### D-040 - Pack-supplied business-discrepancy aggregation
+Status: Proposed for PS-0.11A
+
+Persisted reports retain the raw failed Verification Evidence count and derive `BusinessDiscrepancyCount` from required, deterministic pack metadata. Metadata can select all failed Evidence or a declared set of Evidence codes and can explicitly include false-Reverse Recovery edges. Generic Reporting applies this contract without concrete-pack branches. Pension metadata reuses its established business-defect Evidence-code set and includes false-Reverse edges; Utility, Justice, HCM, and FHIR count all failed Evidence. Evidence, Recovery, qualification, package assertions, and semantic fingerprints are unchanged. See [ADR-0031](adr/0031-pack-supplied-business-discrepancy-aggregation.md).

@@ -105,7 +105,8 @@ public sealed class FhirPack : IDomainPack
             new("rules.list", "List rules", "List FHIR-style assurance rules."),
             new("rules.describe", "Describe rules", "Describe FHIR-style rules and versions."),
             new("schema", "Generate schema", "Generate FHIR-style rule configuration schema.")
-        ], ClaimBoundary);
+        ], ClaimBoundary, new BusinessDiscrepancyAggregationMetadata(
+            BusinessDiscrepancyEvidenceMode.AllFailedEvidence));
     }
 }
 
