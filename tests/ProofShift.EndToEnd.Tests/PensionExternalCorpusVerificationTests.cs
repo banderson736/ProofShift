@@ -473,7 +473,7 @@ public sealed class PensionExternalCorpusVerificationTests
             Assert.True(comparisonJson.RootElement.GetProperty("graphHashChanged").GetBoolean());
             Assert.True(comparisonJson.RootElement.GetProperty("sourceFingerprintChanged").GetBoolean());
             Assert.True(comparisonJson.RootElement.GetProperty("checkpointSemanticsChanged").GetBoolean());
-            Assert.Equal(149L, comparisonJson.RootElement.GetProperty("findingsResolved").EnumerateObject()
+            Assert.Equal(213L, comparisonJson.RootElement.GetProperty("findingsResolved").EnumerateObject()
                 .Sum(property => property.Value.GetInt64()));
             await File.WriteAllTextAsync(Path.Combine(reportDirectory, "defective-to-corrected-compare.cli.json"),
                 compareMachine.StandardOutput, TestContext.Current.CancellationToken);
