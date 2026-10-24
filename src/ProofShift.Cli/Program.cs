@@ -990,17 +990,25 @@ internal static class Program
             recovery.CheckpointId.Value.ToString("D", CultureInfo.InvariantCulture), cancellationToken).ConfigureAwait(false);
         var projection = await ProjectionRunManifestStore.ReadAsync(projectDirectory, recovery.ProjectionRunId,
             cancellationToken).ConfigureAwait(false);
-        if (projection.Status != ProjectionStatus.Succeeded ||
-            projection.ManifestHash != recovery.ProjectionManifestHash ||
-            (expectedProjectId is not null && projection.ProjectId != expectedProjectId) ||
-            string.IsNullOrWhiteSpace(projection.ProjectId) ||
-            projection.ConfigurationHash != recovery.ConfigurationHash ||
-            projection.GraphHash != recovery.GraphHash ||
-            projection.CheckpointId != recovery.CheckpointId.Value.ToString("D", CultureInfo.InvariantCulture) ||
-            projection.CheckpointManifestHash != recovery.CheckpointManifestHash ||
-            projection.CheckpointSourceFingerprint != recovery.SourceFingerprint ||
-            projection.ProjectionFingerprint != recovery.ProjectionFingerprint)
-            throw new InvalidDataException("Projection manifest does not match the persisted Recovery assessment or selected project.");
+        if (projection.Status != ProjectionStatus.Succeeded)
+            throw new InvalidDataException("Persisted Projection run did not succeed.");
+        if (projection.ManifestHash != recovery.ProjectionManifestHash)
+            throw new InvalidDataException("Persisted Projection manifest hash does not match Recovery.");
+        if ((expectedProjectId is not null && projection.ProjectId != expectedProjectId) ||
+            string.IsNullOrWhiteSpace(projection.ProjectId))
+            throw new InvalidDataException("Persisted Projection project identity does not match the selected project.");
+        if (projection.ConfigurationHash != recovery.ConfigurationHash)
+            throw new InvalidDataException("Persisted Projection configuration hash does not match Recovery.");
+        if (projection.GraphHash != recovery.GraphHash)
+            throw new InvalidDataException("Persisted Projection graph hash does not match Recovery.");
+        if (projection.CheckpointId != recovery.CheckpointId.Value.ToString("D", CultureInfo.InvariantCulture))
+            throw new InvalidDataException("Persisted Projection checkpoint identity does not match Recovery.");
+        if (projection.CheckpointManifestHash != recovery.CheckpointManifestHash)
+            throw new InvalidDataException("Persisted Projection checkpoint manifest hash does not match Recovery.");
+        if (projection.CheckpointSourceFingerprint != recovery.SourceFingerprint)
+            throw new InvalidDataException("Persisted Projection source fingerprint does not match Recovery.");
+        if (projection.ProjectionFingerprint != recovery.ProjectionFingerprint)
+            throw new InvalidDataException("Persisted Projection fingerprint does not match Recovery.");
         if ((expectedConfigurationHash is not null && projection.ConfigurationHash != expectedConfigurationHash) ||
             (expectedGraphHash is not null && projection.GraphHash != expectedGraphHash))
             throw new InvalidDataException("Current configuration or graph does not match the selected dry run.");
@@ -1040,8 +1048,8 @@ internal static class Program
 
     private static bool IsPersistedReportFailure(Exception exception) =>
         exception is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or
-            FormatException or VerificationRuleException or ProjectionManifestException or RecoveryException or
-            SnapshotStoreException or JsonException or DbException;
+            FormatException or InvalidDataException or VerificationRuleException or ProjectionManifestException or
+            RecoveryException or SnapshotStoreException or JsonException or DbException;
 
     private static void WriteAssuranceReport(PersistedAssuranceReport report, bool jsonOutput)
     {

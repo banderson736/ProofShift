@@ -724,7 +724,8 @@ public sealed class ShadowProjectionPensionIntegrationTests
 
             var sameRunComparison = await RunCliAsync(cli, fixture, environment, "compare",
                 "--before", dryRunId!, "--after", dryRunId!, "--json");
-            Assert.Equal(0, sameRunComparison.ExitCode);
+            Assert.True(sameRunComparison.ExitCode == 0,
+                $"Persisted assurance comparison failed with exit code {sameRunComparison.ExitCode}. stdout: {sameRunComparison.StandardOutput} stderr: {sameRunComparison.StandardError}");
             using var comparisonJson = JsonDocument.Parse(sameRunComparison.StandardOutput);
             Assert.Equal("proofshift-persisted-assurance-comparison-v1",
                 comparisonJson.RootElement.GetProperty("format").GetString());

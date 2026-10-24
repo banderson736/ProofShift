@@ -48,7 +48,8 @@ internal static class PersistedAssuranceReportTestHelper
             var dryRunText = dryRunId.Value.ToString("D");
             var human = await RunCliAsync(cliProjectDirectory, cliAssembly, cancellationToken,
                 "report", dryRunText);
-            Assert.Equal(0, human.ExitCode);
+            Assert.True(human.ExitCode == 0,
+                $"Human report failed with exit code {human.ExitCode}. stdout: {human.StandardOutput} stderr: {human.StandardError}");
             Assert.Contains($"Project: {projectName}", human.StandardOutput, StringComparison.Ordinal);
             Assert.Contains($"({packId}@{packVersion})", human.StandardOutput, StringComparison.Ordinal);
             Assert.Contains(claimBoundary, human.StandardOutput, StringComparison.Ordinal);
@@ -60,7 +61,10 @@ internal static class PersistedAssuranceReportTestHelper
                 "report", dryRunText, "--json");
             var repeatedMachine = await RunCliAsync(cliProjectDirectory, cliAssembly, cancellationToken,
                 "report", dryRunText, "--json");
-            Assert.Equal(0, machine.ExitCode);
+            Assert.True(machine.ExitCode == 0,
+                $"JSON report failed with exit code {machine.ExitCode}. stdout: {machine.StandardOutput} stderr: {machine.StandardError}");
+            Assert.True(repeatedMachine.ExitCode == 0,
+                $"Repeated JSON report failed with exit code {repeatedMachine.ExitCode}. stdout: {repeatedMachine.StandardOutput} stderr: {repeatedMachine.StandardError}");
             Assert.Equal(machine.StandardOutput, repeatedMachine.StandardOutput);
             using var report = JsonDocument.Parse(machine.StandardOutput);
             var reportRoot = report.RootElement;
@@ -82,7 +86,8 @@ internal static class PersistedAssuranceReportTestHelper
 
             var comparison = await RunCliAsync(cliProjectDirectory, cliAssembly, cancellationToken,
                 "compare", dryRunText, dryRunText, "--json");
-            Assert.Equal(0, comparison.ExitCode);
+            Assert.True(comparison.ExitCode == 0,
+                $"JSON comparison failed with exit code {comparison.ExitCode}. stdout: {comparison.StandardOutput} stderr: {comparison.StandardError}");
             using var comparisonJson = JsonDocument.Parse(comparison.StandardOutput);
             Assert.Equal("proofshift-persisted-assurance-comparison-v1",
                 comparisonJson.RootElement.GetProperty("format").GetString());
