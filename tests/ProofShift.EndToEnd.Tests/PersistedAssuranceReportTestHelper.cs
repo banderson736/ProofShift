@@ -14,8 +14,15 @@ namespace ProofShift.EndToEnd.Tests;
 
 internal static class PersistedAssuranceReportTestHelper
 {
-    private static readonly string[] ForeignPackTerms =
-        ["Pension.Member", "Utility.Account", "Justice.Case", "HCM.Worker", "Fhir.Patient"];
+    private static readonly Dictionary<string, string[]> ForeignPackTerms =
+        new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            ["proofshift.pension"] = ["Utility.Account", "Justice.Case", "HCM.Worker", "Fhir.Patient"],
+            ["proofshift.utility"] = ["Pension.Member", "Justice.Case", "HCM.Worker", "Fhir.Patient"],
+            ["proofshift.justice"] = ["Pension.Member", "Utility.Account", "HCM.Worker", "Fhir.Patient"],
+            ["proofshift.hcm"] = ["Pension.Member", "Utility.Account", "Justice.Case", "Fhir.Patient"],
+            ["proofshift.fhir"] = ["Pension.Member", "Utility.Account", "Justice.Case", "HCM.Worker"]
+        };
 
     public static async Task AssertCliReportAndComparisonAsync(string artifactDirectory,
         string verificationProjectDirectory, string projectName, string packId, string packVersion,
@@ -80,7 +87,9 @@ internal static class PersistedAssuranceReportTestHelper
             Assert.Equal("COMPLETE", reportRoot.GetProperty("targetLineageStatus").GetString());
             Assert.Equal("Passed", reportRoot.GetProperty("recoveryAssessmentOutcome").GetString());
             AssertNoExpectedOrActualProperties(machine.StandardOutput);
-            foreach (var foreignTerm in ForeignPackTerms
+            if (!ForeignPackTerms.TryGetValue(packId, out var foreignTerms))
+                throw new InvalidDataException($"No foreign-pack terminology list is configured for '{packId}'.");
+            foreach (var foreignTerm in foreignTerms
                          .Where(term => !claimBoundary.Contains(term, StringComparison.Ordinal)))
                 Assert.DoesNotContain(foreignTerm, machine.StandardOutput, StringComparison.Ordinal);
 
