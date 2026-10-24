@@ -1001,7 +1001,7 @@ internal static class Program
             throw new InvalidDataException("Persisted Projection configuration hash does not match Recovery.");
         if (projection.GraphHash != recovery.GraphHash)
             throw new InvalidDataException("Persisted Projection graph hash does not match Recovery.");
-        if (projection.CheckpointId != recovery.CheckpointId.Value.ToString("D", CultureInfo.InvariantCulture))
+        if (projection.CheckpointId != recovery.CheckpointId.Value.ToString("N", CultureInfo.InvariantCulture))
             throw new InvalidDataException("Persisted Projection checkpoint identity does not match Recovery.");
         if (projection.CheckpointManifestHash != recovery.CheckpointManifestHash)
             throw new InvalidDataException("Persisted Projection checkpoint manifest hash does not match Recovery.");
