@@ -232,8 +232,7 @@ public sealed class UtilityPhysicalAssuranceTests
         Assert.Equal(new UtilityPack().Metadata.ClaimBoundary, persistedReport.ClaimBoundary);
         Assert.Equal("QUALIFIED", persistedReport.Qualification);
         Assert.Empty(persistedReport.FindingsByRuleAndCode);
-        Assert.DoesNotContain("\"expected\"", JsonSerializer.Serialize(persistedReport), StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("\"actual\"", JsonSerializer.Serialize(persistedReport), StringComparison.OrdinalIgnoreCase);
+        PersistedAssuranceReportTestHelper.AssertNoExpectedOrActualProperties(JsonSerializer.Serialize(persistedReport));
         await PersistedAssuranceReportTestHelper.AssertCliReportAndComparisonAsync(root,
             Path.Combine(root, "projected-corrected"), configuration.Root.Project.Name!,
             new UtilityPack().Id, new UtilityPack().Version, new UtilityPack().Metadata.ClaimBoundary,

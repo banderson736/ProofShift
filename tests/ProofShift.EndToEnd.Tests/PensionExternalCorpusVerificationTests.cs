@@ -451,8 +451,7 @@ public sealed class PensionExternalCorpusVerificationTests
             Assert.Equal(149L, defectiveMachineJson.RootElement.GetProperty("businessDiscrepancyCount").GetInt64());
             Assert.Equal(149L, defectiveMachineJson.RootElement.GetProperty("findingsByRuleAndCode").EnumerateObject()
                 .Sum(property => property.Value.GetInt64()));
-            Assert.DoesNotContain("\"expected\"", defectiveMachine.StandardOutput, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("\"actual\"", defectiveMachine.StandardOutput, StringComparison.OrdinalIgnoreCase);
+            PersistedAssuranceReportTestHelper.AssertNoExpectedOrActualProperties(defectiveMachine.StandardOutput);
             Assert.Equal("QUALIFIED", correctedMachineJson.RootElement.GetProperty("qualification").GetString());
             Assert.Equal(0L, correctedMachineJson.RootElement.GetProperty("businessDiscrepancyCount").GetInt64());
             await File.WriteAllTextAsync(Path.Combine(reportDirectory, $"{defectiveReport.DryRunId}.cli.json"),

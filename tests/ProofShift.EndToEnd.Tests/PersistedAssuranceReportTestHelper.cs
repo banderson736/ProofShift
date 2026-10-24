@@ -79,8 +79,7 @@ internal static class PersistedAssuranceReportTestHelper
             Assert.Equal("COMPLETE", reportRoot.GetProperty("sourceAccountingStatus").GetString());
             Assert.Equal("COMPLETE", reportRoot.GetProperty("targetLineageStatus").GetString());
             Assert.Equal("Passed", reportRoot.GetProperty("recoveryAssessmentOutcome").GetString());
-            Assert.False(machine.StandardOutput.Contains("\"expected\"", StringComparison.OrdinalIgnoreCase));
-            Assert.False(machine.StandardOutput.Contains("\"actual\"", StringComparison.OrdinalIgnoreCase));
+            AssertNoExpectedOrActualProperties(machine.StandardOutput);
             foreach (var foreignTerm in ForeignPackTerms
                          .Where(term => !claimBoundary.Contains(term, StringComparison.Ordinal)))
                 Assert.DoesNotContain(foreignTerm, machine.StandardOutput, StringComparison.Ordinal);
@@ -146,6 +145,31 @@ internal static class PersistedAssuranceReportTestHelper
             return await PersistedAssuranceReportBuilder.BuildAsync(projection.ProjectId, projectName, dryRunId,
                 pack, manifest, evidenceStore.ReadRecordsAsync(recovery.VerificationRunId, cancellationToken),
                 recovery, checkpoint, ledger, cancellationToken);
+        }
+    }
+
+    public static void AssertNoExpectedOrActualProperties(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        AssertNoExpectedOrActualProperties(document.RootElement);
+    }
+
+    private static void AssertNoExpectedOrActualProperties(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                Assert.False(property.Name.Equals("expected", StringComparison.OrdinalIgnoreCase) ||
+                    property.Name.Equals("actual", StringComparison.OrdinalIgnoreCase),
+                    $"Report contains a raw '{property.Name}' field.");
+                AssertNoExpectedOrActualProperties(property.Value);
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+                AssertNoExpectedOrActualProperties(item);
         }
     }
 

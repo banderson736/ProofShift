@@ -25,6 +25,8 @@ Reporting must not rerun Verification. Evidence, Verification ledger/run metadat
 
 The report binds its schema/version, project identity, resolved pack ID/version/display name, and configured claim boundary. Where authoritative persisted state supports them, it reports configuration and graph hashes, checkpoint/source and projection/observation identity, rule-set identity, Verification run/outcome/Evidence fingerprint, deterministically grouped failed findings and stable Evidence references, source-accounting and target-lineage state/gaps, Recovery assessment/rehearsal, qualification, Recovery Evidence fingerprint, dry-run fingerprint, and useful selected-pack concepts/rule metadata. Human and JSON rendering must be deterministic and use only the selected pack's terminology. Raw expected/actual sensitive values and resolved secrets must not appear.
 
+The business-discrepancy count reflects failed Verification Evidence findings. False-Reverse and other Recovery readiness issues remain separately reported in the Recovery section and are not added to that count.
+
 Pack claim boundaries are required pack metadata. Persisted Evidence context carries the provider versions resolved for the Verification run; this metadata is not part of Evidence canonicalization and does not change Evidence fingerprints. Recovery's generic read-only summary exposes existing persisted assessment, Projection/checkpoint identity, and Verification-ledger receipt data. These durable contracts are recorded in [ADR-0030](adr/0030-generic-persisted-report-context.md).
 
 ## Comparison semantics

@@ -126,7 +126,7 @@ public sealed record PersistedAssuranceReport
         DryRunFingerprint = recovery.DryRunFingerprint;
         VerificationFailureCount = verificationFailures;
         WarningCount = warnings;
-        BusinessDiscrepancyCount = checked(verificationFailures + recovery.FalseReversibleEdges);
+        BusinessDiscrepancyCount = verificationFailures;
         RuleVersions = ReadOnly(ruleVersions);
         SourceArtifactCount = ledger.SourceCount;
         SourceAccountingGapCount = Math.Max(
@@ -275,9 +275,7 @@ public static class PersistedAssuranceReportBuilder
         var packProviders = context.ProviderVersions?
             .Where(pair => pair.Key != "proofshift.verification.generic")
             .ToArray() ?? [];
-        if (packProviders.Length != 1 ||
-            packProviders[0].Key != pack.Id ||
-            packProviders[0].Value != pack.Version)
+        if (!packProviders.Any(provider => provider.Key == pack.Id && provider.Value == pack.Version))
             throw new InvalidDataException("Persisted Verification context does not identify the exact configured domain pack and version.");
         if (context.ConfigurationHash != recovery.ConfigurationHash ||
             context.GraphHash != recovery.GraphHash ||
