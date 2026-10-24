@@ -27,6 +27,8 @@ The report binds its schema/version, project identity, resolved pack ID/version/
 
 The generic business-discrepancy count reflects the total failed Verification Evidence records; it does not deduplicate multiple findings into pack-specific seeded-defect categories. False-Reverse and other Recovery readiness issues remain separately reported in the Recovery section and are not added to that count. Domain-specific demo summaries may therefore use different defect totals while preserving the same Verification evidence and qualification.
 
+The persisted source fingerprint is the snapshot aggregate bound to the graph hash and endpoint source fingerprints. A graph change can therefore change the aggregate source fingerprint and checkpoint semantic fingerprint even when the underlying source rows are unchanged; comparison reports these changes explicitly.
+
 Pack claim boundaries are required pack metadata. Persisted Evidence context carries the provider versions resolved for the Verification run; this metadata is not part of Evidence canonicalization and does not change Evidence fingerprints. Recovery's generic read-only summary exposes existing persisted assessment, Projection/checkpoint identity, and Verification-ledger receipt data. These durable contracts are recorded in [ADR-0030](adr/0030-generic-persisted-report-context.md).
 
 ## Comparison semantics

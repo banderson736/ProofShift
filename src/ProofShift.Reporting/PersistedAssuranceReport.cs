@@ -418,7 +418,7 @@ public sealed record PersistedAssuranceRunComparison
         var attribution = new List<string>();
         if (comparison.ConfigurationHashChanged) attribution.Add("Project configuration changed.");
         if (comparison.GraphHashChanged) attribution.Add("Migration graph changed.");
-        if (comparison.SourceFingerprintChanged) attribution.Add("Source content fingerprint changed.");
+        if (comparison.SourceFingerprintChanged) attribution.Add("Source checkpoint fingerprint changed.");
         if (comparison.CheckpointSemanticsChanged) attribution.Add("Checkpoint source or consistency semantics changed.");
         if (comparison.ProjectionSemanticsChanged) attribution.Add("Projected target state changed.");
         if (comparison.ObservationSemanticsChanged) attribution.Add("Observed target state changed.");

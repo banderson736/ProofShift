@@ -470,8 +470,9 @@ public sealed class PensionExternalCorpusVerificationTests
             using var comparisonJson = JsonDocument.Parse(compareMachine.StandardOutput);
             Assert.Equal("proofshift-persisted-assurance-comparison-v1",
                 comparisonJson.RootElement.GetProperty("format").GetString());
-            Assert.False(comparisonJson.RootElement.GetProperty("sourceFingerprintChanged").GetBoolean());
-            Assert.False(comparisonJson.RootElement.GetProperty("checkpointSemanticsChanged").GetBoolean());
+            Assert.True(comparisonJson.RootElement.GetProperty("graphHashChanged").GetBoolean());
+            Assert.True(comparisonJson.RootElement.GetProperty("sourceFingerprintChanged").GetBoolean());
+            Assert.True(comparisonJson.RootElement.GetProperty("checkpointSemanticsChanged").GetBoolean());
             Assert.Equal(149L, comparisonJson.RootElement.GetProperty("findingsResolved").EnumerateObject()
                 .Sum(property => property.Value.GetInt64()));
             await File.WriteAllTextAsync(Path.Combine(reportDirectory, "defective-to-corrected-compare.cli.json"),
