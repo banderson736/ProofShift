@@ -108,19 +108,7 @@ internal static class DemoScenarioWorkspace
     {
         if (!Directory.Exists(path)) return;
         if (deleteOnDispose)
-        {
             Directory.Delete(path, recursive: true);
-            return;
-        }
-
-        foreach (var entry in Directory.EnumerateFileSystemEntries(path))
-        {
-            var name = Path.GetFileName(entry);
-            if (name is ".proofshift" or "assurance-report.json" or "assurance-report.txt" ||
-                (File.GetAttributes(entry) & FileAttributes.ReparsePoint) != 0) continue;
-            if (Directory.Exists(entry)) Directory.Delete(entry, recursive: true);
-            else File.Delete(entry);
-        }
     }
 
     private sealed class FixtureCleanup(string path, bool deleteOnDispose) : IDisposable
@@ -144,6 +132,19 @@ internal static class ScenarioInvariant
 {
     public static void Equal<T>(T expected, T actual)
     {
+        if (expected is IDictionary expectedDictionary && actual is IDictionary actualDictionary)
+        {
+            if (expectedDictionary.Count != actualDictionary.Count)
+                throw new InvalidOperationException("The demo scenario produced an unexpected dictionary.");
+            foreach (DictionaryEntry entry in expectedDictionary)
+            {
+                if (!actualDictionary.Contains(entry.Key) ||
+                    !Equals(entry.Value, actualDictionary[entry.Key]))
+                    throw new InvalidOperationException("The demo scenario produced an unexpected dictionary.");
+            }
+            return;
+        }
+
         if (expected is IEnumerable expectedItems && actual is IEnumerable actualItems &&
             expected is not string && actual is not string)
         {
