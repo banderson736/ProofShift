@@ -6,7 +6,7 @@ using System.Xml;
 using System.Xml.Linq;
 using System.Numerics;
 using ProofShift.Connectors.Abstractions;
-using ProofShift.Connectors.Csv;
+using ProofShift.Connectors.Internal;
 using ProofShift.Domain;
 
 namespace ProofShift.Connectors.StructuredFiles;

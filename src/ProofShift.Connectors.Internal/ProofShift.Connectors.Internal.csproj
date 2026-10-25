@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>ProofShift.Connectors.Internal</RootNamespace>
+    <AssemblyName>ProofShift.Connectors.Internal</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <ProjectReference Include="../ProofShift.Connectors.Abstractions/ProofShift.Connectors.Abstractions.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="ProofShift.Connectors.Csv" />
+    <InternalsVisibleTo Include="ProofShift.Connectors.Parquet" />
+    <InternalsVisibleTo Include="ProofShift.Connectors.StructuredFiles" />
+  </ItemGroup>
+</Project>

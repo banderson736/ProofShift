@@ -210,8 +210,10 @@ public sealed class ConnectorRuntimeTests
 
             var duplicateInspection = await connector.InspectAsync(context, selector, TestContext.Current.CancellationToken);
             Assert.Equal(SourceInspectionStatus.Valid, duplicateInspection.Status);
-            await Assert.ThrowsAsync<ConnectorReadException>(() => ReadAllAsync(
+            var duplicate = await Assert.ThrowsAsync<ConnectorReadException>(() => ReadAllAsync(
                 connector.ReadAsync(context, selector, new ReadOptions(), TestContext.Current.CancellationToken)));
+            Assert.Equal(ConnectorIssueCodes.DuplicateArtifactIdentity, duplicate.Code);
+            Assert.DoesNotContain("1", duplicate.Message, StringComparison.Ordinal);
 
             var wrongIdentity = new ArtifactSelector("csv", [new KeyValuePair<string, string>("path", "duplicates.csv")], ["MISSING"]);
             var missingInspection = await connector.InspectAsync(context, wrongIdentity, TestContext.Current.CancellationToken);
@@ -219,6 +221,70 @@ public sealed class ConnectorRuntimeTests
         }
         finally
         {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CsvReadPropagatesCancellationFromTheIdentityIndex()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(root, "cancel.csv"), "ID\n1\n",
+                TestContext.Current.CancellationToken);
+            var context = Context("csv", [new KeyValuePair<string, string>("root", root)]);
+            var selector = new ArtifactSelector("csv", [new KeyValuePair<string, string>("path", "cancel.csv")], ["ID"]);
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            await using var enumerator = new CsvSourceConnector()
+                .ReadAsync(context, selector, new ReadOptions(), cancellation.Token)
+                .GetAsyncEnumerator(cancellation.Token);
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await enumerator.MoveNextAsync());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CsvReadWrapsIdentityIndexCreationFailureWithoutLeakingTemporaryPath()
+    {
+        var root = CreateTemporaryDirectory();
+        var temporaryDirectory = Path.GetTempPath();
+        var blocker = Path.Combine(temporaryDirectory, $"proofshift-temp-blocker-{Guid.NewGuid():N}");
+        await File.WriteAllTextAsync(blocker, "not a directory", TestContext.Current.CancellationToken);
+        var variables = new[] { "TMP", "TEMP", "TMPDIR" };
+        var originals = variables.ToDictionary(name => name, Environment.GetEnvironmentVariable, StringComparer.Ordinal);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(root, "source.csv"), "ID\n1\n",
+                TestContext.Current.CancellationToken);
+            var context = Context("csv", [new KeyValuePair<string, string>("root", root)]);
+            var selector = new ArtifactSelector("csv", [new KeyValuePair<string, string>("path", "source.csv")], ["ID"]);
+            foreach (var name in variables)
+                Environment.SetEnvironmentVariable(name, blocker);
+
+            Assert.StartsWith(blocker, Path.GetTempPath(), StringComparison.OrdinalIgnoreCase);
+            var exception = await Assert.ThrowsAsync<ConnectorReadException>(async () =>
+            {
+                await using var enumerator = new CsvSourceConnector()
+                    .ReadAsync(context, selector, new ReadOptions(), TestContext.Current.CancellationToken)
+                    .GetAsyncEnumerator(TestContext.Current.CancellationToken);
+                await enumerator.MoveNextAsync();
+            });
+
+            Assert.Equal(ConnectorIssueCodes.SourceReadFailed, exception.Code);
+            Assert.Equal("Temporary identity index could not be created.", exception.Message);
+            Assert.DoesNotContain(blocker, exception.ToString(), StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            foreach (var (name, value) in originals)
+                Environment.SetEnvironmentVariable(name, value);
+            File.Delete(blocker);
             Directory.Delete(root, recursive: true);
         }
     }

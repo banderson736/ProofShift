@@ -6,7 +6,7 @@ using System.Text.Json;
 using Parquet;
 using Parquet.Schema;
 using ProofShift.Connectors.Abstractions;
-using ProofShift.Connectors.Csv;
+using ProofShift.Connectors.Internal;
 using ProofShift.Connectors.RemoteObjects;
 using ProofShift.Domain;
 

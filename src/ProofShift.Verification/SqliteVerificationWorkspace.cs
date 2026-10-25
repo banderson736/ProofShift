@@ -21,6 +21,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
     private readonly SqliteConnection _connection;
     private readonly PerformanceRecorder? _performanceRecorder;
     private readonly VerificationExecutionPlan? _executionPlan;
+    private readonly VerificationWorkspaceDiagnostics _diagnostics;
     private readonly Dictionary<string, SqliteCommand> _writeCommands = new(StringComparer.Ordinal);
     private readonly Dictionary<VerificationWorksetKey, WorksetMaterializationMetrics> _worksetMetrics = [];
     private readonly object _worksetMetricsGate = new();
@@ -28,7 +29,6 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
     private bool _orderingIndexCreated;
         private bool _expectedPartitionIndexCreated;
     private long _committedTransactions;
-    private readonly Dictionary<string, string[]> _queryPlans = new(StringComparer.Ordinal);
     private SqliteTransaction? _writeTransaction;
     private int _pendingWriteOperations;
     private long _journalPreparationTicks;
@@ -108,6 +108,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         _connection = connection;
         _performanceRecorder = performanceRecorder;
         _executionPlan = executionPlan;
+        _diagnostics = new VerificationWorkspaceDiagnostics(performanceRecorder);
     }
 
     public static Task<SqliteVerificationWorkspace> CreateAsync(string temporaryRoot, CancellationToken cancellationToken) =>
@@ -137,7 +138,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         try
         {
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-            connection.CreateCollation("DECIMAL_ORDER", CompareDecimalStrings);
+            connection.CreateCollation("DECIMAL_ORDER", VerificationOrderingKeyCodec.CompareDecimalStrings);
             await using var command = connection.CreateCommand();
             command.CommandText = """
                 PRAGMA journal_mode=WAL;
@@ -291,7 +292,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         command.Parameters.AddWithValue("$system", artifact.SystemId.Value);
         command.Parameters.AddWithValue("$endpoint", artifact.EndpointId.Value);
         command.Parameters.AddWithValue("$type", artifact.ArtifactType);
-        command.Parameters.AddWithValue("$identity", IdentityHash(artifact.Identity));
+        command.Parameters.AddWithValue("$identity", VerificationOrderingKeyCodec.IdentityHash(artifact.Identity));
         return await ExecuteScalarReadAsync(command, cancellationToken).ConfigureAwait(false) is not null;
     }
 
@@ -307,7 +308,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
             throw new VerificationRuleException("PSRULE008",
                 $"Lookup field '{field}' is not declared for the {role} workset.");
         await EnsureOrderingIndexAsync(cancellationToken).ConfigureAwait(false);
-        var normalized = NormalizeOrderingValue(value);
+        var normalized = VerificationOrderingKeyCodec.Normalize(value);
         var valueColumn = normalized.Kind switch
         {
             0 => null,
@@ -382,7 +383,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
             var valueCommand = GetWriteCommand("INSERT INTO expected_values (expected_seq,field,value_hash) VALUES ($seq,$field,$hash)", transaction);
             valueCommand.Parameters.AddWithValue("$seq", expectedSequence);
             valueCommand.Parameters.AddWithValue("$field", pair.Key);
-            valueCommand.Parameters.AddWithValue("$hash", FingerprintValue(pair.Value));
+            valueCommand.Parameters.AddWithValue("$hash", VerificationOrderingKeyCodec.FingerprintValue(pair.Value));
             await valueCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
         RecordWorksetMaterialization(VerificationArtifactRole.ExpectedTarget, expected, requiredFields, recordJson,
@@ -403,7 +404,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         command.Parameters.AddWithValue("$system", target.SystemId.Value);
         command.Parameters.AddWithValue("$endpoint", target.EndpointId.Value);
         command.Parameters.AddWithValue("$type", target.ArtifactType);
-        command.Parameters.AddWithValue("$identity", IdentityHash(target.Identity));
+        command.Parameters.AddWithValue("$identity", VerificationOrderingKeyCodec.IdentityHash(target.Identity));
         command.Parameters.AddWithValue("$sourceNode", sourceNodeKey);
         command.Parameters.AddWithValue("$source", source.Id.Value);
         command.Parameters.AddWithValue("$edge", edgeId.Value.ToString("D", CultureInfo.InvariantCulture));
@@ -450,7 +451,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         command.Parameters.AddWithValue("$system", (object?)entry.Target?.SystemId.Value ?? DBNull.Value);
         command.Parameters.AddWithValue("$endpoint", (object?)entry.Target?.EndpointId.Value ?? DBNull.Value);
         command.Parameters.AddWithValue("$type", (object?)entry.Target?.ArtifactType ?? DBNull.Value);
-        command.Parameters.AddWithValue("$identity", entry.Target is null ? DBNull.Value : IdentityHash(entry.Target.Identity));
+        command.Parameters.AddWithValue("$identity", entry.Target is null ? DBNull.Value : VerificationOrderingKeyCodec.IdentityHash(entry.Target.Identity));
         command.Parameters.AddWithValue("$edge", entry.EdgeId.Value.ToString("D", CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("$edgeName", entry.EdgeName);
         command.Parameters.AddWithValue("$edgeVersion", entry.EdgeVersion);
@@ -475,7 +476,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
             sourceCommand.Parameters.AddWithValue("$system", source.Artifact.SystemId.Value);
             sourceCommand.Parameters.AddWithValue("$endpoint", source.Artifact.EndpointId.Value);
             sourceCommand.Parameters.AddWithValue("$type", source.Artifact.ArtifactType);
-            sourceCommand.Parameters.AddWithValue("$identity", IdentityHash(source.Artifact.Identity));
+            sourceCommand.Parameters.AddWithValue("$identity", VerificationOrderingKeyCodec.IdentityHash(source.Artifact.Identity));
             if (measureJournalWrites)
                 Interlocked.Add(ref _journalPreparationTicks, Stopwatch.GetElapsedTime(preparationStarted).Ticks);
             executionStarted = measureJournalWrites ? Stopwatch.GetTimestamp() : 0;
@@ -610,7 +611,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
             var valueCommand = GetWriteCommand("INSERT INTO actual_values (target_seq,field,value_hash) VALUES ($seq,$field,$hash)", transaction);
             valueCommand.Parameters.AddWithValue("$seq", sequence);
             valueCommand.Parameters.AddWithValue("$field", pair.Key);
-            valueCommand.Parameters.AddWithValue("$hash", FingerprintValue(pair.Value));
+            valueCommand.Parameters.AddWithValue("$hash", VerificationOrderingKeyCodec.FingerprintValue(pair.Value));
             await ExecuteScratchDmlAsync(valueCommand, cancellationToken).ConfigureAwait(false);
         }
         RecordWorksetMaterialization(VerificationArtifactRole.ActualTarget, record, requiredFields, recordJson,
@@ -1263,7 +1264,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!record.Values.TryGetValue(field, out var fieldValue)) continue;
-            var value = NormalizeOrderingValue(fieldValue);
+            var value = VerificationOrderingKeyCodec.Normalize(fieldValue);
             command.Parameters["$field"].Value = field;
             command.Parameters["$kind"].Value = value.Kind;
             command.Parameters["$text"].Value = (object?)value.Text ?? DBNull.Value;
@@ -1381,7 +1382,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
             stage?.AddMeasurement($"indexFieldCount.{requirement.Name}", requirement.Fields.Count, "fields");
         }
         _orderingIndexCreated = true;
-        _performanceRecorder?.ObserveTemporaryWorkspaceBytes(DirectorySize(_directory));
+        _performanceRecorder?.ObserveTemporaryWorkspaceBytes(VerificationWorkspaceDiagnostics.DirectorySize(_directory));
     }
 
     private async Task EnsureExpectedPartitionIndexAsync(CancellationToken cancellationToken)
@@ -1401,33 +1402,6 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         _partitionCount > 1 && _ruleEvaluationPartition is not null && _sharedExpected is null
             ? EnsureExpectedPartitionIndexAsync(cancellationToken) : Task.CompletedTask;
 
-    private static NormalizedOrderingValue NormalizeOrderingValue(ValueNode value) => value switch
-    {
-        NullValue => new(0),
-        StringValue item => new(1, Text: item.Value),
-        IntegerValue item => new(2, Integer: item.Value),
-        DecimalValue item => new(3, Decimal: item.Value.ToString("G29", CultureInfo.InvariantCulture)),
-        DateValue item => new(4, Temporal: item.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
-        InstantValue item => new(5, Temporal: item.Value.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)),
-        OffsetDateTimeValue item => new(6, Temporal: item.Value.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)),
-        LocalDateTimeValue item => new(7, Temporal: item.Value.ToString("O", CultureInfo.InvariantCulture)),
-        BooleanValue item => new(8, Boolean: item.Value ? 1 : 0),
-        BinaryReferenceValue item => new(9, Text: item.Sha256),
-        CollectionValue => new(10, Text: string.Empty),
-        ObjectValue => new(11, Text: string.Empty),
-        _ => throw new ArgumentOutOfRangeException(nameof(value), "Unsupported normalized ordering-key value.")
-    };
-
-    private static int CompareDecimalStrings(string? left, string? right)
-    {
-        if (left is null) return right is null ? 0 : -1;
-        if (right is null) return 1;
-        if (decimal.TryParse(left, NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.InvariantCulture, out var leftValue) &&
-            decimal.TryParse(right, NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.InvariantCulture, out var rightValue))
-            return leftValue.CompareTo(rightValue);
-        return string.Compare(left, right, StringComparison.Ordinal);
-    }
-
     private static void AddArtifactParameters(SqliteCommand command, ArtifactReference artifact, string nodeKey, string prefix = "$source")
     {
         command.Parameters.AddWithValue(prefix == "$source" ? "$node" : "$node", nodeKey);
@@ -1435,7 +1409,8 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         command.Parameters.AddWithValue(prefix == "$source" ? "$system" : "$system", artifact.SystemId.Value);
         command.Parameters.AddWithValue(prefix == "$source" ? "$endpoint" : "$endpoint", artifact.EndpointId.Value);
         command.Parameters.AddWithValue(prefix == "$source" ? "$type" : "$type", artifact.ArtifactType);
-        command.Parameters.AddWithValue(prefix == "$source" ? "$identity" : "$identity", IdentityHash(artifact.Identity));
+        command.Parameters.AddWithValue(prefix == "$source" ? "$identity" : "$identity",
+            VerificationOrderingKeyCodec.IdentityHash(artifact.Identity));
     }
 
     private static ArtifactReference MakeArtifact(string id, string system, string endpoint, string type, string identityHash) =>
@@ -1444,12 +1419,6 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
     private static string[] SplitIds(string? value) => string.IsNullOrEmpty(value)
         ? []
         : value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-    private static string IdentityHash(string identity) => Hash(Encoding.UTF8.GetBytes(identity));
-
-    private static string FingerprintValue(ValueNode value) => Hash(Encoding.UTF8.GetBytes(GraphTargetIdentity.CanonicalValue(value)));
-
-    private static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 
     private void ThrowIfDisposed()
     {
@@ -1501,7 +1470,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
             }.ToString());
             _partitionWriters.Add(new PartitionWriter(index, writerConnection));
             await writerConnection.OpenAsync(cancellationToken).ConfigureAwait(false);
-            writerConnection.CreateCollation("DECIMAL_ORDER", CompareDecimalStrings);
+            writerConnection.CreateCollation("DECIMAL_ORDER", VerificationOrderingKeyCodec.CompareDecimalStrings);
             await using var writerProfile = writerConnection.CreateCommand();
             writerProfile.CommandText = "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL";
             await writerProfile.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -1738,7 +1707,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
             Volatile.Read(ref _partitionWorkerFailure)?.Throw();
             throw;
         }
-        _performanceRecorder?.ObserveTemporaryWorkspaceBytes(DirectorySize(_directory));
+        _performanceRecorder?.ObserveTemporaryWorkspaceBytes(VerificationWorkspaceDiagnostics.DirectorySize(_directory));
         RecordPartitionWorkerMetrics();
     }
 
@@ -1931,7 +1900,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
             completed.SourceCount, completed.ExpectedCount, completed.SourceJsonBytes, completed.ExpectedJsonBytes, completed.Checksum
         }), cancellationToken).ConfigureAwait(false);
         File.SetAttributes(path, FileAttributes.ReadOnly);
-        RecordWorksetDiagnostics();
+        _diagnostics.RecordWorksetDiagnostics(CreateWorksetDiagnosticSnapshots());
         return completed;
     }
 
@@ -2060,7 +2029,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
             if (_performanceRecorder is not null)
             {
                 var observationStarted = containsJournalEntries ? Stopwatch.GetTimestamp() : 0;
-                try { _performanceRecorder.ObserveTemporaryWorkspaceBytes(DirectorySize(_directory)); }
+                try { _performanceRecorder.ObserveTemporaryWorkspaceBytes(VerificationWorkspaceDiagnostics.DirectorySize(_directory)); }
                 finally
                 {
                     if (containsJournalEntries)
@@ -2133,7 +2102,7 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
             if (_performanceRecorder is not null)
             {
                 if (_partitionWorkerLanes.Count == 0)
-                    _performanceRecorder.ObserveTemporaryWorkspaceBytes(DirectorySize(_directory));
+                    _performanceRecorder.ObserveTemporaryWorkspaceBytes(VerificationWorkspaceDiagnostics.DirectorySize(_directory));
                 ObservePartitionHighWater(writer.Index);
                         Interlocked.Increment(ref _committedTransactions);
             }
@@ -2297,212 +2266,64 @@ public sealed class SqliteVerificationWorkspace : IVerificationWorkspace
         }
     }
 
-    private static long DirectorySize(string directory) =>
-        Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
-            .Sum(path => new FileInfo(path).Length);
-
-    private async Task CaptureQueryPlanAsync(string name, SqliteCommand query, CancellationToken cancellationToken)
-    {
-        RouteReadCommand(query);
-        if (_performanceRecorder is null || _queryPlans.ContainsKey(name)) return;
-        await using var command = _connection.CreateCommand();
-        command.CommandText = "EXPLAIN QUERY PLAN " + query.CommandText;
-        foreach (SqliteParameter parameter in query.Parameters)
-            command.Parameters.AddWithValue(parameter.ParameterName, parameter.Value);
-        var details = new List<string>();
-        await using var reader = await ExecuteReadAsync(command, cancellationToken).ConfigureAwait(false);
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) details.Add(reader.GetString(3));
-        _queryPlans.Add(name, details.ToArray());
-    }
+    private Task CaptureQueryPlanAsync(string name, SqliteCommand query, CancellationToken cancellationToken) =>
+        _diagnostics.CaptureQueryPlanAsync(_connection, name, query, RouteReadCommand, ExecuteReadAsync, cancellationToken);
 
     private async Task WriteDiagnosticsAsync(CancellationToken cancellationToken)
     {
-        using var stage = _performanceRecorder?.StartStage(PerformanceStageKind.Verification, "verification workspace diagnostics");
-        ObservePartitionHighWater();
-        var expectedRowsByPartition = new long[_partitionCount];
-        await using (var expectedCounts = _connection.CreateCommand())
-        {
-            var expectedSchema = _sharedExpected is null ? string.Empty : "expected.";
-            expectedCounts.CommandText = $"SELECT partition_bucket,COUNT(*) FROM {expectedSchema}expected_targets GROUP BY partition_bucket";
-            await using var reader = await ExecuteReadAsync(expectedCounts, cancellationToken).ConfigureAwait(false);
-            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                expectedRowsByPartition[reader.GetInt32(0) % _partitionCount] += reader.GetInt64(1);
-        }
-        AddPartitionDistribution(stage, "actualArtifacts", _partitionActualRows);
-        AddPartitionDistribution(stage, "expectedTargetRows", expectedRowsByPartition);
-        AddPartitionDistribution(stage, "journalEntries", _partitionJournalRows);
-        for (var index = 0; index < _partitionCount; index++)
-        {
-            var schema = _partitionCount == 1 ? "main" : $"partition{index}";
-            await using var indexCommand = _connection.CreateCommand();
-            indexCommand.CommandText = $"SELECT COUNT(*) FROM {schema}.sqlite_master WHERE type='index'";
-            var indexCount = (long)(await indexCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
-            long largestIndexBytes = 0;
-            var indexSizeAvailable = false;
-            try
-            {
-                indexCommand.CommandText = $"SELECT COALESCE(MAX(bytes),0) FROM (SELECT name,SUM(pgsize) AS bytes FROM dbstat($schema) WHERE name IN (SELECT name FROM {schema}.sqlite_master WHERE type='index') GROUP BY name)";
-                indexCommand.Parameters.AddWithValue("$schema", schema);
-                largestIndexBytes = (long)(await indexCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
-                indexSizeAvailable = true;
-            }
-            catch (SqliteException) { }
-            var writer = _partitionCount > 1 ? _partitionWriters[index] : null;
-            _performanceRecorder?.RecordMeasuredStage(PerformanceStageKind.Verification, $"verification scratch partition {index:D3}", 0,
-                artifactCount: _partitionActualRows[index], measurements:
-                [
-                    new PerformanceMeasurement("partitionCount", _partitionCount, "partitions"),
-                    new PerformanceMeasurement("actualRows", _partitionActualRows[index], "rows"),
-                    new PerformanceMeasurement("journalRows", _partitionJournalRows[index], "rows"),
-                    new PerformanceMeasurement("databaseHighWaterBytes", _partitionDbHighWater[index], "bytes"),
-                    new PerformanceMeasurement("walHighWaterBytes", _partitionWalHighWater[index], "bytes"),
-                    new PerformanceMeasurement("indexes", indexCount, "indexes"),
-                    new PerformanceMeasurement("largestIndexBytes", largestIndexBytes, "bytes"),
-                    new PerformanceMeasurement("indexSizeAvailable", indexSizeAvailable ? 1 : 0, "available"),
-                    new PerformanceMeasurement("dmlExecutions", writer?.DmlOperations ?? _referenceDmlOperations, "commands"),
-                    new PerformanceMeasurement("dmlElapsedMicroseconds", writer?.DmlMicroseconds ?? _referenceDmlMicroseconds, "microseconds"),
-                    new PerformanceMeasurement("committedTransactions", writer?.CommittedTransactions ?? _committedTransactions, "transactions"),
-                    new PerformanceMeasurement("commitElapsedMicroseconds", writer?.CommitMicroseconds ?? ToMicroseconds(_journalCommitTicks), "microseconds")
-                ]);
-        }
-        var rows = new Dictionary<string, long>(StringComparer.Ordinal);
-        foreach (var table in new[] { "source_artifacts", "expected_targets", "actual_targets", "expected_values", "actual_values", "artifact_order_keys", "journal_entries", "journal_sources" })
-        {
-            await using var command = _connection.CreateCommand();
-            command.CommandText = $"SELECT COUNT(*) FROM {table}";
-            rows.Add(table, (long)(await ExecuteScalarReadAsync(command, cancellationToken).ConfigureAwait(false))!);
-        }
-        long logicalInputBytes = 0;
-        foreach (var table in new[] { "source_artifacts", "expected_targets", "actual_targets" })
-        {
-            await using var command = _connection.CreateCommand();
-            command.CommandText = $"SELECT COALESCE(SUM(length(CAST(record_json AS BLOB))),0) FROM {table}";
-            logicalInputBytes += (long)(await ExecuteScalarReadAsync(command, cancellationToken).ConfigureAwait(false))!;
-        }
-        var indexes = new List<string>();
-        await using (var command = _connection.CreateCommand())
-        {
-            command.CommandText = "SELECT name FROM sqlite_schema WHERE type='index' ORDER BY name";
-            await using var reader = await ExecuteReadAsync(command, cancellationToken).ConfigureAwait(false);
-            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) indexes.Add(reader.GetString(0));
-        }
-        var worksets = _worksetMetrics.OrderBy(pair => pair.Key.Role).ThenBy(pair => pair.Key.SemanticType, StringComparer.Ordinal)
-            .Select(pair => new
-            {
-                role = pair.Key.Role.ToString(),
-                semanticType = pair.Key.SemanticType,
-                artifacts = pair.Value.Artifacts,
-                physicalFieldsObserved = pair.Value.PhysicalFieldsObserved,
-                fieldsRetained = pair.Value.FieldsRetained,
-                fieldsOmitted = pair.Value.FieldsOmitted,
-                fullSerializedArtifactBytesObserved = pair.Value.FullSerializedArtifactBytesObserved,
-                projectedSerializedArtifactBytesWritten = pair.Value.ProjectedSerializedArtifactBytesWritten,
-                availableFields = pair.Value.AvailableFields.Order(StringComparer.Ordinal).ToArray(),
-                requiredFields = pair.Value.RequiredFields.Order(StringComparer.Ordinal).ToArray(),
-                omittedFields = pair.Value.OmittedFields.Order(StringComparer.Ordinal).ToArray()
-            }).ToArray();
-        var document = new
-        {
-            rows,
-            committedTransactions = _committedTransactions,
-            writeBatchSize = WriteBatchSize,
-            logicalInputBytes,
-            databaseBytes = new FileInfo(_databasePath).Length,
-            walBytes = File.Exists(_databasePath + "-wal") ? new FileInfo(_databasePath + "-wal").Length : 0,
-            indexes,
-            secondaryOrderingIndexBuiltAfterIngest = _orderingIndexCreated,
-            queryPlans = _queryPlans,
-            worksets
-        };
-        var partitionManifest = new
-        {
-            format = "proofshift-verification-partition-manifest-v1",
-            partitionCount = _partitionCount,
-            hashVersion = VerificationPartitioning.Version,
-            ruleContractFingerprint = _executionPlan?.PartitionContractFingerprint,
-            rules = _executionPlan?.Rules.Select(rule => new
-            {
-                id = rule.Rule.Id.Value,
-                type = rule.RuleType,
-                mode = rule.PartitionExecution.ToString(),
-                basis = rule.PartitionKey?.Basis.ToString(),
-                role = rule.PartitionKey?.Role.ToString(),
-                fieldOptions = rule.PartitionKey?.FieldOptions.ToArray() ?? [],
-                fields = rule.ResolvedPartitionKeyFields.Select(key => new { key.SemanticType, key.Field }).ToArray()
-            }).ToArray() ?? [],
-            partitions = Enumerable.Range(0, _partitionCount).Select(index => new
-            {
-                index,
-                actualArtifacts = _partitionActualRows[index],
-                expectedTargetRows = expectedRowsByPartition[index],
-                journalEntries = _partitionJournalRows[index]
-            }).ToArray()
-        };
-        var manifestBytes = JsonSerializer.SerializeToUtf8Bytes(partitionManifest);
-        var manifest = new
-        {
-            partitionManifest.format,
-            partitionManifest.partitionCount,
-            partitionManifest.hashVersion,
-            partitionManifest.ruleContractFingerprint,
-            partitionManifest.rules,
-            partitionManifest.partitions,
-            fingerprint = Convert.ToHexString(SHA256.HashData(manifestBytes)).ToLowerInvariant()
-        };
-        await File.WriteAllTextAsync(Path.Combine(Path.GetDirectoryName(_directory)!,
-            $"{Path.GetFileName(_directory)}-partition-manifest.json"), JsonSerializer.Serialize(manifest), cancellationToken).ConfigureAwait(false);
-        await File.WriteAllTextAsync(Path.Combine(Path.GetDirectoryName(_directory)!,
-            Path.GetFileName(_directory) + "-diagnostics.json"), JsonSerializer.Serialize(document), cancellationToken).ConfigureAwait(false);
-        RecordWorksetDiagnostics();
+        var partitionWriters = Enumerable.Range(0, _partitionCount)
+            .Select(index => index < _partitionWriters.Count
+                ? new VerificationPartitionWriterDiagnostics(
+                    _partitionWriters[index].DmlOperations,
+                    _partitionWriters[index].DmlMicroseconds,
+                    _partitionWriters[index].CommittedTransactions,
+                    _partitionWriters[index].CommitMicroseconds)
+                : null)
+            .ToArray();
+        var snapshot = new VerificationWorkspaceDiagnosticsSnapshot(
+            _directory,
+            _databasePath,
+            _partitionCount,
+            _sharedExpected is not null,
+            _partitionActualRows.ToArray(),
+            _partitionJournalRows.ToArray(),
+            _partitionDbHighWater.ToArray(),
+            _partitionWalHighWater.ToArray(),
+            partitionWriters,
+            _referenceDmlOperations,
+            _referenceDmlMicroseconds,
+            ToMicroseconds(_journalCommitTicks),
+            _committedTransactions,
+            _orderingIndexCreated,
+            WriteBatchSize,
+            _executionPlan?.PartitionContractFingerprint,
+            _executionPlan?.Rules.Select(rule => new VerificationPartitionRuleDiagnostics(
+                rule.Rule.Id.Value,
+                rule.RuleType,
+                rule.PartitionExecution,
+                rule.PartitionKey?.Basis,
+                rule.PartitionKey?.Role,
+                rule.PartitionKey?.FieldOptions.ToArray() ?? [],
+                rule.ResolvedPartitionKeyFields.ToArray())).ToArray() ?? [],
+            CreateWorksetDiagnosticSnapshots());
+        await _diagnostics.WriteAsync(_connection, snapshot, ExecuteReadAsync, ExecuteScalarReadAsync,
+            () => ObservePartitionHighWater(), cancellationToken).ConfigureAwait(false);
         RecordJournalWriteDiagnostics();
     }
 
-    private static void AddPartitionDistribution(PerformanceRecorder.PerformanceStageScope? stage, string name,
-        long[] counts)
-    {
-        if (counts.Length == 0) return;
-        var minimum = counts.Min();
-        var maximum = counts.Max();
-        var average = counts.Average();
-        stage?.AddMeasurement($"{name}.minimum", minimum, "artifacts");
-        stage?.AddMeasurement($"{name}.maximum", maximum, "artifacts");
-        stage?.AddMeasurement($"{name}.average", average, "artifacts");
-        stage?.AddMeasurement($"{name}.maximumToAverageRatio", average == 0 ? 0 : maximum / average, "ratio");
-    }
-
-    private void RecordWorksetDiagnostics()
-    {
-        if (_performanceRecorder is null) return;
-        foreach (var (key, metrics) in _worksetMetrics.OrderBy(pair => pair.Key.Role)
-            .ThenBy(pair => pair.Key.SemanticType, StringComparer.Ordinal))
-        {
-            var measurements = new List<PerformanceMeasurement>
-            {
-                new("artifactsObserved", metrics.Artifacts, "artifacts"),
-                new("totalPhysicalFieldsObserved", metrics.PhysicalFieldsObserved, "field-instances"),
-                new("fieldsRetained", metrics.FieldsRetained, "field-instances"),
-                new("fieldsOmitted", metrics.FieldsOmitted, "field-instances"),
-                new("fullSerializedArtifactBytesObserved", metrics.FullSerializedArtifactBytesObserved, "bytes"),
-                new("projectedSerializedArtifactBytesWritten", metrics.ProjectedSerializedArtifactBytesWritten, "bytes"),
-                new("availableFieldCount", metrics.AvailableFields.Count, "fields"),
-                new("requiredFieldCount", metrics.RequiredFields.Count, "fields"),
-                new("omittedFieldCount", metrics.OmittedFields.Count, "fields")
-            };
-            measurements.AddRange(metrics.AvailableFields.Order(StringComparer.Ordinal)
-                .Select(field => new PerformanceMeasurement($"availableField.{field}", 1, "fields")));
-            measurements.AddRange(metrics.RequiredFields.Order(StringComparer.Ordinal)
-                .Select(field => new PerformanceMeasurement($"requiredField.{field}", 1, "fields")));
-            measurements.AddRange(metrics.OmittedFields.Order(StringComparer.Ordinal)
-                .Select(field => new PerformanceMeasurement($"omittedField.{field}", 1, "fields")));
-            _performanceRecorder.RecordMeasuredStage(PerformanceStageKind.Verification,
-                $"verification workset {key.Role} {key.SemanticType}", elapsedMicroseconds: 0,
-                artifactCount: metrics.Artifacts, byteCount: metrics.ProjectedSerializedArtifactBytesWritten,
-                measurements: measurements);
-        }
-    }
-
-    private readonly record struct NormalizedOrderingValue(int Kind, string? Text = null, long? Integer = null,
-        string? Decimal = null, string? Temporal = null, int? Boolean = null);
+    private VerificationWorksetDiagnosticSnapshot[] CreateWorksetDiagnosticSnapshots() =>
+        _worksetMetrics.Select(pair => new VerificationWorksetDiagnosticSnapshot(
+            pair.Key.Role,
+            pair.Key.SemanticType,
+            pair.Value.Artifacts,
+            pair.Value.PhysicalFieldsObserved,
+            pair.Value.FieldsRetained,
+            pair.Value.FieldsOmitted,
+            pair.Value.FullSerializedArtifactBytesObserved,
+            pair.Value.ProjectedSerializedArtifactBytesWritten,
+            pair.Value.AvailableFields.ToArray(),
+            pair.Value.RequiredFields.ToArray(),
+            pair.Value.OmittedFields.ToArray())).ToArray();
 
     private sealed class WorksetMaterializationMetrics
     {

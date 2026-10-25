@@ -3,7 +3,7 @@ using System.Text;
 using Microsoft.Data.Sqlite;
 using ProofShift.Connectors.Abstractions;
 
-namespace ProofShift.Connectors.Csv;
+namespace ProofShift.Connectors.Internal;
 
 internal sealed class DiskBackedIdentityIndex : IAsyncDisposable
 {
@@ -27,7 +27,7 @@ internal sealed class DiskBackedIdentityIndex : IAsyncDisposable
         _insert = insert;
     }
 
-    public static async Task<DiskBackedIdentityIndex> CreateAsync(CancellationToken cancellationToken)
+    internal static async Task<DiskBackedIdentityIndex> CreateAsync(CancellationToken cancellationToken)
     {
         SweepAbandonedFiles();
         var path = Path.Combine(Path.GetTempPath(), $"{FilePrefix}{Guid.NewGuid():N}.sqlite");
@@ -71,7 +71,7 @@ internal sealed class DiskBackedIdentityIndex : IAsyncDisposable
         }
     }
 
-    public async Task AddAsync(string identity, CancellationToken cancellationToken)
+    internal async Task AddAsync(string identity, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         var fingerprint = SHA256.HashData(Encoding.UTF8.GetBytes(identity));

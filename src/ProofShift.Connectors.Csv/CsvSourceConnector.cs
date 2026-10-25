@@ -4,6 +4,7 @@ using System.Text;
 using CsvHelper;
 using CsvHelper.Configuration;
 using ProofShift.Connectors.Abstractions;
+using ProofShift.Connectors.Internal;
 using ProofShift.Domain;
 
 namespace ProofShift.Connectors.Csv;
