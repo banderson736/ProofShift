@@ -10,11 +10,9 @@ There is no production-hosted ProofShift service.
 Do not post vulnerability details, exploit steps, credentials, or sensitive
 customer data in public issues or pull requests.
 
-GitHub private vulnerability reporting is currently disabled for this
-repository. Do not submit vulnerability details publicly. If no private
-channel has already been established by the maintainer, request a private
-reporting path without including technical details; no security email address
-is published.
+GitHub private vulnerability reporting is enabled for this repository. Use
+GitHub's private vulnerability reporting feature to submit vulnerability
+details. Do not post reports publicly; no security email address is published.
 
 ## Data and secrets
 

@@ -75,11 +75,11 @@ customer, employer, government, production, PII, PHI, credential, confidential
 schema, or proprietary employer/client material. Keep resolved secrets out of
 logs, hashes, diagnostics, and evidence.
 
-Use GitHub private vulnerability reporting when it is enabled. Do not include
-vulnerability details or sensitive data in public issues. Do not claim
-secret-scanning or push-protection coverage unless remote settings confirm
-those features are enabled. See [SECURITY.md](../.github/SECURITY.md) and
-[Security, Data Handling, and IP Boundaries](SECURITY_AND_IP_BOUNDARIES.md).
+GitHub private vulnerability reporting, secret scanning, and push protection
+are enabled as verified on October 25, 2026. Use private reporting for
+vulnerability details; do not include them or sensitive data in public
+issues. See [SECURITY.md](../.github/SECURITY.md) and [Security, Data
+Handling, and IP Boundaries](SECURITY_AND_IP_BOUNDARIES.md).
 
 ## Release and acceptance
 
@@ -92,8 +92,11 @@ the milestone.
 
 ## Remote settings readback
 
-The expected settings above are acceptance requirements, not claims that
-GitHub has enforced them. Record actual visibility, default branch, ruleset
-enforcement/target/checks, merge methods, branch deletion, private
-vulnerability reporting, and secret scanning in the milestone acceptance
-matrix after reading them from GitHub.
+The settings above were read back from GitHub on October 25, 2026. The active
+`main-protection` ruleset targets `refs/heads/main`, requires pull requests
+with zero approvals and no CODEOWNER approval, requires all eleven status
+checks with the branch up to date, blocks deletion and force-push, and has no
+bypass actors. Repository settings allow merge commits only and automatically
+delete merged branches. Private vulnerability reporting, secret scanning,
+and push protection are enabled. Exact readback is recorded in the
+[PS-0.11E acceptance matrix](PS0_11E_ACCEPTANCE_MATRIX.md).

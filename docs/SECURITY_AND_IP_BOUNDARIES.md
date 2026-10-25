@@ -10,9 +10,8 @@ tagged, or published. There is no production-hosted ProofShift service.
 
 Never post secrets, vulnerability details, or sensitive customer data in
 public issues or pull requests. GitHub private vulnerability reporting was
-observed disabled on October 25, 2026. Until it is enabled, do not submit
-vulnerability details publicly; ask the maintainer to establish a private
-reporting path without including sensitive details. No security email address
+enabled and verified on October 25, 2026. Use GitHub's private vulnerability
+reporting feature to submit vulnerability details. No security email address
 is published.
 
 ## Development-data rule
