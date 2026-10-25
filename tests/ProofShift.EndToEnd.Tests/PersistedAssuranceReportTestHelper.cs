@@ -133,8 +133,14 @@ internal static class PersistedAssuranceReportTestHelper
             Path.Combine(artifactDirectory, ".proofshift", "recovery"));
         var recovery = await recoveryStore.ReadSummaryAsync(dryRunId, cancellationToken);
         var checkpointId = recovery.CheckpointId.Value.ToString("N");
-        CopyDirectory(Path.Combine(artifactDirectory, "checkpoints", checkpointId),
-            Path.Combine(artifactDirectory, ".proofshift", "checkpoints", checkpointId));
+        var destination = Path.Combine(artifactDirectory, ".proofshift", "checkpoints", checkpointId);
+        if (Directory.Exists(destination))
+        {
+            if (!File.Exists(Path.Combine(destination, "manifest.json")))
+                throw new InvalidDataException($"Staged checkpoint directory has no manifest: {destination}");
+            return;
+        }
+        CopyDirectory(Path.Combine(artifactDirectory, "checkpoints", checkpointId), destination);
     }
 
     public static async Task<PersistedAssuranceReport> BuildAsync(string artifactDirectory,
