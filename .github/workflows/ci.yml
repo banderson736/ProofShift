@@ -21,9 +21,14 @@ jobs:
           test "$actual_sha" = "$GITHUB_SHA"
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 10.0.402
+      - name: Record build identity
+        shell: bash
+        run: |
+          printf 'github.sha=%s\nHEAD=%s\nTREE=%s\n' "$GITHUB_SHA" "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
+          printf 'productVersion=%s\nSDK=%s\n' "$(dotnet msbuild src/ProofShift.Cli/ProofShift.Cli.csproj -getProperty:ProofShiftProductVersion)" "$(dotnet --version)"
       - name: Restore
-        run: dotnet restore ProofShift.sln
+        run: dotnet restore ProofShift.sln --locked-mode
       - name: Build
         run: dotnet build ProofShift.sln --no-restore
       - name: Test
@@ -50,7 +55,15 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $actualSha -ne $env:GITHUB_SHA) { throw "Checked-out commit does not match the workflow candidate SHA." }
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 10.0.402
+      - name: Record build identity
+        shell: pwsh
+        run: |
+          Write-Output "github.sha=$env:GITHUB_SHA"
+          Write-Output "HEAD=$((git rev-parse HEAD).Trim())"
+          Write-Output "TREE=$((git rev-parse 'HEAD^{tree}').Trim())"
+          Write-Output "productVersion=$((& dotnet msbuild src/ProofShift.Cli/ProofShift.Cli.csproj -getProperty:ProofShiftProductVersion).Trim())"
+          Write-Output "SDK=$(& dotnet --version)"
       - name: Record clean Windows runner resources
         shell: pwsh
         run: |
@@ -65,13 +78,16 @@ jobs:
       - name: Build reproducible binary-only evaluation package twice
         shell: pwsh
         run: |
-          $archive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-PS-0.10G-win-x64.zip"
-          $repeatArchive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-PS-0.10G-win-x64-repeat.zip"
+          $version = (& dotnet msbuild src/ProofShift.Cli/ProofShift.Cli.csproj -getProperty:ProofShiftProductVersion).Trim()
+          $archive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-$version-win-x64.zip"
+          $repeatDirectory = Join-Path $env:RUNNER_TEMP "repeat-windows-package"
+          $repeatArchive = Join-Path $repeatDirectory "ProofShift-Evaluation-$version-win-x64.zip"
           ./scripts/package-evaluation.ps1 -OutputFile $archive
           ./scripts/package-evaluation.ps1 -OutputFile $repeatArchive
           $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           $repeatHash = (Get-FileHash -LiteralPath $repeatArchive -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($archiveHash -ne $repeatHash) { throw "Two builds from the same clean candidate produced different package hashes." }
+          Remove-Item -LiteralPath @($repeatArchive, "${repeatArchive}.sha256", [IO.Path]::ChangeExtension($repeatArchive, ".provenance.json"))
           $packageSize = (Get-Item -LiteralPath $archive).Length
           Write-Output "Candidate SHA: $env:GITHUB_SHA"
           Write-Output "Package: $(Split-Path -Leaf $archive)"
@@ -80,7 +96,8 @@ jobs:
       - name: Validate extracted Windows package without Docker (package-only checks)
         shell: pwsh
         run: |
-          $archive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-PS-0.10G-win-x64.zip"
+          $version = (& dotnet msbuild src/ProofShift.Cli/ProofShift.Cli.csproj -getProperty:ProofShiftProductVersion).Trim()
+          $archive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-$version-win-x64.zip"
           $extractRoot = Join-Path $env:RUNNER_TEMP "ProofShift Evaluation\windows"
           $resultFile = Join-Path $env:RUNNER_TEMP "ProofShift Evaluation\windows-package-smoke-result.json"
           $revision = (git rev-parse HEAD).Trim()
@@ -97,8 +114,9 @@ jobs:
         with:
           name: proofshift-evaluation-win-x64-${{ github.sha }}
           path: |
-            ${{ runner.temp }}/ProofShift-Evaluation-PS-0.10G-win-x64.zip
-            ${{ runner.temp }}/ProofShift-Evaluation-PS-0.10G-win-x64.zip.sha256
+            ${{ runner.temp }}/ProofShift-Evaluation-*-win-x64.zip
+            ${{ runner.temp }}/ProofShift-Evaluation-*-win-x64.zip.sha256
+            ${{ runner.temp }}/ProofShift-Evaluation-*-win-x64.provenance.json
             ${{ runner.temp }}/ProofShift Evaluation/windows-package-smoke-result.json
           if-no-files-found: error
 
@@ -116,7 +134,12 @@ jobs:
           test "$actual_sha" = "$GITHUB_SHA"
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 10.0.402
+      - name: Record build identity
+        shell: bash
+        run: |
+          printf 'github.sha=%s\nHEAD=%s\nTREE=%s\n' "$GITHUB_SHA" "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
+          printf 'productVersion=%s\nSDK=%s\n' "$(dotnet msbuild src/ProofShift.Cli/ProofShift.Cli.csproj -getProperty:ProofShiftProductVersion)" "$(dotnet --version)"
       - name: Verify Linux Docker and record runner resources
         shell: bash
         run: |
@@ -136,13 +159,16 @@ jobs:
       - name: Build reproducible Linux evaluation package twice
         shell: pwsh
         run: |
-          $archive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-PS-0.10G-linux-x64.zip"
-          $repeatArchive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-PS-0.10G-linux-x64-repeat.zip"
+          $version = (& dotnet msbuild src/ProofShift.Cli/ProofShift.Cli.csproj -getProperty:ProofShiftProductVersion).Trim()
+          $archive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-$version-linux-x64.zip"
+          $repeatDirectory = Join-Path $env:RUNNER_TEMP "repeat-linux-package"
+          $repeatArchive = Join-Path $repeatDirectory "ProofShift-Evaluation-$version-linux-x64.zip"
           ./scripts/package-evaluation.ps1 -OutputFile $archive
           ./scripts/package-evaluation.ps1 -OutputFile $repeatArchive
           $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           $repeatHash = (Get-FileHash -LiteralPath $repeatArchive -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($archiveHash -ne $repeatHash) { throw "Two Linux package builds from the same clean candidate produced different SHA-256 values." }
+          Remove-Item -LiteralPath @($repeatArchive, "${repeatArchive}.sha256", [IO.Path]::ChangeExtension($repeatArchive, ".provenance.json"))
           $packageSize = (Get-Item -LiteralPath $archive).Length
           Write-Output "Candidate SHA: $env:GITHUB_SHA"
           Write-Output "Package: $(Split-Path -Leaf $archive)"
@@ -151,7 +177,8 @@ jobs:
       - name: Run Docker-backed demos from the extracted Linux package
         shell: pwsh
         run: |
-          $archive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-PS-0.10G-linux-x64.zip"
+          $version = (& dotnet msbuild src/ProofShift.Cli/ProofShift.Cli.csproj -getProperty:ProofShiftProductVersion).Trim()
+          $archive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-$version-linux-x64.zip"
           $extractRoot = Join-Path $env:RUNNER_TEMP "ProofShift Evaluation/ext"
           $resultFile = Join-Path $env:RUNNER_TEMP "ProofShift Evaluation/linux-package-smoke-result.json"
           $revision = (git rev-parse HEAD).Trim()
@@ -168,10 +195,160 @@ jobs:
         with:
           name: proofshift-evaluation-linux-x64-${{ github.sha }}
           path: |
-            ${{ runner.temp }}/ProofShift-Evaluation-PS-0.10G-linux-x64.zip
-            ${{ runner.temp }}/ProofShift-Evaluation-PS-0.10G-linux-x64.zip.sha256
+            ${{ runner.temp }}/ProofShift-Evaluation-*-linux-x64.zip
+            ${{ runner.temp }}/ProofShift-Evaluation-*-linux-x64.zip.sha256
+            ${{ runner.temp }}/ProofShift-Evaluation-*-linux-x64.provenance.json
             ${{ runner.temp }}/ProofShift Evaluation/linux-package-smoke-result.json
           if-no-files-found: error
+
+  windows-package-reproducibility-b:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify candidate SHA
+        shell: pwsh
+        run: |
+          $actualSha = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actualSha -ne $env:GITHUB_SHA) { throw "Checked-out commit does not match the workflow candidate SHA." }
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.402
+      - name: Record independent build identity
+        shell: pwsh
+        run: |
+          Write-Output "github.sha=$env:GITHUB_SHA"
+          Write-Output "HEAD=$((git rev-parse HEAD).Trim())"
+          Write-Output "TREE=$((git rev-parse 'HEAD^{tree}').Trim())"
+          Write-Output "productVersion=$((& dotnet msbuild src/ProofShift.Cli/ProofShift.Cli.csproj -getProperty:ProofShiftProductVersion).Trim())"
+          Write-Output "SDK=$(& dotnet --version)"
+      - name: Build Windows package independently
+        shell: pwsh
+        run: |
+          $version = (& dotnet msbuild src/ProofShift.Cli/ProofShift.Cli.csproj -getProperty:ProofShiftProductVersion).Trim()
+          $archive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-$version-win-x64.zip"
+          ./scripts/package-evaluation.ps1 -OutputFile $archive
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proofshift-evaluation-win-x64-build-b-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/ProofShift-Evaluation-*-win-x64.zip
+            ${{ runner.temp }}/ProofShift-Evaluation-*-win-x64.zip.sha256
+            ${{ runner.temp }}/ProofShift-Evaluation-*-win-x64.provenance.json
+          if-no-files-found: error
+
+  linux-package-reproducibility-b:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify candidate SHA
+        shell: bash
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          printf 'github.sha=%s\nHEAD=%s\nTREE=%s\n' "$GITHUB_SHA" "$actual_sha" "$(git rev-parse 'HEAD^{tree}')"
+          test "$actual_sha" = "$GITHUB_SHA"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.402
+      - name: Record independent build identity
+        shell: bash
+        run: |
+          printf 'productVersion=%s\nSDK=%s\n' "$(dotnet msbuild src/ProofShift.Cli/ProofShift.Cli.csproj -getProperty:ProofShiftProductVersion)" "$(dotnet --version)"
+      - name: Build Linux package independently
+        shell: pwsh
+        run: |
+          $version = (& dotnet msbuild src/ProofShift.Cli/ProofShift.Cli.csproj -getProperty:ProofShiftProductVersion).Trim()
+          $archive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-$version-linux-x64.zip"
+          ./scripts/package-evaluation.ps1 -OutputFile $archive
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proofshift-evaluation-linux-x64-build-b-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/ProofShift-Evaluation-*-linux-x64.zip
+            ${{ runner.temp }}/ProofShift-Evaluation-*-linux-x64.zip.sha256
+            ${{ runner.temp }}/ProofShift-Evaluation-*-linux-x64.provenance.json
+          if-no-files-found: error
+
+  package-reproducibility:
+    needs:
+      - windows-package-smoke
+      - linux-package-demos
+      - windows-package-reproducibility-b
+      - linux-package-reproducibility-b
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify candidate and tree identity
+        shell: bash
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          printf 'github.sha=%s\nHEAD=%s\nTREE=%s\n' "$GITHUB_SHA" "$actual_sha" "$(git rev-parse 'HEAD^{tree}')"
+          test "$actual_sha" = "$GITHUB_SHA"
+      - uses: actions/download-artifact@v4
+        with:
+          name: proofshift-evaluation-win-x64-${{ github.sha }}
+          path: ${{ runner.temp }}/windows-a
+      - uses: actions/download-artifact@v4
+        with:
+          name: proofshift-evaluation-win-x64-build-b-${{ github.sha }}
+          path: ${{ runner.temp }}/windows-b
+      - uses: actions/download-artifact@v4
+        with:
+          name: proofshift-evaluation-linux-x64-${{ github.sha }}
+          path: ${{ runner.temp }}/linux-a
+      - uses: actions/download-artifact@v4
+        with:
+          name: proofshift-evaluation-linux-x64-build-b-${{ github.sha }}
+          path: ${{ runner.temp }}/linux-b
+      - name: Compare independent platform builds
+        shell: pwsh
+        run: |
+          ./scripts/compare-package-provenance.ps1 -BuildA (Join-Path $env:RUNNER_TEMP "windows-a") -BuildB (Join-Path $env:RUNNER_TEMP "windows-b") -TargetPlatform win-x64
+          ./scripts/compare-package-provenance.ps1 -BuildA (Join-Path $env:RUNNER_TEMP "linux-a") -BuildB (Join-Path $env:RUNNER_TEMP "linux-b") -TargetPlatform linux-x64
+
+  linux-runtime-only-smoke:
+    needs: linux-package-demos
+    runs-on: ubuntu-latest
+    container: mcr.microsoft.com/dotnet/runtime:10.0.13
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: proofshift-evaluation-linux-x64-${{ github.sha }}
+          path: package-artifact
+      - name: Run basic evaluator commands with the .NET runtime only
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install --yes --no-install-recommends jq unzip
+          if [ -n "$(dotnet --list-sdks)" ]; then
+            echo "Runtime-only environment unexpectedly has a .NET SDK." >&2
+            exit 1
+          fi
+          runtime="$(dotnet --list-runtimes | awk '$1 == "Microsoft.NETCore.App" && $2 == "10.0.13" { print $2 }')"
+          test "$runtime" = "10.0.13"
+          archive="$(find package-artifact -maxdepth 1 -type f -name 'ProofShift-Evaluation-*-linux-x64.zip' -print -quit)"
+          test -n "$archive"
+          mkdir -p "$RUNNER_TEMP/runtime-only-extract"
+          unzip -q "$archive" -d "$RUNNER_TEMP/runtime-only-extract"
+          package_root="$(find "$RUNNER_TEMP/runtime-only-extract" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          test -n "$package_root"
+          manifest="$package_root/package-manifest.json"
+          cli="$package_root/app/ProofShift.Cli.dll"
+          product_version="$(jq -r .productVersion "$manifest")"
+          printf 'github.sha=%s\nHEAD=%s\nTREE=%s\n' "$(jq -r .sourceRevision "$manifest")" "$(jq -r .sourceRevision "$manifest")" "$(jq -r .sourceTree "$manifest")"
+          printf 'productVersion=%s\nbuildSDK=%s\nruntime=%s\n' "$product_version" "$(jq -r .buildSdkVersion "$manifest")" "$runtime"
+          cd "$package_root"
+          test "$(dotnet "$cli" --version)" = "ProofShift $product_version"
+          printf 'version: PASS\n'
+          dotnet "$cli" version --json | jq -e --arg version "$product_version" --arg revision "$(jq -r .sourceRevision "$manifest")" --arg tree "$(jq -r .sourceTree "$manifest")" --arg tfm "$(jq -r .targetFramework "$manifest")" '.productVersion == $version and .sourceRevision == $revision and .sourceTree == $tree and .targetFramework == $tfm' > /dev/null
+          printf 'version-json: PASS\n'
+          dotnet "$cli" demo list --json | jq -e 'any(.[]; .id == "pension")' > /dev/null
+          printf 'demo-list: PASS\n'
+          dotnet "$cli" demo describe pension --json | jq -e '.id == "pension" and (.claimBoundary | length > 0)' > /dev/null
+          printf 'demo-describe-pension: PASS\n'
+          printf 'SDKs installed: none\nRuntime-only smoke: PASS\n'
 
   oracle-integration:
     runs-on: ubuntu-latest
@@ -186,7 +363,12 @@ jobs:
           test "$actual_sha" = "$GITHUB_SHA"
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 10.0.402
+      - name: Record build identity
+        shell: bash
+        run: |
+          printf 'github.sha=%s\nHEAD=%s\nTREE=%s\n' "$GITHUB_SHA" "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
+          printf 'productVersion=%s\nSDK=%s\n' "$(dotnet msbuild src/ProofShift.Cli/ProofShift.Cli.csproj -getProperty:ProofShiftProductVersion)" "$(dotnet --version)"
       - name: Checkout official Oracle image build source
         uses: actions/checkout@v4
         with:
@@ -199,7 +381,7 @@ jobs:
         working-directory: oracle-docker-images/OracleDatabase/SingleInstance/dockerfiles
         run: ./buildContainerImage.sh -v 23.26.0 -f -t oracle/database:23.26.0-free
       - name: Restore
-        run: dotnet restore tests/ProofShift.Connectors.Oracle.Tests/ProofShift.Connectors.Oracle.Tests.csproj
+        run: dotnet restore tests/ProofShift.Connectors.Oracle.Tests/ProofShift.Connectors.Oracle.Tests.csproj --locked-mode
       - name: Test Oracle Free integration
         run: dotnet test --project tests/ProofShift.Connectors.Oracle.Tests/ProofShift.Connectors.Oracle.Tests.csproj --no-restore
 
@@ -216,9 +398,14 @@ jobs:
           test "$actual_sha" = "$GITHUB_SHA"
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 10.0.402
+      - name: Record build identity
+        shell: bash
+        run: |
+          printf 'github.sha=%s\nHEAD=%s\nTREE=%s\n' "$GITHUB_SHA" "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
+          printf 'productVersion=%s\nSDK=%s\n' "$(dotnet msbuild src/ProofShift.Cli/ProofShift.Cli.csproj -getProperty:ProofShiftProductVersion)" "$(dotnet --version)"
       - name: Restore
-        run: dotnet restore tests/ProofShift.Connectors.Db2.Tests/ProofShift.Connectors.Db2.Tests.csproj
+        run: dotnet restore tests/ProofShift.Connectors.Db2.Tests/ProofShift.Connectors.Db2.Tests.csproj --locked-mode
       - name: Configure Db2 Linux native driver path
         run: |
           driver_library="$HOME/.nuget/packages/net.ibm.data.db2-lnx/10.0.0.300/buildTransitive/clidriver/lib"
@@ -240,13 +427,18 @@ jobs:
           test "$actual_sha" = "$GITHUB_SHA"
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 10.0.402
+      - name: Record build identity
+        shell: bash
+        run: |
+          printf 'github.sha=%s\nHEAD=%s\nTREE=%s\n' "$GITHUB_SHA" "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
+          printf 'productVersion=%s\nSDK=%s\n' "$(dotnet msbuild src/ProofShift.Cli/ProofShift.Cli.csproj -getProperty:ProofShiftProductVersion)" "$(dotnet --version)"
       - name: Pre-pull pinned fixture images (test-only, not redistributed)
         run: |
           docker pull bitnamilegacy/minio@sha256:e8bf17d3fc5465b1e792d4296245a53135e23dbd8d63086d7529b8bfdb8283af
           docker pull mcr.microsoft.com/azure-storage/azurite:3.35.0
           docker pull atmoz/sftp:alpine
       - name: Restore
-        run: dotnet restore tests/ProofShift.Connectors.RemoteStorage.Tests/ProofShift.Connectors.RemoteStorage.Tests.csproj
+        run: dotnet restore tests/ProofShift.Connectors.RemoteStorage.Tests/ProofShift.Connectors.RemoteStorage.Tests.csproj --locked-mode
       - name: Test S3-compatible, Azure Blob, SFTP, Parquet and cross-provider assurance
         run: dotnet test --project tests/ProofShift.Connectors.RemoteStorage.Tests/ProofShift.Connectors.RemoteStorage.Tests.csproj --no-restore

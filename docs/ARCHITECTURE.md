@@ -135,6 +135,8 @@ The evaluator's physical synthetic scenarios are hosted outside the test assembl
 
 The generic CLI passes a content root explicitly to DemoRunner. `DemoScenarioExecutionContext.ContentRootDirectory` points to the repository root during development or the extracted evaluation-package root in packaged execution; scenario-owned resources resolve under that root rather than relative to the runner's `AppContext.BaseDirectory`.
 
+The evaluator distribution is framework-dependent on the .NET 10 runtime. Product version is centrally defined independently from development milestone names; packages identify both source revision and source tree and carry a deterministic unsigned provenance sidecar. Package reproduction uses the exact repository SDK and locked dependency graph. See [PS-0.11C release identity and distribution](PS0_11C_RELEASE_IDENTITY_AND_DISTRIBUTION.md) and [ADR-0033](adr/0033-product-release-identity-and-reproducible-distribution.md).
+
 The PS-0.3 graph compiler consumes the immutable generic YAML document tree produced by `ProofShift.Configuration`, maps it through graph-specific DTOs, and then creates domain graph objects. `ProofShift.Graph` does not parse YAML itself and does not reference concrete connectors or domain packs.
 
 PS-0.4 inspection orchestration lives in `ProofShift.Engine` and resolves only `ISourceConnector` abstractions. Concrete PostgreSQL, SQL Server, filesystem, and CSV registrations occur in the CLI composition root. Runtime configuration values are wrapped and redacted; inspection does not create snapshots, evidence, or target writes.

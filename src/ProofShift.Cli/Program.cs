@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Globalization;
@@ -34,7 +35,16 @@ internal static class Program
     {
         if (args is ["--version"] or ["version"])
         {
-            Console.WriteLine("ProofShift PS-0.10G");
+            Console.WriteLine($"ProofShift {GetProductVersion()}");
+            return 0;
+        }
+        if (args is ["version", "--json"])
+        {
+            Console.WriteLine(JsonSerializer.Serialize(new VersionInformation(
+                GetProductVersion(),
+                GetAssemblyMetadata("ProofShiftSourceRevision"),
+                GetAssemblyMetadata("ProofShiftSourceTree"),
+                GetAssemblyMetadata("ProofShiftTargetFramework")), JsonOptions));
             return 0;
         }
         if (args.Length > 0 && args[0] is "scaffold" or "mapping")
@@ -186,6 +196,20 @@ internal static class Program
         WriteUsage();
         return 2;
     }
+
+    private static string GetProductVersion() =>
+        typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ??
+        GetAssemblyMetadata("ProofShiftProductVersion");
+
+    private static string GetAssemblyMetadata(string key) =>
+        typeof(Program).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
+            .FirstOrDefault(attribute => attribute.Key == key)?.Value ?? "unknown";
+
+    private sealed record VersionInformation(
+        string ProductVersion,
+        string SourceRevision,
+        string SourceTree,
+        string TargetFramework);
 
     private static async Task<int> ValidateConfigurationAsync(string path, bool jsonOutput, bool strict = false)
     {

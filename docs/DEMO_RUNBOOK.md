@@ -2,6 +2,8 @@
 
 Run one scenario at a time from the extracted evaluation package root. The demos use Docker-backed synthetic fixtures; cold image startup varies and the runtime estimates are diagnostic, not SLAs.
 
+The evaluator product is ProofShift 0.1.0-preview.1, independent of internal milestone names. The framework-dependent package requires the compatible .NET 10 runtime; it does not require the SDK for ordinary CLI use. Confirm identity with `dotnet app/ProofShift.Cli.dll version --json`. The runtime/provenance contract and platform-specific validation limits are documented in the [evaluation guide](EVALUATION.md).
+
 ## Acceptance Environments
 
 The clean Windows CI job validates the Windows package, its CLI/discovery/sample configuration, and package contents without Docker or physical demos. The clean Ubuntu CI job builds the Linux package and runs all five Docker-backed demos, including Pension reset/repeat. These are complementary claims: Ubuntu demo execution does not prove Windows Docker execution, and Windows package validation does not prove the Docker-backed demo stack on Windows.

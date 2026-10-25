@@ -256,9 +256,13 @@ See the [PS-0.11A acceptance record](PS0_11A_GENERIC_OPERATOR_REPORTING.md) for 
 
 #### PS-0.11B Product Demo Fixture Separation
 
-Status: In Progress from accepted `main` merge `de59d85cca3a5eca4d1b9e49db69a51a8aa42ed1`. Separate the evaluator's five physical synthetic scenarios from the EndToEnd test assembly. Dedicated non-test scenario and runner infrastructure owns fixture lifecycle and product API orchestration; EndToEnd tests independently call that implementation and assert exact accepted outcomes. The generic CLI remains manifest-driven, and package execution must not use test discovery, the EndToEnd assembly, or test-only packages. See [PS-0.11B](PS0_11B_PRODUCT_DEMO_FIXTURE_SEPARATION.md) and its [acceptance matrix](PS0_11B_ACCEPTANCE_MATRIX.md). Do not self-accept or begin PS-0.11C.
+Status: **Accepted**, merged to `main` as `464ef14b235c93e08db58d575595a71eced0bafe`. Source candidate `c55704c1f0b4f0fdbc3d02ce1054b510539dca8c` and tested synthetic PR merge `24f5714336e15cf0b6e626a7aff4f578ee5bbb29` share tree `b48f84580dd1bb8f410fcf6a924217d7a61d693e`. Run [40167582711](https://github.com/banderson736/ProofShift/actions/runs/40167582711) passed 350 tests (0 failures/skips), Windows package-only smoke, and all five Ubuntu packaged Docker demos. See [PS-0.11B](PS0_11B_PRODUCT_DEMO_FIXTURE_SEPARATION.md) and its [acceptance matrix](PS0_11B_ACCEPTANCE_MATRIX.md).
 
-Scope excludes release identity/package renaming, self-contained/AOT publishing, installers, new connectors/packs, FHIR Bulk, UI/API/auth, production migration/rollback, AI authoring, broad Verification refactoring, and unrelated performance work.
+#### PS-0.11C Release Identity & Reproducible Distribution
+
+Status: **In Progress** from accepted `main` baseline `464ef14b235c93e08db58d575595a71eced0bafe`. Establish product version `0.1.0-preview.1` independently of development milestones; pin the exact SDK and lock dependencies; produce deterministic provenance-bearing framework-dependent evaluator packages; and prove independent same-platform reproducibility and runtime-only basic CLI execution. Preserve accepted assurance semantics and the PS-0.11B package boundary. This is a release-candidate-quality artifact effort, not authorization to publish or sign a public release. See [PS-0.11C scope](PS0_11C_RELEASE_IDENTITY_AND_DISTRIBUTION.md) and [acceptance matrix](PS0_11C_ACCEPTANCE_MATRIX.md). Do not self-accept or begin PS-0.11D.
+
+Out of scope: public release/tag/package publication, signing, self-contained/AOT publishing, installers, new connectors/packs, FHIR Bulk, UI/API/auth, production migration/rollback, AI authoring, broad Verification refactoring, repository governance, and unrelated performance work.
 
 ## Commercial validation gate after PS-0 / during PS-0
 

@@ -1,20 +1,20 @@
 # ProofShift Evaluation Kit
 
-The PS-0.10G evaluation package remains a binary-only, offline-after-build evaluation kit. Under PS-0.11B, its physical scenarios are being moved from test-module execution to the published ProofShift CLI and standalone, non-test DemoRunner backed by DemoScenarios. Separate Windows x64 and Linux x64 archives are built with `scripts/package-evaluation.ps1` on their target operating systems from the same candidate commit. Each contains the CLI, DemoRunner and required runtime assets, selected synthetic sample projects, demo manifests, and third-party notices. The package manifest records its target platform and source revision. Packages do not contain repository source, customer data, credentials, database images, EndToEnd assemblies, or test-platform execution dependencies. PS-0.11B package acceptance remains pending.
+ProofShift's first preview product identity is **ProofShift 0.1.0-preview.1**. The internal PS-0.11C milestone is not part of the product version. The evaluation package is a binary-only, framework-dependent .NET 10 kit; its physical scenarios run through the non-test DemoRunner backed by DemoScenarios. Separate Windows x64 and Linux x64 archives are built from the same source tree with `scripts/package-evaluation.ps1`. Each contains the CLI, DemoRunner and required runtime assets, selected synthetic sample projects, demo manifests, and third-party notices. The package manifest and deterministic unsigned provenance sidecar identify product version, platform, source revision and tree, locked dependency fingerprint, SDK, framework, and content/archive hashes. The package does not contain repository source, customer data, credentials, database images, EndToEnd assemblies, test-platform dependencies, or repository SDK policy.
 
 ## Clean CI Acceptance
 
-The acceptance workflow uses two fresh standard GitHub-hosted jobs against the same candidate SHA:
+The acceptance workflow uses fresh independent standard GitHub-hosted jobs against the same source tree:
 
-- `windows-latest` builds the Windows package twice, checks byte-identical archives, extracts outside the checkout into a path with spaces, and uses only the packaged CLI to check help/version/demo discovery/descriptions and all shipped sample configurations. Root `--help` currently prints usage with the CLI's existing exit code 2; smoke validates the usage text and records that code, while `demo --help` must exit successfully. It validates package contents and license notices. It does not require Docker or run physical demos.
-- `ubuntu-latest` verifies Linux-container Docker, builds the Linux package twice, extracts it outside the checkout into a path with spaces, and runs the full Docker-backed packaged Pension, Utility, Justice, HCM, and FHIR scenarios. It checks exact scenario outcomes, reports, and Pension reset/repeat semantic equivalence.
+- Two independent `windows-latest` runners build the Windows package; a comparison gate verifies archive bytes, content hashes, and deterministic provenance. A fresh Windows package-only smoke extracts outside checkout into a path with spaces, checks version/manifest/provenance/runtime assets and shipped sample configurations, and validates notices. It does not run physical demos.
+- Two independent `ubuntu-latest` runners build the Linux package and compare archive bytes, content hashes, and provenance. A runtime-only Linux environment with no SDK verifies basic version and demo-discovery commands. A separate fresh Ubuntu runner verifies Linux-container Docker and runs the full packaged Pension, Utility, Justice, HCM, and FHIR scenarios, including exact outcomes, reports, and Pension reset/repeat semantic equivalence.
 
 The Windows result proves the Windows package path only; it does not prove that the Docker-backed demo stack runs on Windows. The Ubuntu result proves the packaged Docker-backed evaluation workflow on Ubuntu; it is not a general-purpose Linux product-support claim. Both campaign jobs are pending until the split workflow passes on one exact candidate commit.
 
 ## Requirements
 
-- The Windows package requires the .NET 10 runtime. Docker is not required for its clean Windows package-only acceptance check.
-- The Linux packaged-demo workflow requires the .NET 10 SDK/runtime and Linux-container Docker. Running full Docker-backed demos manually on Windows also requires a compatible local Docker setup, but that path is not part of the Windows clean-runner acceptance claim.
+- Operators need the compatible **.NET 10 runtime**, not the SDK, to run the framework-dependent package. Basic CLI operations are proven in an isolated runtime-only environment. Package build and development use the exact .NET SDK pinned in repository `global.json` (`10.0.402`).
+- Full physical demos require the .NET 10 runtime and Linux-container Docker in the accepted Ubuntu workflow. Running full Docker-backed demos manually on Windows also requires compatible Docker setup, but that path is not part of the Windows clean-runner acceptance claim.
 - Network access on the first Linux demo run may be needed to pull the synthetic SQL Server/PostgreSQL test images; no image is redistributed. The package contains the NuGet runtime dependencies for the published CLI and DemoRunner/DemoScenarios, including Testcontainers where required by fixture lifecycle code. It does not package a test runner.
 
 ## Run
@@ -23,15 +23,16 @@ Set the archive path to the ZIP you received and extract it to a new, empty path
 These PowerShell commands show an operator running the full demos on a Windows machine with Docker. The GitHub-hosted Windows acceptance job stops after package-only checks; the clean Docker-backed campaign runs on Ubuntu.
 
 ```powershell
-$archive = Join-Path $env:USERPROFILE "Downloads\ProofShift-Evaluation-PS-0.10G-win-x64.zip"
+$archive = Join-Path $env:USERPROFILE "Downloads\ProofShift-Evaluation-0.1.0-preview.1-win-x64.zip"
 $extractRoot = "C:\ProofShift Evaluation"
 if (Test-Path -LiteralPath $extractRoot) { throw "Choose a new empty extraction directory." }
 Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot
-$packageRoot = Join-Path $extractRoot "ProofShift-Evaluation-PS-0.10G"
+$packageRoot = Join-Path $extractRoot "ProofShift-Evaluation-0.1.0-preview.1"
 
 Push-Location $packageRoot
 try {
 	dotnet .\app\ProofShift.Cli.dll --version
+	dotnet .\app\ProofShift.Cli.dll version --json
 	dotnet .\app\ProofShift.Cli.dll --help
 	dotnet .\app\ProofShift.Cli.dll demo --help
 	dotnet .\app\ProofShift.Cli.dll demo list
@@ -61,16 +62,17 @@ finally {
 For the Linux package, derive the package root explicitly after extracting the platform-specific ZIP outside the checkout. The following Bash example uses only the extracted CLI and packaged sample paths:
 
 ```bash
-archive="$HOME/Downloads/ProofShift-Evaluation-PS-0.10G-linux-x64.zip"
+archive="$HOME/Downloads/ProofShift-Evaluation-0.1.0-preview.1-linux-x64.zip"
 extract_root="/tmp/ProofShift Evaluation"
 test ! -e "$extract_root"
 mkdir -p "$extract_root"
 unzip -q "$archive" -d "$extract_root"
-package_root="$extract_root/ProofShift-Evaluation-PS-0.10G"
+package_root="$extract_root/ProofShift-Evaluation-0.1.0-preview.1"
 proofshift="$package_root/app/ProofShift.Cli.dll"
 cd "$package_root"
 
 dotnet "$proofshift" --version
+dotnet "$proofshift" version --json
 dotnet "$proofshift" --help
 dotnet "$proofshift" demo --help
 dotnet "$proofshift" demo list
@@ -129,11 +131,11 @@ Troubleshooting:
 
 - If preflight reports Docker unavailable, start a Docker-compatible runtime, confirm `docker info` succeeds, then rerun `demo preflight <id>`.
 - If preflight reports an occupied required port, stop the process using that port and repeat preflight; do not bypass the check.
-- If the CLI path is missing, confirm `$packageRoot` points to the extracted `ProofShift-Evaluation-PS-0.10G` directory and that `app\ProofShift.Cli.dll` exists there.
+- If the CLI path is missing, confirm `$packageRoot` points to the extracted `ProofShift-Evaluation-0.1.0-preview.1` directory and that `app\ProofShift.Cli.dll` exists there.
 - If a run says the workspace already exists, inspect and retain any wanted reports, then use `demo reset <id>` from that package root before retrying.
 - Windows may deny symbolic-link creation to unprivileged test processes. The three local test-suite skips for that capability are not demo failures; the evaluator demo itself does not require creating symlinks.
 
-Current DemoRunner stage results record elapsed runner-process time and a sampled peak working set. The measurement covers the runner process only, excludes Docker container and whole-system peak memory, and remains a host-specific diagnostic rather than a resource guarantee or SLA. No PS-0.11B DemoRunner measurements have been accepted yet.
+Current DemoRunner stage results record elapsed runner-process time and a sampled peak working set. The measurement covers the runner process only, excludes Docker container and whole-system peak memory, and remains a host-specific diagnostic rather than a resource guarantee or SLA. No PS-0.11C release-package runtime measurements have been accepted yet.
 
 The following Windows rehearsal measurements are historical PS-0.10G evidence from the pre-PS-0.11B MTP fixture package. They describe the MTP process only, exclude Docker container and whole-system peak memory, and are not measurements of the new DemoRunner package. Treat them as host-specific diagnostics, not resource guarantees or SLAs.
 
@@ -166,11 +168,11 @@ The ZIP has a deterministic entry order and timestamps. `package-manifest.json` 
 To build the platform package from a development checkout, run the existing builder on the target OS. Windows PowerShell 5.1 or newer builds Windows x64; PowerShell 7 builds Linux x64:
 
 ```powershell
-./scripts/package-evaluation.ps1 -OutputFile "$env:TEMP/ProofShift-Evaluation-PS-0.10G-win-x64.zip"
+./scripts/package-evaluation.ps1 -OutputFile "$env:TEMP/ProofShift-Evaluation-0.1.0-preview.1-win-x64.zip"
 ```
 
 ```bash
-pwsh -File scripts/package-evaluation.ps1 -OutputFile "/tmp/ProofShift-Evaluation-PS-0.10G-linux-x64.zip"
+pwsh -File scripts/package-evaluation.ps1 -OutputFile "/tmp/ProofShift-Evaluation-0.1.0-preview.1-linux-x64.zip"
 ```
 
 The package manifest records `targetPlatform: win-x64` or `linux-x64`. The platform archives have independent SHA-256 values; reproducibility is checked within each platform, not between platforms.

@@ -45,6 +45,37 @@ function Get-Sha256Hex {
     finally { $sha.Dispose() }
 }
 
+function Get-Property {
+    param([string] $ProjectPath, [string] $PropertyName)
+
+    $value = & dotnet msbuild $ProjectPath "-getProperty:$PropertyName"
+    if ($LASTEXITCODE -ne 0) { throw "Could not read MSBuild property '$PropertyName'." }
+    $text = ($value -join [Environment]::NewLine).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) { throw "MSBuild property '$PropertyName' is empty." }
+    return $text
+}
+
+function Get-DependencyLockHash {
+    param([string] $Root)
+
+    $lockFiles = @(Get-ChildItem -LiteralPath $Root -Filter "packages*.lock.json" -File -Recurse | Where-Object {
+        $relative = Get-RelativePath $Root $_.FullName
+        $segments = $relative -split '[\\/]'
+        $_.Name -match '^packages(?:\.(?:windows|linux))?\.lock\.json$' -and
+            -not ($segments | Where-Object { $_ -in @(".git", "bin", "obj", "artifacts", "TestResults") })
+    })
+    if ($lockFiles.Count -eq 0) { throw "No committed NuGet package lock files were found." }
+    $relativePaths = @($lockFiles | ForEach-Object { Get-RelativePath $Root $_.FullName })
+    [Array]::Sort($relativePaths, [StringComparer]::Ordinal)
+    $builder = [Text.StringBuilder]::new()
+    foreach ($relative in $relativePaths) {
+        $path = Join-Path $Root $relative
+        $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+        [void] $builder.Append($relative.Replace('\','/')).Append("`t").Append($hash).Append("`n")
+    }
+    return Get-Sha256Hex ([Text.Encoding]::UTF8.GetBytes($builder.ToString()))
+}
+
 function Get-NuGetPackages {
     param([string] $ProjectPath)
 
@@ -159,32 +190,56 @@ elseif ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Syste
 else {
     throw "Evaluation packages are supported only on Windows and Linux hosts."
 }
+$revision = (& git -C $repositoryRoot rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0) { throw "Could not identify the source revision." }
+$sourceTree = (& git -C $repositoryRoot rev-parse 'HEAD^{tree}').Trim()
+if ($LASTEXITCODE -ne 0) { throw "Could not identify the source tree." }
+$worktreeStatus = @(& git -C $repositoryRoot status --porcelain)
+if ($LASTEXITCODE -ne 0) { throw "Could not identify the source worktree state." }
+if ($worktreeStatus.Count -ne 0) {
+    throw "Release evaluation packages require a clean tracked and untracked source tree."
+}
+$productVersion = Get-Property (Join-Path $repositoryRoot "src/ProofShift.Cli/ProofShift.Cli.csproj") "ProofShiftProductVersion"
+$targetFramework = Get-Property (Join-Path $repositoryRoot "src/ProofShift.Cli/ProofShift.Cli.csproj") "TargetFramework"
+$buildSdkVersion = (& dotnet --version).Trim()
+if ($LASTEXITCODE -ne 0) { throw "Could not identify the active .NET SDK." }
+$sdkPolicy = Get-Content -LiteralPath (Join-Path $repositoryRoot "global.json") -Raw | ConvertFrom-Json
+if ($buildSdkVersion -ne $sdkPolicy.sdk.version -or $sdkPolicy.sdk.rollForward -ne "disable") {
+    throw "Package build must use the exact SDK pinned in global.json ($($sdkPolicy.sdk.version))."
+}
+$dependencyLockSha256 = Get-DependencyLockHash $repositoryRoot
+$archiveName = "ProofShift-Evaluation-$productVersion-$targetPlatform.zip"
 $outputPath = [IO.Path]::GetFullPath($OutputFile)
 if (Test-Path -LiteralPath $outputPath) { throw "Refusing to overwrite existing package output '$outputPath'." }
+if ([IO.Path]::GetFileName($outputPath) -ne $archiveName) {
+    throw "Package filename must be '$archiveName'."
+}
 $outputParent = Split-Path -Parent $outputPath
 New-Item -ItemType Directory -Path $outputParent -Force | Out-Null
-$stagingRoot = Join-Path ([IO.Path]::GetTempPath()) "ProofShift-Evaluation-PS-0.10G-Staging"
+$stagingRoot = Join-Path ([IO.Path]::GetTempPath()) "ProofShift-Evaluation-$productVersion-Staging"
 if (Test-Path -LiteralPath $stagingRoot) {
     throw "A package staging directory already exists at '$stagingRoot'. Inspect it before retrying; concurrent package builds are not supported."
 }
-$packageRoot = Join-Path $stagingRoot "ProofShift-Evaluation-PS-0.10G"
+$packageRoot = Join-Path $stagingRoot "ProofShift-Evaluation-$productVersion"
 $temporaryZip = Join-Path $outputParent ".$([IO.Path]::GetFileName($outputPath)).$([Guid]::NewGuid().ToString('N')).tmp"
 
 try {
     New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
     Push-Location $repositoryRoot
     try {
-        Invoke-DotNet @("restore", "src/ProofShift.Cli/ProofShift.Cli.csproj")
-        Invoke-DotNet @("restore", "src/ProofShift.DemoRunner/ProofShift.DemoRunner.csproj")
+        Invoke-DotNet @("restore", "src/ProofShift.Cli/ProofShift.Cli.csproj", "--locked-mode")
+        Invoke-DotNet @("restore", "src/ProofShift.DemoRunner/ProofShift.DemoRunner.csproj", "--locked-mode")
 
         Invoke-DotNet @("publish", "src/ProofShift.Cli/ProofShift.Cli.csproj", "--configuration", "Release",
             "--no-restore", "--output", (Join-Path $packageRoot "app"), "-p:UseAppHost=false",
-            "-p:DebugSymbols=false", "-p:DebugType=None", "-p:ContinuousIntegrationBuild=true")
+            "-p:DebugSymbols=false", "-p:DebugType=None", "-p:ContinuousIntegrationBuild=true",
+            "-p:ProofShiftSourceRevision=$revision", "-p:ProofShiftSourceTree=$sourceTree")
 
         Invoke-DotNet @("publish", "src/ProofShift.DemoRunner/ProofShift.DemoRunner.csproj",
             "--configuration", "Release", "--no-restore", "--output", (Join-Path $packageRoot "demo"),
             "-p:UseAppHost=false", "-p:DebugSymbols=false", "-p:DebugType=None",
-            "-p:ContinuousIntegrationBuild=true")
+            "-p:ContinuousIntegrationBuild=true", "-p:ProofShiftSourceRevision=$revision",
+            "-p:ProofShiftSourceTree=$sourceTree")
     }
     finally {
         Pop-Location
@@ -192,7 +247,6 @@ try {
 
     foreach ($relativePath in @(
         "LICENSE",
-        "global.json",
         "docs/PS0_10F_SCENARIO_INDEX.json",
         "docs/demo/DEMO_SCENARIO_MANIFEST.md",
         "docs/demo/CROSS_DOMAIN_DEMOS.md",
@@ -203,15 +257,11 @@ try {
         Copy-RepositoryPath $relativePath $packageRoot
     }
 
-    $packagedGlobalJsonPath = Join-Path $packageRoot "global.json"
-    $sourceGlobalJson = Get-Content -LiteralPath $packagedGlobalJsonPath -Raw | ConvertFrom-Json
-    if ($null -eq $sourceGlobalJson.sdk) { throw "The repository global.json has no SDK configuration." }
-    $packagedGlobalJson = [ordered]@{ sdk = $sourceGlobalJson.sdk }
-    [IO.File]::WriteAllText($packagedGlobalJsonPath,
-        (ConvertTo-Json -InputObject $packagedGlobalJson -Depth 10),
-        [Text.UTF8Encoding]::new($false))
-
     Write-ThirdPartyNotices $packageRoot
+    $noticesContent = [IO.File]::ReadAllText((Join-Path $packageRoot "THIRD-PARTY-NOTICES.md"))
+    if ($noticesContent -match '(?im)^\|\s*(xunit(?:\.v3)?|Microsoft\.NET\.Test\.Sdk|Microsoft\.Testing|testhost)\s*\|') {
+        throw "Test-only dependencies unexpectedly appear in product third-party notices."
+    }
 
     $forbiddenFiles = @(Get-ChildItem -LiteralPath $packageRoot -Recurse -File | Where-Object {
         $_.Extension -in @(".cs", ".csproj", ".pdb") -or $_.Name -like "*.runtimeconfig.dev.json"
@@ -252,20 +302,20 @@ try {
         [void] $hashBuilder.Append($relative.Replace('\','/')).Append("`t").Append($hash).Append("`n")
     }
     $contentHash = Get-Sha256Hex ([Text.Encoding]::UTF8.GetBytes($hashBuilder.ToString()))
-    $revision = (& git -C $repositoryRoot rev-parse HEAD).Trim()
-    if ($LASTEXITCODE -ne 0) { throw "Could not identify the source revision." }
-    $worktreeStatus = @(& git -C $repositoryRoot status --porcelain)
-    if ($LASTEXITCODE -ne 0) { throw "Could not identify the source worktree state." }
     $packageManifest = [ordered]@{
         format = "proofshift-evaluation-package-v2"
-        productVersion = "PS-0.10G"
+        productVersion = $productVersion
         targetPlatform = $targetPlatform
         sourceRevision = $revision
-        sourceWorktreeClean = ($worktreeStatus.Count -eq 0)
+        sourceTree = $sourceTree
+        sourceWorktreeClean = $true
+        dependencyLockSha256 = $dependencyLockSha256
+        buildSdkVersion = $buildSdkVersion
+        targetFramework = $targetFramework
         contentSha256 = $contentHash
         entryPoint = "dotnet app/ProofShift.Cli.dll"
         scenarioRunner = "demo/ProofShift.DemoRunner.dll (non-test runtime)"
-        allowlist = @("app/*.dll and runtime assets", "demo/*.dll/.json and runtime assets", "scenarios/**", "docs/EVALUATION.md", "docs/DEMO_RUNBOOK.md", "docs/demo/DEMO_SCENARIO_MANIFEST.md", "docs/demo/CROSS_DOMAIN_DEMOS.md", "docs/PS0_10F_SCENARIO_INDEX.json", "LICENSE", "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-LICENSES/**", "global.json")
+        allowlist = @("app/*.dll and runtime assets", "demo/*.dll/.json and runtime assets", "scenarios/**", "docs/EVALUATION.md", "docs/DEMO_RUNBOOK.md", "docs/demo/DEMO_SCENARIO_MANIFEST.md", "docs/demo/CROSS_DOMAIN_DEMOS.md", "docs/PS0_10F_SCENARIO_INDEX.json", "LICENSE", "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-LICENSES/**")
         denylist = @("source code", "test assemblies and test-platform dependencies", "PDB/debug symbols", ".git", ".proofshift", "TestResults", "benchmark outputs", "vendor container images", "secrets", "local environment files")
     }
     $manifestJson = ConvertTo-Json -InputObject $packageManifest -Depth 20
@@ -280,7 +330,7 @@ try {
         }))
         [Array]::Sort($allPaths, [StringComparer]::Ordinal)
         foreach ($relative in $allPaths) {
-            $entryName = "ProofShift-Evaluation-PS-0.10G/" + $relative.Replace('\','/')
+            $entryName = "ProofShift-Evaluation-$productVersion/" + $relative.Replace('\','/')
             $entry = $archive.CreateEntry($entryName, [IO.Compression.CompressionLevel]::Optimal)
             $entry.LastWriteTime = [DateTimeOffset]::new(1980, 1, 1, 0, 0, 0, [TimeSpan]::Zero)
             $entry.ExternalAttributes = 0
@@ -297,9 +347,31 @@ try {
     Move-Item -LiteralPath $temporaryZip -Destination $outputPath
     $zipHash = (Get-FileHash -LiteralPath $outputPath -Algorithm SHA256).Hash.ToLowerInvariant()
     [IO.File]::WriteAllText("$outputPath.sha256", "$zipHash  $([IO.Path]::GetFileName($outputPath))`n", [Text.Encoding]::ASCII)
+    $provenance = [ordered]@{
+        productVersion = $productVersion
+        targetPlatform = $targetPlatform
+        archiveFile = [IO.Path]::GetFileName($outputPath)
+        archiveSha256 = $zipHash
+        contentSha256 = $contentHash
+        sourceRevision = $revision
+        sourceTree = $sourceTree
+        dependencyLockSha256 = $dependencyLockSha256
+        buildSdkVersion = $buildSdkVersion
+        targetFramework = $targetFramework
+        packageFormat = "proofshift-evaluation-package-v2"
+    }
+    $provenancePath = [IO.Path]::ChangeExtension($outputPath, ".provenance.json")
+    [IO.File]::WriteAllText($provenancePath,
+        (ConvertTo-Json -InputObject $provenance -Depth 10) + "`n",
+        [Text.UTF8Encoding]::new($false))
     Write-Output "Package: $outputPath"
     Write-Output "SHA-256: $zipHash"
     Write-Output "Content: $contentHash"
+    Write-Output "Product version: $productVersion"
+    Write-Output "Source revision: $revision"
+    Write-Output "Source tree: $sourceTree"
+    Write-Output "SDK: $buildSdkVersion"
+    Write-Output "Dependency locks SHA-256: $dependencyLockSha256"
 }
 finally {
     if (Test-Path -LiteralPath $temporaryZip) { Remove-Item -LiteralPath $temporaryZip -Force }
