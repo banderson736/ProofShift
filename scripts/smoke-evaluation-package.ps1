@@ -54,6 +54,18 @@ function Assert-Equal {
     }
 }
 
+function Get-RelativePath {
+    param([string] $Root, [string] $Path)
+
+    $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    $rootUri = [Uri]::new($rootFull)
+    $pathUri = [Uri]::new([IO.Path]::GetFullPath($Path))
+    if (-not $rootUri.IsBaseOf($pathUri)) { throw "Path is outside package root: $Path" }
+    return [Uri]::UnescapeDataString($rootUri.MakeRelativeUri($pathUri).ToString()).Replace(
+        '/', [IO.Path]::DirectorySeparatorChar)
+}
+
 $archiveFullPath = [IO.Path]::GetFullPath($ArchivePath)
 $extractionFullPath = [IO.Path]::GetFullPath($ExtractionRoot)
 $resultFullPath = [IO.Path]::GetFullPath($ResultFile)
@@ -164,7 +176,7 @@ $forbiddenNames = @(
     "workspaces", "workspace", "volumes", "logs", "cache", "caches"
 )
 $forbiddenFiles = @(Get-ChildItem -LiteralPath $packageRoot -Force -Recurse -File | Where-Object {
-    $relative = [IO.Path]::GetRelativePath($packageRoot, $_.FullName)
+    $relative = Get-RelativePath $packageRoot $_.FullName
     $segments = $relative -split '[\\/]'
     $_.Extension -in @(".cs", ".csproj", ".pdb", ".db", ".sqlite", ".wal", ".shm", ".pem", ".pfx", ".key", ".log", ".trx", ".coverage", ".dmp") -or
         $_.Name -like "*.runtimeconfig.dev.json" -or $_.Name -like ".env*" -or
@@ -174,7 +186,7 @@ $forbiddenFiles = @(Get-ChildItem -LiteralPath $packageRoot -Force -Recurse -Fil
             ($segments | Where-Object { $_ -in $forbiddenNames }).Count -gt 0
 })
 if ($forbiddenFiles.Count -gt 0) {
-    $paths = $forbiddenFiles | ForEach-Object { [IO.Path]::GetRelativePath($packageRoot, $_.FullName) }
+    $paths = $forbiddenFiles | ForEach-Object { Get-RelativePath $packageRoot $_.FullName }
     throw "Package contains forbidden source, state, log, database, or credential material: $($paths -join ', ')"
 }
 
