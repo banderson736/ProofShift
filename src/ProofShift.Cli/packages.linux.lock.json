@@ -9,8 +9,8 @@
       },
       "AWSSDK.Core": {
         "type": "Transitive",
-        "resolved": "4.0.102.9",
-        "contentHash": "VWGkR0QXDTmThusATC6I9IX06YtYeQNF+1/v6vBbfzIC+MaAuNjYn0aSTIyX+abciZvFhuSSi0d6/pC93wROCw=="
+        "resolved": "4.0.102.13",
+        "contentHash": "vaYs/kwfB+Lv9PeVKYE4g2mQlzVtHImXLWgfTG8UgeCybUAPkew5kwb8GS6RhuzwvImbolyLHT+IM34WoM9lJg=="
       },
       "Azure.Core": {
         "type": "Transitive",
@@ -436,7 +436,7 @@
       "proofshift.connectors.s3": {
         "type": "Project",
         "dependencies": {
-          "AWSSDK.S3": "[4.0.104.2, )",
+          "AWSSDK.S3": "[4.0.104.6, )",
           "ProofShift.Connectors.Abstractions": "[0.1.0-preview.1, )",
           "ProofShift.Connectors.RemoteObjects": "[0.1.0-preview.1, )"
         }
@@ -604,11 +604,11 @@
       },
       "AWSSDK.S3": {
         "type": "CentralTransitive",
-        "requested": "[4.0.104.2, )",
-        "resolved": "4.0.104.2",
-        "contentHash": "ImZ1pO9SWh+RAN8hmN5OnonyTvq+/q4dXLxTxjtsZ60c06dnCCy+MX3sc4F3Q8c9J1bg8WoU+VkrrVIpXLviww==",
+        "requested": "[4.0.104.6, )",
+        "resolved": "4.0.104.6",
+        "contentHash": "fSqAOkftU8jKemilzLGZDU0zLEJXHjAemU+8Nd29+sUwRxVK04w6/GY3O4f9S1+JIYwEnHDGcW66VK4AZ2kx6g==",
         "dependencies": {
-          "AWSSDK.Core": "[4.0.102.9, 5.0.0)"
+          "AWSSDK.Core": "[4.0.102.13, 5.0.0)"
         }
       },
       "Azure.Identity": {
