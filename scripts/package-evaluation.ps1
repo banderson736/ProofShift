@@ -58,10 +58,11 @@ function Get-Property {
 function Get-DependencyLockHash {
     param([string] $Root)
 
-    $lockFiles = @(Get-ChildItem -LiteralPath $Root -Filter "packages.lock.json" -File -Recurse | Where-Object {
+    $lockFiles = @(Get-ChildItem -LiteralPath $Root -Filter "packages*.lock.json" -File -Recurse | Where-Object {
         $relative = Get-RelativePath $Root $_.FullName
         $segments = $relative -split '[\\/]'
-        -not ($segments | Where-Object { $_ -in @(".git", "bin", "obj", "artifacts", "TestResults") })
+        $_.Name -match '^packages(?:\.(?:windows|linux))?\.lock\.json$' -and
+            -not ($segments | Where-Object { $_ -in @(".git", "bin", "obj", "artifacts", "TestResults") })
     })
     if ($lockFiles.Count -eq 0) { throw "No committed NuGet package lock files were found." }
     $relativePaths = @($lockFiles | ForEach-Object { Get-RelativePath $Root $_.FullName })

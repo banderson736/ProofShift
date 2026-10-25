@@ -14,6 +14,7 @@ The evaluator package has historically exposed internal milestone labels as prod
 - Define the product version once in central MSBuild configuration and derive CLI output, assembly identity, archive names/root, package manifest, provenance sidecars, and smoke expectations from it.
 - Record both source commit revision and Git tree. The revision describes commit topology; the tree identifies exact source content.
 - Pin .NET SDK 10.0.402 with roll-forward disabled and use committed NuGet lock files with locked-mode restore.
+- Keep separate committed Windows and Linux lock files for projects whose dependency graphs vary by host OS; use one lock file for platform-invariant graphs.
 - Compute a deterministic aggregate dependency-lock fingerprint from sorted relative lock paths and their SHA-256 hashes.
 - Keep evaluator packages framework-dependent on the .NET 10 runtime. Repository SDK policy is not shipped.
 - Make package metadata and archive construction deterministic; release packages require a clean source worktree.

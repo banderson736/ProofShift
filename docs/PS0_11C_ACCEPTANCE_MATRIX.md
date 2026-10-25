@@ -28,7 +28,7 @@
 | Gate | Required evidence | Status |
 |---|---|---|
 | BI1 | Repository SDK pin is exact `10.0.402`, roll-forward disabled; all required CI jobs use that SDK. | NOT YET |
-| BI2 | All build, test, CLI, DemoRunner, DemoScenarios, connector, pack, and evaluator projects have committed NuGet lock files. | NOT YET |
+| BI2 | All build, test, CLI, DemoRunner, DemoScenarios, connector, pack, and evaluator projects have committed NuGet lock files; OS-conditional graphs have separate Windows/Linux locks. | NOT YET |
 | BI3 | CI and package construction restore in locked mode; unchanged manifests restore without lock drift. | NOT YET |
 | BI4 | Deterministic aggregate dependency-lock fingerprint is computed from sorted repository-relative lock paths and file hashes. | NOT YET |
 

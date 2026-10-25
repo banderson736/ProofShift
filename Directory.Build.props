@@ -17,6 +17,12 @@
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(OS)' == 'Windows_NT' and ('$(MSBuildProjectName)' == 'ProofShift.Connectors.Db2' or '$(MSBuildProjectName)' == 'ProofShift.Cli' or '$(MSBuildProjectName)' == 'ProofShift.Connectors.Db2.Tests' or '$(MSBuildProjectName)' == 'ProofShift.EndToEnd.Tests')">
+    <NuGetLockFilePath>$(MSBuildProjectDirectory)/packages.windows.lock.json</NuGetLockFilePath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(OS)' != 'Windows_NT' and ('$(MSBuildProjectName)' == 'ProofShift.Connectors.Db2' or '$(MSBuildProjectName)' == 'ProofShift.Cli' or '$(MSBuildProjectName)' == 'ProofShift.Connectors.Db2.Tests' or '$(MSBuildProjectName)' == 'ProofShift.EndToEnd.Tests')">
+    <NuGetLockFilePath>$(MSBuildProjectDirectory)/packages.linux.lock.json</NuGetLockFilePath>
+  </PropertyGroup>
   <ItemGroup>
     <AssemblyMetadata Include="ProofShiftProductVersion" Value="$(ProofShiftProductVersion)" />
     <AssemblyMetadata Include="ProofShiftSourceRevision" Value="$(ProofShiftSourceRevision)" />
