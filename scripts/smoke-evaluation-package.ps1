@@ -137,37 +137,6 @@ foreach ($name in @("PROOFSHIFT_DEMO_REPOSITORY_ROOT", "PROOFSHIFT_DEMO_CLI_PATH
     Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
 }
 
-foreach ($scenarioId in $expectedScenarios) {
-    $scenarioManifestPath = Join-Path $packageRoot "scenarios/demos/$scenarioId/scenario.json"
-    if (-not (Test-Path -LiteralPath $scenarioManifestPath -PathType Leaf)) {
-        throw "Packaged scenario manifest is missing: $scenarioId"
-    }
-    $scenarioManifestText = [IO.File]::ReadAllText($scenarioManifestPath)
-    if ($scenarioManifestText -match '(?i)dotnet-test|ProofShift\.EndToEnd\.Tests|testClass|testMethod|testProject|fixtureRunner') {
-        throw "Packaged scenario '$scenarioId' contains retired test-runner metadata."
-    }
-    $scenarioManifest = $scenarioManifestText | ConvertFrom-Json
-    Assert-Equal $scenarioManifest.id $scenarioId "Scenario manifest ID"
-    $demoRunnerStages = @($scenarioManifest.runStages | Where-Object { $_.runner -eq "demo-runner" })
-    if ($demoRunnerStages.Count -eq 0 -or
-        -not ($demoRunnerStages | Where-Object { $_.arguments.Count -ge 2 -and $_.arguments[0] -eq "run" -and $_.arguments[1] -eq $scenarioId })) {
-        throw "Packaged scenario '$scenarioId' has no matching DemoRunner stage."
-    }
-}
-
-$scenarioPreflights = @{}
-foreach ($scenarioId in $expectedScenarios) {
-    $preflight = Invoke-PackagedJson $cliPath @("demo", "preflight", $scenarioId, "--json")
-    $runnerChecks = @($preflight.checks | Where-Object { $_.code -eq "DEMO_RUNNER_READY" })
-    if ($runnerChecks.Count -ne 1 -or -not $runnerChecks[0].passed) {
-        throw "Packaged scenario '$scenarioId' did not resolve the non-test DemoRunner."
-    }
-    if (-not $PackageOnly -and -not $preflight.ready) {
-        throw "Packaged scenario '$scenarioId' preflight was blocked."
-    }
-    $scenarioPreflights[$scenarioId] = $preflight
-}
-
 $syntheticConfigurationValues = @{
     PS05_SQL_CONNECTION = "synthetic-placeholder"
     PS05_POSTGRES_CONNECTION = "synthetic-placeholder"
@@ -258,6 +227,59 @@ Assert-Equal $descriptions.utility.acceptedOutcome.expectedFindings 26 "Utility 
 Assert-Equal $descriptions.justice.acceptedOutcome.expectedFindings 24 "Justice accepted findings"
 Assert-Equal $descriptions.hcm.acceptedOutcome.expectedFindings 25 "HCM accepted findings"
 Assert-Equal $descriptions.fhir.acceptedOutcome.expectedFindings 15 "FHIR accepted findings"
+
+foreach ($scenarioId in $expectedScenarios) {
+    $scenarioManifestPath = Join-Path $packageRoot "scenarios/demos/$scenarioId/scenario.json"
+    if (-not (Test-Path -LiteralPath $scenarioManifestPath -PathType Leaf)) {
+        throw "Packaged scenario manifest is missing: $scenarioId"
+    }
+    $scenarioManifestText = [IO.File]::ReadAllText($scenarioManifestPath)
+    if ($scenarioManifestText -match '(?i)dotnet-test|ProofShift\.EndToEnd\.Tests|testClass|testMethod|testProject|fixtureRunner') {
+        throw "Packaged scenario '$scenarioId' contains retired test-runner metadata."
+    }
+    $scenarioManifest = $scenarioManifestText | ConvertFrom-Json
+    Assert-Equal $scenarioManifest.id $scenarioId "Scenario manifest ID"
+    $demoRunnerStages = @($scenarioManifest.runStages | Where-Object { $_.runner -eq "demo-runner" })
+    if ($demoRunnerStages.Count -eq 0 -or
+        -not ($demoRunnerStages | Where-Object { $_.arguments.Count -ge 2 -and $_.arguments[0] -eq "run" -and $_.arguments[1] -eq $scenarioId })) {
+        throw "Packaged scenario '$scenarioId' has no matching DemoRunner stage."
+    }
+}
+
+$scenarioPreflights = @{}
+foreach ($scenarioId in $expectedScenarios) {
+    Push-Location $script:PackageRoot
+    try {
+        $preflightOutput = @(& dotnet $cliPath "demo" "preflight" $scenarioId "--json" 2>&1)
+        $preflightExitCode = $LASTEXITCODE
+    }
+    finally {
+        Pop-Location
+    }
+    $preflightText = $preflightOutput -join [Environment]::NewLine
+    try { $preflight = $preflightText | ConvertFrom-Json }
+    catch { throw "Packaged preflight did not return valid JSON for '$scenarioId'.`n$preflightText" }
+    $runnerChecks = @($preflight.checks | Where-Object { $_.code -eq "DEMO_RUNNER_READY" })
+    if ($runnerChecks.Count -ne 1 -or -not $runnerChecks[0].passed) {
+        throw "Packaged scenario '$scenarioId' did not resolve the non-test DemoRunner."
+    }
+    if (($preflight.ready -and $preflightExitCode -ne 0) -or
+        (-not $preflight.ready -and $preflightExitCode -ne 1)) {
+        throw "Packaged preflight exit code $preflightExitCode disagrees with readiness for '$scenarioId'."
+    }
+    if ($PackageOnly) {
+        $unexpectedBlockers = @($preflight.checks | Where-Object {
+            -not $_.passed -and $_.code -ne "DEMO_DOCKER_UNAVAILABLE"
+        })
+        if ($unexpectedBlockers.Count -gt 0) {
+            throw "Package-only preflight for '$scenarioId' found a non-Docker blocker."
+        }
+    }
+    elseif (-not $preflight.ready) {
+        throw "Packaged scenario '$scenarioId' preflight was blocked."
+    }
+    $scenarioPreflights[$scenarioId] = $preflight
+}
 
 $samples = @(
     "scenarios/pension-modernization/ps010b/proofshift.yaml",
