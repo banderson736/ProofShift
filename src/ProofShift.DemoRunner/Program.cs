@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using ProofShift.DemoScenarios;
 
@@ -69,7 +70,17 @@ internal static class DemoRunnerProgram
         }
         catch (Exception exception)
         {
-            Console.Error.WriteLine($"Demo scenario failed unexpectedly ({exception.GetType().Name}). " +
+            var failureLocation = new StackTrace(exception, false).GetFrames()?
+                .Select(frame => frame.GetMethod())
+                .Where(method => method?.DeclaringType?.Assembly == typeof(IDemoScenario).Assembly)
+                .Select(method => $"{method!.DeclaringType!.FullName}.{method.Name}")
+                .Distinct(StringComparer.Ordinal)
+                .Take(3)
+                .ToArray();
+            var location = failureLocation is { Length: > 0 }
+                ? string.Join(" <- ", failureLocation)
+                : "unknown";
+            Console.Error.WriteLine($"Demo scenario failed unexpectedly ({exception.GetType().Name}) at {location}. " +
                 "Exception details were withheld to protect configured connection values.");
             return 1;
         }
