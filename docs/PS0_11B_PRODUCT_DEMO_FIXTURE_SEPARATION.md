@@ -2,7 +2,7 @@
 
 ## Status
 
-In Progress. PS-0.11A is accepted and merged to `main` as `de59d85cca3a5eca4d1b9e49db69a51a8aa42ed1`. PS-0.11B starts from that baseline. This document records the authorized slice; implementation and acceptance evidence are pending. Do not self-accept or merge the PS-0.11B candidate before the normal review workflow.
+**PS-0.11B — ACCEPTED.** The implementation was formally reviewed and merged to `main` as `464ef14b235c93e08db58d575595a71eced0bafe`. Source candidate `c55704c1f0b4f0fdbc3d02ce1054b510539dca8c` and CI-tested synthetic merge `24f5714336e15cf0b6e626a7aff4f578ee5bbb29` have identical tree `b48f84580dd1bb8f410fcf6a924217d7a61d693e`. Run [40167582711](https://github.com/banderson736/ProofShift/actions/runs/40167582711) passed 350 tests with 0 failures and 0 skips, Windows package-only smoke, and all five Ubuntu packaged Docker demos. See the [acceptance matrix](PS0_11B_ACCEPTANCE_MATRIX.md) for artifact hashes and domain results.
 
 ## Objective
 
@@ -48,6 +48,6 @@ The Pension false-Reverse case remains Verification `PASSED` with zero Verificat
 
 Update the evaluation, demo runbook, manifest contract, architecture/dependency documentation, and package instructions to describe the non-test runner and its actual runtime dependencies. Keep release identity/package renaming deferred.
 
-Do not begin PS-0.11C. This slice excludes production migration or rollback, new connector/domain coverage, FHIR Bulk, AI-assisted authoring, UI/API/auth, broad Verification changes, unrelated performance tuning, self-contained/AOT deployment, installers, and release-version changes.
+The scope boundaries above describe the accepted PS-0.11B slice. Its acceptance does not authorize production migration or rollback, connector/domain expansion, FHIR Bulk, AI-assisted authoring, UI/API/auth, broad Verification changes, unrelated performance tuning, self-contained/AOT deployment, or installers.
 
-Acceptance gates and evidence are tracked in the [PS-0.11B acceptance matrix](PS0_11B_ACCEPTANCE_MATRIX.md). The matrix must remain unaccepted until exact-candidate CI and normal review are complete.
+Acceptance gates and evidence are recorded in the [PS-0.11B acceptance matrix](PS0_11B_ACCEPTANCE_MATRIX.md).

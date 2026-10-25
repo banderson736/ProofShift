@@ -1,7 +1,7 @@
 # ADR-0032: Non-Test Demo Scenario Runtime
 
-- Status: Proposed under PS-0.11B
-- Date: 2026-10-27
+- Status: Accepted under PS-0.11B
+- Date: 2026-10-25
 - Supersedes: the test-module execution portions of [ADR-0029](0029-generic-demo-scenario-contract.md) for the five physical packaged scenarios
 
 ## Context
@@ -34,8 +34,8 @@ PS-0.11B requires the same accepted synthetic scenarios and output assertions to
 - EndToEnd assertions remain tests, but physical scenario lifecycle and result production are ordinary runtime code.
 - Package notices must be generated from the published CLI, DemoRunner, and DemoScenarios dependency graphs; package denylist checks must exclude test assemblies, test-only dependencies, test source, and test-runner metadata.
 - Local physical execution still requires Docker-compatible services. Windows acceptance remains package-only; Ubuntu acceptance is limited to the packaged Docker evaluation and is not a general Linux support claim.
-- Runtime/package and scenario acceptance remain pending until exact-candidate CI and normal review pass. This proposal does not self-accept PS-0.11B.
+- Runtime/package and scenario acceptance passed exact-tree CI and normal formal review. The source candidate `c55704c1f0b4f0fdbc3d02ce1054b510539dca8c` and the tested synthetic PR merge `24f5714336e15cf0b6e626a7aff4f578ee5bbb29` have identical tree `b48f84580dd1bb8f410fcf6a924217d7a61d693e`. GitHub Actions run [40167582711](https://github.com/banderson736/ProofShift/actions/runs/40167582711) passed 350 tests with 0 failures and 0 skips, Windows package-only smoke, and all five Ubuntu packaged Docker demos. PS-0.11B was merged to `main` as `464ef14b235c93e08db58d575595a71eced0bafe`.
 
 ## Validation
 
-Pending. Evidence is tracked in the [PS-0.11B acceptance matrix](../PS0_11B_ACCEPTANCE_MATRIX.md).
+Accepted. The evidence is recorded in the [PS-0.11B acceptance matrix](../PS0_11B_ACCEPTANCE_MATRIX.md).
