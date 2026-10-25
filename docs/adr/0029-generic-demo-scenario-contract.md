@@ -3,6 +3,8 @@
 - Status: Accepted
 - Date: 2026-10-24
 
+> Historical PS-0.10G runner decision. PS-0.11B proposes replacing the test-module execution path for the five physical packaged scenarios with a non-test DemoScenarios library and DemoRunner; see [ADR-0032](0032-non-test-demo-scenario-runtime.md). The generic manifest catalog, lifecycle, workspace ownership, and semantic-identity boundaries remain in force.
+
 ## Context
 
 The accepted assurance scenarios are exercised through a mixture of physical test fixtures and a Pension-oriented PowerShell operator script. PS-0.10G needs an evaluator-facing list/describe/preflight/run/reset workflow without creating duplicated per-pack orchestration or coupling demo presentation to Verification identity.

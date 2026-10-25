@@ -4,6 +4,8 @@ using ProofShift.Evidence;
 using ProofShift.Graph;
 using ProofShift.Snapshots;
 
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("ProofShift.DemoScenarios")]
+
 namespace ProofShift.Verification;
 
 internal enum VerificationRuleExecutionMode

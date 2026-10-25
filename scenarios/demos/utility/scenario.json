@@ -15,9 +15,7 @@
     "minimumDotNetSdk": "10.0.100",
     "minimumFreeDiskBytes": 0,
     "requiredPorts": [],
-    "requiredFiles": [
-      "tests/ProofShift.EndToEnd.Tests/UtilityPhysicalAssuranceTests.cs"
-    ]
+    "requiredFiles": []
   },
   "sourceSystems": [
     "Synthetic SQL Server utility records, CSV exports, and filesystem documents"
@@ -53,23 +51,21 @@
       "id": "utility-physical-assurance",
       "name": "Run accepted Utility physical assurance",
       "phase": "External observation, exact Verification findings, Evidence, and corrected Recovery",
-      "runner": "dotnet-test",
+      "runner": "demo-runner",
       "workingDirectory": "repository",
       "arguments": [
-        "--project",
-        "tests/ProofShift.EndToEnd.Tests/ProofShift.EndToEnd.Tests.csproj",
-        "--filter-class",
-        "ProofShift.EndToEnd.Tests.UtilityPhysicalAssuranceTests",
-        "--parallel",
-        "none",
-        "--timeout",
-        "20m"
+        "run",
+        "utility",
+        "--workspace",
+        "{{workspace}}",
+        "--result-file",
+        "fixture/assurance-report.json"
       ],
       "expectedOutcome": "success",
       "expectedExitCode": 0,
       "timeoutSeconds": 1500,
       "resultFile": "fixture/assurance-report.json",
-      "outputFile": "logs/utility-physical-test.log",
+      "outputFile": "logs/utility-physical-demo.log",
       "assertions": [
         { "pointer": "/packId", "valueType": "string", "expected": "proofshift.utility" },
         { "pointer": "/checkpointArtifactCount", "valueType": "number", "expected": "10200" },

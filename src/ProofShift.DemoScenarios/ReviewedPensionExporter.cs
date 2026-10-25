@@ -4,7 +4,7 @@ using ProofShift.Verification;
 using YamlDotNet.Core.Events;
 using YamlDotNet.RepresentationModel;
 
-namespace ProofShift.EndToEnd.Tests;
+namespace ProofShift.DemoScenarios;
 
 internal static class ReviewedPensionExporter
 {

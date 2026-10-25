@@ -20,12 +20,10 @@ using ProofShift.Recovery;
 using ProofShift.Snapshots;
 using ProofShift.Verification;
 using Testcontainers.PostgreSql;
-using Xunit;
 
-namespace ProofShift.EndToEnd.Tests;
+namespace ProofShift.DemoScenarios;
 
-[Collection("DockerIntegration")]
-public sealed class HcmPhysicalAssuranceTests
+public sealed class HcmDemoScenario : IDemoScenario
 {
     private const int WorkerCount = 5_000;
     private const string SourceSecret = "PS010F_HCM_SOURCE";
@@ -49,35 +47,51 @@ public sealed class HcmPhysicalAssuranceTests
         new("unexpected-worker", "unexpected target", "HCM.Worker", "WORK-UNEXPECTED", "unexpected-target", EvidenceResult.Fail, 3)
     ];
 
-    [Fact]
-    public async Task HcmExternalAndShadowScenariosProveExactDefectsAndQualification()
+    public string Id => "hcm";
+    public string DisplayName => "Human capital management assurance";
+
+    public async Task<DemoScenarioExecutionResult> ExecuteAsync(DemoScenarioExecutionContext context)
     {
-        Assert.Equal(DefectManifest.Length, DefectManifest.Select(defect => defect.Id).Distinct(StringComparer.Ordinal).Count());
+        ArgumentNullException.ThrowIfNull(context);
+        using var executionScope = context.Activate();
+        ScenarioInvariant.Equal(DefectManifest.Length, DefectManifest.Select(defect => defect.Id).Distinct(StringComparer.Ordinal).Count());
         var fixture = CreateFixture(WorkerCount);
-        Assert.Equal(40_575, fixture.Entities.Sum(entity => fixture.SourceRows[entity.TargetNode].Count));
-        Assert.Equal(1_234_567.8901m, decimal.Parse(fixture.SourceRows["target-compensation"].Single(row =>
+        ScenarioInvariant.Equal(40_575, fixture.Entities.Sum(entity => fixture.SourceRows[entity.TargetNode].Count));
+        ScenarioInvariant.Equal(1_234_567.8901m, decimal.Parse(fixture.SourceRows["target-compensation"].Single(row =>
             row["COMP_NO"] == "COMP000001C")["AMOUNT"], NumberStyles.Number, CultureInfo.InvariantCulture));
-        Assert.Equal(37.6250m, decimal.Parse(fixture.SourceRows["target-compensation"].Single(row =>
+        ScenarioInvariant.Equal(37.6250m, decimal.Parse(fixture.SourceRows["target-compensation"].Single(row =>
             row["COMP_NO"] == "COMP000002C")["AMOUNT"], NumberStyles.Number, CultureInfo.InvariantCulture));
-        var root = DemoScenarioResultWriter.CreateFixtureRoot("proofshift-hcm-f4");
+        var root = Path.Combine(Path.GetFullPath(context.WorkspaceDirectory), "fixture");
         Directory.CreateDirectory(root);
-        using var cleanup = new TemporaryDirectoryCleanup(root, !DemoScenarioResultWriter.IsRunningDemo);
-        await using var sourcePostgres = new PostgreSqlBuilder("postgres:16-alpine").Build();
-        try { await sourcePostgres.StartAsync(TestContext.Current.CancellationToken); }
-        catch (DockerUnavailableException)
+        using var cleanup = DemoScenarioWorkspace.BeginFixtureCleanup(root, context.PreserveArtifacts);
+        PostgreSqlContainer? sourcePostgresContainer = null;
+        try
         {
-            await sourcePostgres.DisposeAsync();
-            throw Xunit.Sdk.SkipException.ForSkip("A Docker-compatible runtime is required for HCM physical assurance.");
+            sourcePostgresContainer = new PostgreSqlBuilder("postgres:16-alpine").Build();
+            await sourcePostgresContainer.StartAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
         }
-        await using var targetPostgres = new PostgreSqlBuilder("postgres:16-alpine").Build();
-        try { await targetPostgres.StartAsync(TestContext.Current.CancellationToken); }
-        catch (DockerUnavailableException)
+        catch (DockerUnavailableException exception)
         {
-            await targetPostgres.DisposeAsync();
-            throw Xunit.Sdk.SkipException.ForSkip("A Docker-compatible runtime is required for HCM physical assurance.");
+            if (sourcePostgresContainer is not null) await sourcePostgresContainer.DisposeAsync();
+            throw new DemoScenarioUnavailableException("A Docker-compatible runtime is required for HCM physical assurance.", exception);
         }
-        await SeedSourceAsync(sourcePostgres, fixture, TestContext.Current.CancellationToken);
-        await CreateTargetTemplatesAsync(targetPostgres, fixture, TestContext.Current.CancellationToken);
+        await using var sourcePostgres = sourcePostgresContainer
+            ?? throw new InvalidOperationException("The HCM source PostgreSQL fixture was not created.");
+        PostgreSqlContainer? targetPostgresContainer = null;
+        try
+        {
+            targetPostgresContainer = new PostgreSqlBuilder("postgres:16-alpine").Build();
+            await targetPostgresContainer.StartAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
+        }
+        catch (DockerUnavailableException exception)
+        {
+            if (targetPostgresContainer is not null) await targetPostgresContainer.DisposeAsync();
+            throw new DemoScenarioUnavailableException("A Docker-compatible runtime is required for HCM physical assurance.", exception);
+        }
+        await using var targetPostgres = targetPostgresContainer
+            ?? throw new InvalidOperationException("The HCM target PostgreSQL fixture was not created.");
+        await SeedSourceAsync(sourcePostgres, fixture, DemoScenarioExecutionContext.CurrentCancellationToken);
+        await CreateTargetTemplatesAsync(targetPostgres, fixture, DemoScenarioExecutionContext.CurrentCancellationToken);
 
         var configuration = CreateConfiguration(sourcePostgres.GetConnectionString(), targetPostgres.GetConnectionString());
         var graph = CreateGraph(fixture, configuration);
@@ -91,58 +105,58 @@ public sealed class HcmPhysicalAssuranceTests
         }));
         var checkpointStore = new FileSystemSnapshotStore(Path.Combine(root, "checkpoints"));
         var inspection = await new SourceInspectionService(sourceConnectors, contexts)
-            .InspectAsync(configuration, graph, TestContext.Current.CancellationToken);
-        Assert.True(inspection.IsValid, string.Join(Environment.NewLine,
+            .InspectAsync(configuration, graph, DemoScenarioExecutionContext.CurrentCancellationToken);
+        ScenarioInvariant.True(inspection.IsValid, string.Join(Environment.NewLine,
             inspection.Sources.SelectMany(source => source.Inspection.Issues).Select(issue => $"{issue.Code}: {issue.Message}")));
         var checkpoint = await new SnapshotCaptureService(sourceConnectors, checkpointStore, contexts)
-            .CaptureAsync(configuration, graph, TestContext.Current.CancellationToken);
-        Assert.Equal(CheckpointStatus.Complete, checkpoint.Status);
-        Assert.NotNull(checkpoint.Checkpoint);
+            .CaptureAsync(configuration, graph, DemoScenarioExecutionContext.CurrentCancellationToken);
+        ScenarioInvariant.Equal(CheckpointStatus.Complete, checkpoint.Status);
+        ScenarioInvariant.NotNull(checkpoint.Checkpoint);
 
         var registry = new PackRegistry([new HcmPack()]);
         var ruleSet = registry.Resolve(configuration.Root.Packs).Resolve(CreateRules());
         var plan = VerificationExecutionPlan.Create(ruleSet, graph);
-        Assert.Equal(ruleSet.Rules.Count, plan.Rules.Count);
-        Assert.All(plan.Rules.Where(workset => workset.Rule.Id.Value.StartsWith("hcm-", StringComparison.Ordinal)),
-            workset => Assert.Equal(VerificationPartitionExecution.Global, workset.PartitionExecution));
-        Assert.Contains(plan.Rules.SelectMany(workset => workset.RequiredTargetFields), field => field == "effective_from");
-        Assert.Contains(plan.Rules.SelectMany(workset => workset.RequiredTargetFields), field => field == "gross");
+        ScenarioInvariant.Equal(ruleSet.Rules.Count, plan.Rules.Count);
+        ScenarioInvariant.All(plan.Rules.Where(workset => workset.Rule.Id.Value.StartsWith("hcm-", StringComparison.Ordinal)),
+            workset => ScenarioInvariant.Equal(VerificationPartitionExecution.Global, workset.PartitionExecution));
+        ScenarioInvariant.Contains(plan.Rules.SelectMany(workset => workset.RequiredTargetFields), field => field == "effective_from");
+        ScenarioInvariant.Contains(plan.Rules.SelectMany(workset => workset.RequiredTargetFields), field => field == "gross");
 
         var service = new VerificationService(checkpointStore);
         var correctedRows = BuildTargetRows(fixture);
         var expectedTargetCount = correctedRows.Values.Sum(rows => (long)rows.Count);
-        Assert.Equal(40_575, expectedTargetCount);
+        ScenarioInvariant.Equal(40_575, expectedTargetCount);
         var corrected = await VerifyExternalAsync(service, configuration, graph, checkpoint, fixture, ruleSet, correctedRows,
             targetPostgres, targetConnector, contexts, Path.Combine(root, "external-corrected"));
-        Assert.Equal(VerificationOutcome.Passed, corrected.Run.Outcome);
-        Assert.DoesNotContain(corrected.Findings, finding => finding.Result == EvidenceResult.Fail);
-        Assert.Equal(checkpoint.Checkpoint.ArtifactCount, corrected.Ledger.DispositionCount);
-        Assert.Equal(expectedTargetCount, corrected.Ledger.LineageCount);
-        Assert.Equal(expectedTargetCount, corrected.Run.TargetArtifactCount);
-        Assert.Contains(corrected.Findings, finding => finding.RuleId.Value == "source-accounting" &&
+        ScenarioInvariant.Equal(VerificationOutcome.Passed, corrected.Run.Outcome);
+        ScenarioInvariant.DoesNotContain(corrected.Findings, finding => finding.Result == EvidenceResult.Fail);
+        ScenarioInvariant.Equal(checkpoint.Checkpoint.ArtifactCount, corrected.Ledger.DispositionCount);
+        ScenarioInvariant.Equal(expectedTargetCount, corrected.Ledger.LineageCount);
+        ScenarioInvariant.Equal(expectedTargetCount, corrected.Run.TargetArtifactCount);
+        ScenarioInvariant.Contains(corrected.Findings, finding => finding.RuleId.Value == "source-accounting" &&
             finding.Result == EvidenceResult.Pass && finding.Expected?.Value is IntegerValue sourceCount &&
             sourceCount.Value == checkpoint.Checkpoint.ArtifactCount);
-        Assert.Contains(corrected.Findings, finding => finding.RuleId.Value == "compensation-pay-basis" &&
+        ScenarioInvariant.Contains(corrected.Findings, finding => finding.RuleId.Value == "compensation-pay-basis" &&
             finding.Code == "AttributeComparison" && finding.Result == EvidenceResult.Pass);
-        Assert.Equal("HOURLY", correctedRows["target-compensation"].Single(row => row["compensation_id"] == "COMP000002C")["pay_basis"]);
+        ScenarioInvariant.Equal("HOURLY", correctedRows["target-compensation"].Single(row => row["compensation_id"] == "COMP000002C")["pay_basis"]);
 
         var correctedRepeat = await VerifyExternalAsync(service, configuration, graph, checkpoint, fixture, ruleSet, correctedRows,
             targetPostgres, targetConnector, contexts, Path.Combine(root, "external-corrected-repeat"));
-        Assert.NotEqual(corrected.Run.Id, correctedRepeat.Run.Id);
-        Assert.Equal(corrected.Run.TargetFingerprint, correctedRepeat.Run.TargetFingerprint);
-        Assert.Equal(corrected.Run.EvidenceFingerprint, correctedRepeat.Run.EvidenceFingerprint);
-        Assert.Equal(corrected.Ledger.Fingerprint, correctedRepeat.Ledger.Fingerprint);
-        Assert.Equal(corrected.Ledger.DispositionCount, correctedRepeat.Ledger.DispositionCount);
-        Assert.Equal(corrected.Ledger.LineageCount, correctedRepeat.Ledger.LineageCount);
+        ScenarioInvariant.NotEqual(corrected.Run.Id, correctedRepeat.Run.Id);
+        ScenarioInvariant.Equal(corrected.Run.TargetFingerprint, correctedRepeat.Run.TargetFingerprint);
+        ScenarioInvariant.Equal(corrected.Run.EvidenceFingerprint, correctedRepeat.Run.EvidenceFingerprint);
+        ScenarioInvariant.Equal(corrected.Ledger.Fingerprint, correctedRepeat.Ledger.Fingerprint);
+        ScenarioInvariant.Equal(corrected.Ledger.DispositionCount, correctedRepeat.Ledger.DispositionCount);
+        ScenarioInvariant.Equal(corrected.Ledger.LineageCount, correctedRepeat.Ledger.LineageCount);
 
         var defectiveRows = CloneRows(correctedRows);
         ApplyDefects(defectiveRows);
         var defective = await VerifyExternalAsync(service, configuration, graph, checkpoint, fixture, ruleSet, defectiveRows,
             targetPostgres, targetConnector, contexts, Path.Combine(root, "external-defective"), expectedMissingWorkerReferences: 2);
-        Assert.Equal(VerificationOutcome.Failed, defective.Run.Outcome);
+        ScenarioInvariant.Equal(VerificationOutcome.Failed, defective.Run.Outcome);
         var failures = defective.Findings.Where(finding => finding.Result == EvidenceResult.Fail).ToArray();
         var expectedFindingCount = DefectManifest.Sum(defect => defect.ExpectedFindingCount);
-        Assert.True(expectedFindingCount == failures.Length,
+        ScenarioInvariant.True(expectedFindingCount == failures.Length,
             $"Expected {expectedFindingCount} HCM findings, observed {failures.Length}: {string.Join(", ", failures.GroupBy(finding => finding.RuleId.Value + ":" + finding.Code, StringComparer.Ordinal).Select(group => $"{group.Key}={group.Count()}"))}");
         var expectedRuleCounts = new Dictionary<string, int>(StringComparer.Ordinal)
         {
@@ -169,88 +183,77 @@ public sealed class HcmPhysicalAssuranceTests
         };
         var actualRuleCounts = failures.GroupBy(finding => finding.RuleId.Value, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
-        Assert.Equal(expectedRuleCounts.OrderBy(pair => pair.Key, StringComparer.Ordinal),
+        ScenarioInvariant.Equal(expectedRuleCounts.OrderBy(pair => pair.Key, StringComparer.Ordinal),
             actualRuleCounts.OrderBy(pair => pair.Key, StringComparer.Ordinal));
-        Assert.All(failures, finding =>
+        ScenarioInvariant.All(failures, finding =>
         {
-            Assert.Equal("1", finding.RuleVersion);
-            Assert.NotEmpty(finding.Inputs);
-            Assert.False(string.IsNullOrWhiteSpace(finding.Explanation));
+            ScenarioInvariant.Equal("1", finding.RuleVersion);
+            ScenarioInvariant.NotEmpty(finding.Inputs);
+            ScenarioInvariant.False(string.IsNullOrWhiteSpace(finding.Explanation));
         });
-        Assert.All(DefectManifest, defect => Assert.Contains(failures,
+        ScenarioInvariant.All(DefectManifest, defect => ScenarioInvariant.Contains(failures,
             finding => finding.RuleId.Value == defect.ExpectedRuleId));
-        var preciseCompensationFailure = Assert.Single(failures, finding => finding.RuleId.Value == "compensation-amount");
-        Assert.Equal(new DecimalValue(1_234_567.8901m), preciseCompensationFailure.Expected!.Value);
-        Assert.Equal(new DecimalValue(1_234_567.8902m), preciseCompensationFailure.Actual!.Value);
-        Assert.Equal(expectedTargetCount - 2, defective.Ledger.LineageCount);
+        var preciseCompensationFailure = ScenarioInvariant.Single(failures, finding => finding.RuleId.Value == "compensation-amount");
+        ScenarioInvariant.Equal(new DecimalValue(1_234_567.8901m), preciseCompensationFailure.Expected!.Value);
+        ScenarioInvariant.Equal(new DecimalValue(1_234_567.8902m), preciseCompensationFailure.Actual!.Value);
+        ScenarioInvariant.Equal(expectedTargetCount - 2, defective.Ledger.LineageCount);
 
         var evidenceStore = new FileSystemEvidenceStore(Path.Combine(root, ".proofshift", "verifications"));
         var recoveryStore = new FileSystemRecoveryArtifactStore(Path.Combine(root, ".proofshift", "recovery"));
-        await evidenceStore.SaveAsync(corrected.EvidenceGraph, TestContext.Current.CancellationToken);
-        await evidenceStore.SaveAsync(defective.EvidenceGraph, TestContext.Current.CancellationToken);
+        await evidenceStore.SaveAsync(corrected.EvidenceGraph, DemoScenarioExecutionContext.CurrentCancellationToken);
+        await evidenceStore.SaveAsync(defective.EvidenceGraph, DemoScenarioExecutionContext.CurrentCancellationToken);
         var dryRun = await new DryRunOrchestrator(sourceConnectors, targets, checkpointStore, service,
             new RecoveryService(checkpointStore,
                 new RecoveryCompensatorRegistry([new ShadowBaselineRestoreCompensator()])), contexts)
             .RunAsync(configuration, graph, ruleSet, new EffectiveRecoveryPolicy(), Path.Combine(root, "projected-corrected"),
                 Path.Combine(root, "temporary", "projected-corrected"), "0.10F", evidenceStore, recoveryStore,
-                TestContext.Current.CancellationToken);
-        Assert.True(dryRun.Outcome == DryRunExecutionOutcome.Qualified,
+                DemoScenarioExecutionContext.CurrentCancellationToken);
+        ScenarioInvariant.True(dryRun.Outcome == DryRunExecutionOutcome.Qualified,
             $"HCM shadow dry run was {dryRun.Outcome} ({dryRun.FailureCode}); verification failures: {string.Join(", ", dryRun.Verification?.Findings.Where(finding => finding.Result == EvidenceResult.Fail).Select(finding => finding.RuleId.Value + ":" + finding.Code) ?? [])}; recovery issues: {string.Join(", ", dryRun.Recovery?.Assessment.Issues.Select(issue => issue.Code) ?? [])}");
-        Assert.Equal(VerificationOutcome.Passed, dryRun.Verification!.Run.Outcome);
-        Assert.Equal(DryRunQualificationStatus.Qualified, dryRun.Recovery!.Qualification.Status);
-        Assert.Equal(RecoveryAssessmentOutcome.Passed, dryRun.Recovery.Assessment.Outcome);
-        Assert.Equal(RecoveryRehearsalOutcome.Passed, dryRun.Recovery.Rehearsal.Outcome);
-        Assert.NotNull(dryRun.VerificationEvidence);
-        Assert.NotNull(dryRun.RecoveryArtifacts);
-        Assert.DoesNotContain(dryRun.Verification.Findings, finding => finding.Result == EvidenceResult.Fail);
+        ScenarioInvariant.Equal(VerificationOutcome.Passed, dryRun.Verification!.Run.Outcome);
+        ScenarioInvariant.Equal(DryRunQualificationStatus.Qualified, dryRun.Recovery!.Qualification.Status);
+        ScenarioInvariant.Equal(RecoveryAssessmentOutcome.Passed, dryRun.Recovery.Assessment.Outcome);
+        ScenarioInvariant.Equal(RecoveryRehearsalOutcome.Passed, dryRun.Recovery.Rehearsal.Outcome);
+        ScenarioInvariant.NotNull(dryRun.VerificationEvidence);
+        ScenarioInvariant.NotNull(dryRun.RecoveryArtifacts);
+        ScenarioInvariant.DoesNotContain(dryRun.Verification.Findings, finding => finding.Result == EvidenceResult.Fail);
 
         var report = HcmAssuranceReport.Create(configuration.Root.Project!.Name!, dryRun.Verification!, dryRun.Recovery!);
-        Assert.Equal(0, report.VerificationFailureCount);
-        Assert.Equal(0, report.UnaccountedSourceCount);
-        Assert.Equal(0, report.UnexplainedTargetCount);
-        Assert.Equal("QUALIFIED", report.Qualification);
-        Assert.Contains("HCM.Worker", report.Concepts);
-        Assert.Contains("HCM.Compensation", report.Concepts);
-        Assert.Contains("hcm-payroll-reconciliation", report.RuleTypes);
-        Assert.Contains("does not validate payroll tax", report.ClaimBoundaryText, StringComparison.Ordinal);
-        Assert.DoesNotContain("Pension.Member", JsonSerializer.Serialize(report), StringComparison.Ordinal);
-        Assert.DoesNotContain("Justice.Case", JsonSerializer.Serialize(report), StringComparison.Ordinal);
-        Assert.DoesNotContain("Utility.Account", JsonSerializer.Serialize(report), StringComparison.Ordinal);
+        ScenarioInvariant.Equal(0, report.VerificationFailureCount);
+        ScenarioInvariant.Equal(0, report.UnaccountedSourceCount);
+        ScenarioInvariant.Equal(0, report.UnexplainedTargetCount);
+        ScenarioInvariant.Equal("QUALIFIED", report.Qualification);
+        ScenarioInvariant.Contains("HCM.Worker", report.Concepts);
+        ScenarioInvariant.Contains("HCM.Compensation", report.Concepts);
+        ScenarioInvariant.Contains("hcm-payroll-reconciliation", report.RuleTypes);
+        ScenarioInvariant.Contains("does not validate payroll tax", report.ClaimBoundaryText, StringComparison.Ordinal);
+        ScenarioInvariant.DoesNotContain("Pension.Member", JsonSerializer.Serialize(report), StringComparison.Ordinal);
+        ScenarioInvariant.DoesNotContain("Justice.Case", JsonSerializer.Serialize(report), StringComparison.Ordinal);
+        ScenarioInvariant.DoesNotContain("Utility.Account", JsonSerializer.Serialize(report), StringComparison.Ordinal);
         var genericReport = CrossDomainAssuranceReport.Create(configuration.Root.Project!.Name!, new HcmPack(),
             report.ClaimBoundaryText, dryRun.Verification!, dryRun.Recovery!);
-        var persistedReport = await PersistedAssuranceReportTestHelper.BuildAsync(root,
-            Path.Combine(root, "projected-corrected"), configuration.Root.Project.Name!, new HcmPack(),
-            dryRun.Recovery!.Id, TestContext.Current.CancellationToken);
-        Assert.Equal("proofshift.hcm", persistedReport.PackId);
-        Assert.Equal(new HcmPack().Metadata.ClaimBoundary, persistedReport.ClaimBoundary);
-        Assert.Equal("QUALIFIED", persistedReport.Qualification);
-        Assert.Empty(persistedReport.FindingsByRuleAndCode);
-        await PersistedAssuranceReportTestHelper.AssertCliReportAndComparisonAsync(root,
-            Path.Combine(root, "projected-corrected"), configuration.Root.Project.Name!,
-            new HcmPack().Id, new HcmPack().Version, new HcmPack().Metadata.ClaimBoundary,
-            dryRun.Recovery!.Id, TestContext.Current.CancellationToken);
-        Assert.Equal("proofshift.hcm", genericReport.PackId);
-        Assert.Equal("0.10.0", genericReport.PackVersion);
-        Assert.Equal("QUALIFIED", genericReport.Qualification);
-        Assert.Equal(genericReport.PackVersion, genericReport.RuntimePackVersions[genericReport.PackId]);
-        Assert.NotEmpty(genericReport.RuleVersions);
-        Assert.All(genericReport.RuleVersions.Values, version => Assert.Equal("1", version));
-        Assert.Contains(genericReport.Concepts, concept => concept.SemanticType == "HCM.Worker");
-        Assert.Contains(genericReport.Rules, rule => rule.Type == "hcm-payroll-reconciliation" && rule.Version == "1");
+        ScenarioInvariant.Equal("proofshift.hcm", genericReport.PackId);
+        ScenarioInvariant.Equal("0.10.0", genericReport.PackVersion);
+        ScenarioInvariant.Equal("QUALIFIED", genericReport.Qualification);
+        ScenarioInvariant.Equal(genericReport.PackVersion, genericReport.RuntimePackVersions[genericReport.PackId]);
+        ScenarioInvariant.NotEmpty(genericReport.RuleVersions);
+        ScenarioInvariant.All(genericReport.RuleVersions.Values, version => ScenarioInvariant.Equal("1", version));
+        ScenarioInvariant.Contains(genericReport.Concepts, concept => concept.SemanticType == "HCM.Worker");
+        ScenarioInvariant.Contains(genericReport.Rules, rule => rule.Type == "hcm-payroll-reconciliation" && rule.Version == "1");
         var genericReportJson = JsonSerializer.Serialize(genericReport);
-        Assert.DoesNotContain("Justice.Case", genericReportJson, StringComparison.Ordinal);
-        Assert.DoesNotContain("Pension.Member", genericReportJson, StringComparison.Ordinal);
-        Assert.DoesNotContain("Utility.Account", genericReportJson, StringComparison.Ordinal);
-        Assert.DoesNotContain("Fhir.Patient", genericReportJson, StringComparison.Ordinal);
+        ScenarioInvariant.DoesNotContain("Justice.Case", genericReportJson, StringComparison.Ordinal);
+        ScenarioInvariant.DoesNotContain("Pension.Member", genericReportJson, StringComparison.Ordinal);
+        ScenarioInvariant.DoesNotContain("Utility.Account", genericReportJson, StringComparison.Ordinal);
+        ScenarioInvariant.DoesNotContain("Fhir.Patient", genericReportJson, StringComparison.Ordinal);
         var demoReport = DemoAssuranceReport.Create(new HcmPack(), report.ClaimBoundaryText,
             checkpoint.Checkpoint.ArtifactCount, checkpoint.Checkpoint.Id.Value.ToString("D"), checkpoint.Checkpoint.ManifestHash!,
             DefectManifest.Length, corrected, defective, dryRun.Verification!, dryRun.Recovery!);
-        Assert.Equal(25, demoReport.DefectiveExternalObservation.VerificationFailureCount);
-        Assert.Equal(25, demoReport.DefectiveExternalObservation.EvidenceReferences.Count);
-        Assert.Equal(0, demoReport.CorrectedShadow.VerificationFailureCount);
-        Assert.Equal(0, demoReport.CorrectedShadow.UnaccountedSourceCount);
-        Assert.Equal(0, demoReport.CorrectedShadow.UnexplainedTargetCount);
-        await DemoScenarioResultWriter.WriteIfRequestedAsync(demoReport, TestContext.Current.CancellationToken);
+        ScenarioInvariant.Equal(25, demoReport.DefectiveExternalObservation.VerificationFailureCount);
+        ScenarioInvariant.Equal(25, demoReport.DefectiveExternalObservation.EvidenceReferences.Count);
+        ScenarioInvariant.Equal(0, demoReport.CorrectedShadow.VerificationFailureCount);
+        ScenarioInvariant.Equal(0, demoReport.CorrectedShadow.UnaccountedSourceCount);
+        ScenarioInvariant.Equal(0, demoReport.CorrectedShadow.UnexplainedTargetCount);
+        return DemoScenarioExecutionResult.Create(demoReport, demoReport.ToHumanReadable());
     }
 
     private static Fixture CreateFixture(int workerCount)
@@ -526,7 +529,7 @@ public sealed class HcmPhysicalAssuranceTests
         string workingDirectory, int expectedMissingWorkerReferences = 0)
     {
         var runId = new RunId(Guid.NewGuid());
-        await LoadExternalTargetAsync(postgres, runId, rows, fixture, graph, cancellationToken: TestContext.Current.CancellationToken);
+        await LoadExternalTargetAsync(postgres, runId, rows, fixture, graph, cancellationToken: DemoScenarioExecutionContext.CurrentCancellationToken);
         var employmentNode = graph.Nodes.Single(node => node.Name == "target-employment");
         var workerNode = graph.Nodes.Single(node => node.Name == "target-worker");
         var externalSchema = $"proofshift_shadow_{runId.Value:N}";
@@ -534,13 +537,13 @@ public sealed class HcmPhysicalAssuranceTests
         var workerTable = workerNode.Selector.Properties["name"].Split('.')[1];
         await using (var connection = new NpgsqlConnection(postgres.GetConnectionString()))
         {
-            await connection.OpenAsync(TestContext.Current.CancellationToken);
+            await connection.OpenAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
             await using var command = connection.CreateCommand();
             command.CommandText = $"SELECT employment.worker_id FROM {Quote(externalSchema)}.{Quote(employmentTable)} employment LEFT JOIN {Quote(externalSchema)}.{Quote(workerTable)} worker ON worker.worker_id=employment.worker_id WHERE worker.worker_id IS NULL ORDER BY employment.worker_id LIMIT 25";
             var missingWorkerKeys = new List<string>();
-            await using (var reader = await command.ExecuteReaderAsync(TestContext.Current.CancellationToken))
-                while (await reader.ReadAsync(TestContext.Current.CancellationToken)) missingWorkerKeys.Add(reader.GetString(0));
-            Assert.True(expectedMissingWorkerReferences == missingWorkerKeys.Count,
+            await using (var reader = await command.ExecuteReaderAsync(DemoScenarioExecutionContext.CurrentCancellationToken))
+                while (await reader.ReadAsync(DemoScenarioExecutionContext.CurrentCancellationToken)) missingWorkerKeys.Add(reader.GetString(0));
+            ScenarioInvariant.True(expectedMissingWorkerReferences == missingWorkerKeys.Count,
                 $"Expected {expectedMissingWorkerReferences} missing worker references; found {missingWorkerKeys.Count}: {string.Join(",", missingWorkerKeys)}");
         }
         var targetNodes = graph.Nodes.Where(node => node.Type == MigrationNodeType.Target).ToArray();
@@ -550,9 +553,9 @@ public sealed class HcmPhysicalAssuranceTests
             graph.GraphHash, checkpoint.Id, checkpoint.Checkpoint!.ManifestHash!, checkpoint.Checkpoint.SourceFingerprint!,
             targetNodes.Select(node => new ExternalTargetEndpoint(node.Name, node.SystemId, node.EndpointId, target.Id, target.Version)),
             DateTimeOffset.UnixEpoch);
-        Assert.Equal(checkpoint.Checkpoint.Id, observation.CheckpointId);
+        ScenarioInvariant.Equal(checkpoint.Checkpoint.Id, observation.CheckpointId);
         return await service.VerifyExternalTargetAsync(configuration, graph, observation, rules, workingDirectory, "0.10F",
-            runtimes, TestContext.Current.CancellationToken);
+            runtimes, DemoScenarioExecutionContext.CurrentCancellationToken);
     }
 
     private static async Task LoadExternalTargetAsync(PostgreSqlContainer postgres, RunId runId,
@@ -625,10 +628,6 @@ public sealed class HcmPhysicalAssuranceTests
     private sealed record Fixture(EntitySpec[] Entities, Dictionary<string, List<Dictionary<string, string>>> SourceRows);
     private sealed record HcmDefect(string Id, string Category, string SemanticConcept, string BusinessKey,
         string ExpectedRuleId, EvidenceResult ExpectedOutcome, int ExpectedFindingCount);
-    private sealed class TemporaryDirectoryCleanup(string path, bool deleteOnDispose) : IDisposable
-    {
-        public void Dispose() => DemoScenarioResultWriter.CleanupFixtureRoot(path, deleteOnDispose);
-    }
     private sealed class HcmEnvironment(IReadOnlyDictionary<string, string> values) : IEnvironmentVariableProvider
     {
         public string? GetValue(string name) => values.GetValueOrDefault(name);

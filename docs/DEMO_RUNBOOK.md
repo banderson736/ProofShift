@@ -24,7 +24,7 @@ dotnet app/ProofShift.Cli.dll demo reset pension
 dotnet app/ProofShift.Cli.dll demo run pension
 ```
 
-Reset is restricted to `.proofshift/demos/<id>` after ownership-marker and reparse-point checks. It does not stop unrelated containers or delete files outside that scenario workspace. Testcontainers removes containers when the fixture completes; if the host or process is forcibly terminated, inspect Docker before retrying.
+Reset is restricted to `.proofshift/demos/<id>` after ownership-marker and reparse-point checks. It does not stop unrelated containers or delete files outside that scenario workspace. The non-test DemoScenarios runtime uses Testcontainers for fixture-owned services and disposes them when the scenario completes; if the host or process is forcibly terminated, inspect Docker before retrying.
 
 ## Operator Notes
 
@@ -32,4 +32,4 @@ Reset is restricted to `.proofshift/demos/<id>` after ownership-marker and repar
 - Finding summaries omit raw record values. Use report Evidence IDs and the `evidence` command for integrity-checked detail.
 - Keep each pack's `claimBoundary` visible. Selected FHIR-style scenarios are not FHIR/profile certification; HCM is not payroll-engine or tax certification; Justice is not legal validation; Utility is not tariff/regulatory billing certification; Pension is not actuarial or benefit-calculation certification.
 - The report distinguishes external target Verification from the corrected shadow Recovery assessment. Do not conflate their run IDs or qualification states.
-- Binary fixture stages report elapsed time and a sampled peak working set for the MTP fixture process; container memory is excluded. Record those values only as host-specific diagnostics, not a service level or workload guarantee.
+- DemoRunner output is scenario output, not a test-runner transcript. Stage records include elapsed DemoRunner process time and a sampled peak working set, excluding container and whole-system memory; these are host-specific diagnostics only. Historical PS-0.10G MTP process measurements are retained and labeled in the [evaluation guide](EVALUATION.md), not as current DemoRunner measurements.

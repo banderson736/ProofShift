@@ -4,6 +4,7 @@ using Microsoft.Data.Sqlite;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using DotNet.Testcontainers.Builders;
 using Microsoft.Data.SqlClient;
 using ProofShift.Configuration;
 using ProofShift.Connectors.Abstractions;
@@ -22,14 +23,16 @@ using ProofShift.Verification;
 using Npgsql;
 using Testcontainers.MsSql;
 using Testcontainers.PostgreSql;
-using Xunit;
 
-namespace ProofShift.EndToEnd.Tests;
+namespace ProofShift.DemoScenarios;
 
-public sealed class PensionExternalCorpusVerificationTests
+public sealed class PensionDemoScenario : IDemoScenario
 {
     private const string VerificationExecutionModeVariable = "PS010D_VERIFICATION_EXECUTION_MODE";
         private const string PartitionWorkersVariable = "PS010D_PARTITION_WORKERS";
+    public string Id => "pension";
+    public string DisplayName => "Public pension assurance";
+
     private static readonly JsonSerializerOptions DemoJsonOptions = new() { WriteIndented = true };
 
     private static VerificationRuleExecutionMode GetVerificationExecutionMode() =>
@@ -54,32 +57,36 @@ public sealed class PensionExternalCorpusVerificationTests
     private const string CsvRootSecret = "PS09_CORPUS_CSV_ROOT";
     private const string SourceFilesRootSecret = "PS09_CORPUS_SOURCE_FILES_ROOT";
     private const string TargetFilesRootSecret = "PS09_CORPUS_TARGET_FILES_ROOT";
-    private const string IntegratedRunDirectoryVariable = "PS09_INTEGRATED_RUN_DIRECTORY";
     private const string BenchmarkScaleVariable = "PS010A_BENCHMARK_SCALE";
-    [Fact]
-    public async Task CommittedReviewedPensionConfigurationPreservesAcceptedGraphAndRuleMeaning()
+    public static async Task ValidateCommittedReviewedConfigurationAsync(string contentRootDirectory,
+        CancellationToken cancellationToken)
     {
         var source = PensionSyntheticDatasetGenerator.Generate().ToArray();
         var (sourceSystem, targetSystem, legacy) = CreateConfiguration();
         var corrected = CreateScenario(source, sourceSystem.Id, targetSystem.Id, falseReverse: false);
         var falseReverse = CreateScenario(source, sourceSystem.Id, targetSystem.Id, falseReverse: true);
-        var directory = Path.Combine(FindRepositoryRoot(AppContext.BaseDirectory), "scenarios", "pension-modernization", "ps010b");
+        var configurationPath = DemoScenarioContentRoot.ResolvePath(contentRootDirectory,
+            "scenarios/pension-modernization/ps010b/proofshift.yaml");
+        var directory = Path.GetDirectoryName(configurationPath)!;
+        var loaded = await new ConfigurationLoader(requireEnvironmentValues: false)
+            .LoadAsync(configurationPath, cancellationToken);
+        ScenarioInvariant.True(loaded.IsValid, string.Join(';', loaded.Issues.Select(issue => issue.Message)));
+        var rules = VerificationRuleConfigurationLoader.Load(loaded.Configuration!);
         if (Environment.GetEnvironmentVariable("PS010B_EXPORT_REVIEWED_CONFIG") == "true")
-            await ReviewedPensionExporter.WriteAsync(directory, legacy.Systems, corrected.Graph, falseReverse.Graph, CreateRules());
-        var loaded = await new ConfigurationLoader(requireEnvironmentValues: false).LoadAsync(Path.Combine(directory, "proofshift.yaml"), TestContext.Current.CancellationToken);
-        Assert.True(loaded.IsValid, string.Join(';', loaded.Issues.Select(issue => issue.Message)));
+            await ReviewedPensionExporter.WriteAsync(directory, legacy.Systems, corrected.Graph, falseReverse.Graph, rules);
         var compiled = MigrationGraphCompiler.Compile(loaded.Configuration!);
-        Assert.True(compiled.IsValid, string.Join(';', compiled.Issues.Select(issue => issue.Message)));
-        Assert.Equal(corrected.Graph.GraphHash, compiled.GraphHash);
+        ScenarioInvariant.True(compiled.IsValid, string.Join(';', compiled.Issues.Select(issue => issue.Message)));
+        ScenarioInvariant.Equal(corrected.Graph.GraphHash, compiled.GraphHash);
         var definitions = VerificationRuleConfigurationLoader.Load(loaded.Configuration!);
-        Assert.True(definitions.All(definition => definition.UsesStructuredOptions));
+        ScenarioInvariant.True(definitions.All(definition => definition.UsesStructuredOptions));
         var registry = new ProofShift.Packs.Abstractions.PackRegistry([new PensionPack()]).Resolve(loaded.Configuration!.Root.Packs);
-        Assert.Equal(CreateRules().Length, registry.Resolve(definitions).Rules.Count);
+        ScenarioInvariant.Equal(rules.Count, registry.Resolve(definitions).Rules.Count);
     }
 
-    [Fact]
-    public async Task FastDefectiveAndCorrectedDatasetsRunThroughVerificationServiceWithExactBusinessCounts()
+    public async Task<DemoScenarioExecutionResult> ExecuteAsync(DemoScenarioExecutionContext context)
     {
+        ArgumentNullException.ThrowIfNull(context);
+        using var executionScope = context.Activate();
         var totalStopwatch = Stopwatch.StartNew();
         var benchmarkScale = Environment.GetEnvironmentVariable(BenchmarkScaleVariable) ?? "fast";
         var datasetScale = benchmarkScale.ToLowerInvariant() switch
@@ -90,7 +97,7 @@ public sealed class PensionExternalCorpusVerificationTests
             "probe-200k" => new PensionDatasetScale(2432, 7300, 121_656, 8516, 3892, 852, 48_656, 6088, 608),
             "medium" => PensionDatasetScale.Medium,
             "large-acceptance" => PensionDatasetScale.LargeAcceptance,
-            _ => throw new ArgumentException("PS010A_BENCHMARK_SCALE must be fast, probe-50k, probe-100k, probe-200k, medium, or large-acceptance.", BenchmarkScaleVariable)
+            _ => throw new InvalidOperationException("PS010A_BENCHMARK_SCALE must be fast, probe-50k, probe-100k, probe-200k, medium, or large-acceptance.")
         };
         var performanceRecorder = new PerformanceRecorder($"Pension {benchmarkScale} Integrated");
         var generationStopwatch = Stopwatch.StartNew();
@@ -101,25 +108,49 @@ public sealed class PensionExternalCorpusVerificationTests
             generationStage.AddArtifacts(sourceData.LongLength);
         }
         generationStopwatch.Stop();
-        Assert.Equal(datasetScale.GeneratedRecordCount, sourceData.LongLength);
+        ScenarioInvariant.Equal(datasetScale.GeneratedRecordCount, sourceData.LongLength);
         var payloadArtifactCount = sourceData.LongCount(record => record.Kind is PensionRecordKind.Document or PensionRecordKind.HistoricalExport);
         var expectedCheckpointArtifacts = checked(sourceData.LongLength + payloadArtifactCount);
         var environmentStartupStopwatch = Stopwatch.StartNew();
         var environmentStage = performanceRecorder.StartStage(PerformanceStageKind.Environment, "Docker database startup");
-        var sqlContainer = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-CU14-ubuntu-22.04")
-            .WithPassword("Synthetic-PS09-Only-Password!2026").Build();
-        await sqlContainer.StartAsync(TestContext.Current.CancellationToken);
-        await using var sqlCleanup = sqlContainer;
-        var postgresContainer = new PostgreSqlBuilder("postgres:16-alpine").Build();
-        await postgresContainer.StartAsync(TestContext.Current.CancellationToken);
+        MsSqlContainer? sqlContainer = null;
+        try
+        {
+            sqlContainer = new MsSqlBuilder("mcr.microsoft.com/mssql/server:2022-CU14-ubuntu-22.04")
+                .WithPassword("Synthetic-PS09-Only-Password!2026").Build();
+            await sqlContainer.StartAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
+        }
+        catch (DockerUnavailableException exception)
+        {
+            if (sqlContainer is not null) await sqlContainer.DisposeAsync();
+            throw new DemoScenarioUnavailableException(
+                "A Docker-compatible runtime is required for Pension physical assurance.", exception);
+        }
+        var startedSqlContainer = sqlContainer
+            ?? throw new InvalidOperationException("The Pension SQL Server fixture was not created.");
+        await using var sqlCleanup = startedSqlContainer;
+        PostgreSqlContainer? postgresContainer = null;
+        try
+        {
+            postgresContainer = new PostgreSqlBuilder("postgres:16-alpine").Build();
+            await postgresContainer.StartAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
+        }
+        catch (DockerUnavailableException exception)
+        {
+            if (postgresContainer is not null) await postgresContainer.DisposeAsync();
+            throw new DemoScenarioUnavailableException(
+                "A Docker-compatible runtime is required for Pension physical assurance.", exception);
+        }
+        var startedPostgresContainer = postgresContainer
+            ?? throw new InvalidOperationException("The Pension PostgreSQL fixture was not created.");
         environmentStartupStopwatch.Stop();
         environmentStage.Dispose();
-        await using var postgresCleanup = postgresContainer;
-        var configuredRunDirectory = Environment.GetEnvironmentVariable(IntegratedRunDirectoryVariable);
-        var deleteRunDirectory = string.IsNullOrWhiteSpace(configuredRunDirectory);
-        var directory = deleteRunDirectory
-            ? Path.Combine(Path.GetTempPath(), $"proofshift-pension-corpus-{Guid.NewGuid():N}")
-            : Path.GetFullPath(configuredRunDirectory!);
+        await using var postgresCleanup = startedPostgresContainer;
+        var configuredRunDirectory = Environment.GetEnvironmentVariable("PS09_INTEGRATED_RUN_DIRECTORY");
+        var deleteRunDirectory = string.IsNullOrWhiteSpace(configuredRunDirectory) && !context.PreserveArtifacts;
+        var directory = !string.IsNullOrWhiteSpace(configuredRunDirectory)
+            ? Path.GetFullPath(configuredRunDirectory!)
+            : Path.Combine(Path.GetFullPath(context.WorkspaceDirectory), "integrated-assurance");
         if (Directory.Exists(directory) && Directory.EnumerateFileSystemEntries(directory).Any())
             throw new IOException("Integrated pension run directory is not empty; refusing to overwrite persisted artifacts.");
         Directory.CreateDirectory(directory);
@@ -132,17 +163,20 @@ public sealed class PensionExternalCorpusVerificationTests
         var sourceLoadStage = performanceRecorder.StartStage(PerformanceStageKind.Fixture,
             "CSV/filesystem materialization and SQL Server bulk load");
         await MaterializeCsvAndFileSourcesAsync(sourceData, csvRoot, sourceFilesRoot);
-        var reviewedRoot = Path.Combine(FindRepositoryRoot(AppContext.BaseDirectory), "scenarios", "pension-modernization", "ps010b");
+        var reviewedConfigurationPath = DemoScenarioContentRoot.ResolvePath(context.ContentRootDirectory,
+            "scenarios/pension-modernization/ps010b/proofshift.yaml");
         var configured = await new ConfigurationLoader(requireEnvironmentValues: false).LoadAsync(
-            Path.Combine(reviewedRoot, "proofshift.yaml"), TestContext.Current.CancellationToken);
-        Assert.True(configured.IsValid, string.Join(';', configured.Issues.Select(issue => issue.Message)));
+            reviewedConfigurationPath, DemoScenarioExecutionContext.CurrentCancellationToken);
+        ScenarioInvariant.True(configured.IsValid, string.Join(';', configured.Issues.Select(issue => issue.Message)));
         var configuration = configured.Configuration!;
         var correctedGraph = MigrationGraphCompiler.Compile(configuration);
-        Assert.True(correctedGraph.IsValid, string.Join(';', correctedGraph.Issues.Select(issue => issue.Message)));
+        ScenarioInvariant.True(correctedGraph.IsValid, string.Join(';', correctedGraph.Issues.Select(issue => issue.Message)));
         var falseReverseConfiguration = await new ConfigurationLoader(requireEnvironmentValues: false).LoadAsync(
-            Path.Combine(reviewedRoot, "proofshift-false-reverse.yaml"), TestContext.Current.CancellationToken);
+            DemoScenarioContentRoot.ResolvePath(context.ContentRootDirectory,
+                "scenarios/pension-modernization/ps010b/proofshift-false-reverse.yaml"),
+            DemoScenarioExecutionContext.CurrentCancellationToken);
         var defectiveGraph = MigrationGraphCompiler.Compile(falseReverseConfiguration.Configuration!);
-        Assert.True(defectiveGraph.IsValid, string.Join(';', defectiveGraph.Issues.Select(issue => issue.Message)));
+        ScenarioInvariant.True(defectiveGraph.IsValid, string.Join(';', defectiveGraph.Issues.Select(issue => issue.Message)));
         var correctedScenario = ReviewedScenario(correctedGraph.Graph!);
         var defectiveScenario = ReviewedScenario(defectiveGraph.Graph!);
         var sourceConnectors = new ConnectorRegistry(
@@ -151,7 +185,7 @@ public sealed class PensionExternalCorpusVerificationTests
             new CsvSourceConnector(),
             new FilesystemSourceConnector()
         ]);
-        var sourceConnection = new SqlConnectionStringBuilder(sqlContainer.GetConnectionString())
+        var sourceConnection = new SqlConnectionStringBuilder(startedSqlContainer.GetConnectionString())
         {
             Encrypt = false,
             TrustServerCertificate = true
@@ -159,7 +193,7 @@ public sealed class PensionExternalCorpusVerificationTests
         var contextFactory = new RuntimeConnectorContextFactory(new CorpusEnvironmentProvider(new Dictionary<string, string>
         {
             [SourceConnectionSecret] = sourceConnection,
-            [TargetConnectionSecret] = postgresContainer.GetConnectionString(),
+            [TargetConnectionSecret] = startedPostgresContainer.GetConnectionString(),
             [CsvRootSecret] = csvRoot,
             [SourceFilesRootSecret] = sourceFilesRoot,
             [TargetFilesRootSecret] = targetFilesRoot
@@ -168,15 +202,16 @@ public sealed class PensionExternalCorpusVerificationTests
         var targetConnector = new ProofShift.Connectors.Postgres.PostgresShadowTargetConnector();
         try
         {
-            var schemaDirectory = Path.Combine(AppContext.BaseDirectory, "scenarios", "pension-modernization", "ps09", "database");
-            var sourceSchema = await File.ReadAllTextAsync(Path.Combine(schemaDirectory, "sqlserver-source.sql"),
-                TestContext.Current.CancellationToken);
+            var schemaPath = DemoScenarioContentRoot.ResolvePath(context.ContentRootDirectory,
+                "scenarios/pension-modernization/ps09/database/sqlserver-source.sql");
+            var sourceSchema = await File.ReadAllTextAsync(schemaPath,
+                DemoScenarioExecutionContext.CurrentCancellationToken);
             await using (var connection = new SqlConnection(sourceConnection))
             {
-                await connection.OpenAsync(TestContext.Current.CancellationToken);
+                await connection.OpenAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
                 await using var create = connection.CreateCommand();
                 create.CommandText = sourceSchema;
-                await create.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+                await create.ExecuteNonQueryAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
                 foreach (var kind in Enum.GetValues<PensionRecordKind>())
                 {
                     if (kind is PensionRecordKind.Document or PensionRecordKind.HistoricalExport) continue;
@@ -189,14 +224,14 @@ public sealed class PensionExternalCorpusVerificationTests
             sourceLoadStage.Dispose();
             var checkpointStopwatch = Stopwatch.StartNew();
             var defectiveCapture = await new SnapshotCaptureService(sourceConnectors, checkpointStore, contextFactory)
-                .CaptureAsync(configuration, defectiveScenario.Graph, performanceRecorder, TestContext.Current.CancellationToken);
+                .CaptureAsync(configuration, defectiveScenario.Graph, performanceRecorder, DemoScenarioExecutionContext.CurrentCancellationToken);
             var correctedCapture = await new SnapshotCaptureService(sourceConnectors, checkpointStore, contextFactory)
-                .CaptureAsync(configuration, correctedScenario.Graph, performanceRecorder, TestContext.Current.CancellationToken);
+                .CaptureAsync(configuration, correctedScenario.Graph, performanceRecorder, DemoScenarioExecutionContext.CurrentCancellationToken);
             checkpointStopwatch.Stop();
-            Assert.Equal(CheckpointStatus.Complete, defectiveCapture.Status);
-            Assert.Equal(CheckpointStatus.Complete, correctedCapture.Status);
-            Assert.Equal(expectedCheckpointArtifacts, defectiveCapture.Checkpoint!.ArtifactCount);
-            Assert.Equal(expectedCheckpointArtifacts, correctedCapture.Checkpoint!.ArtifactCount);
+            ScenarioInvariant.Equal(CheckpointStatus.Complete, defectiveCapture.Status);
+            ScenarioInvariant.Equal(CheckpointStatus.Complete, correctedCapture.Status);
+            ScenarioInvariant.Equal(expectedCheckpointArtifacts, defectiveCapture.Checkpoint!.ArtifactCount);
+            ScenarioInvariant.Equal(expectedCheckpointArtifacts, correctedCapture.Checkpoint!.ArtifactCount);
 
             PensionSyntheticRecord[] cleanTarget;
             PensionSyntheticRecord[] defectiveTarget;
@@ -220,131 +255,131 @@ public sealed class PensionExternalCorpusVerificationTests
             var externalVerificationStopwatch = Stopwatch.StartNew();
             var corrected = await VerifyExternalAsync(service, configuration, correctedScenario, correctedCapture,
                 cleanTarget, rules, contextFactory, targetConnector, new FilesystemShadowTargetConnector(),
-                postgresContainer, directory, "corrected", performanceRecorder);
-            Assert.True(corrected.Run.Outcome == VerificationOutcome.Passed,
+                startedPostgresContainer, directory, "corrected", performanceRecorder);
+            ScenarioInvariant.True(corrected.Run.Outcome == VerificationOutcome.Passed,
                 string.Join(Environment.NewLine, corrected.Findings.Where(finding => finding.Result == EvidenceResult.Fail)
                     .Select(finding => $"{finding.Code}: {finding.Explanation}")));
-            Assert.Equal(expectedCheckpointArtifacts, corrected.Ledger.DispositionCount);
-            Assert.Equal(expectedTargetArtifacts, corrected.Ledger.LineageCount);
+            ScenarioInvariant.Equal(expectedCheckpointArtifacts, corrected.Ledger.DispositionCount);
+            ScenarioInvariant.Equal(expectedTargetArtifacts, corrected.Ledger.LineageCount);
             await using (var externalLedger = await SqliteVerificationLedgerStore.OpenAsync(
-                Path.Combine(directory, "working-corrected"), corrected.Ledger, TestContext.Current.CancellationToken))
+                Path.Combine(directory, "working-corrected"), corrected.Ledger, DemoScenarioExecutionContext.CurrentCancellationToken))
             {
-                await foreach (var disposition in externalLedger.ReadDispositionsAsync(TestContext.Current.CancellationToken)
-                    .WithCancellation(TestContext.Current.CancellationToken))
-                    Assert.False(disposition.Disposition is ArtifactDisposition.Unaccounted or ArtifactDisposition.Failed);
-                await foreach (var lineage in externalLedger.ReadLineageAsync(TestContext.Current.CancellationToken)
-                    .WithCancellation(TestContext.Current.CancellationToken))
-                    Assert.Equal(LineageBasis.GraphDerivedExpected, lineage.Basis);
+                await foreach (var disposition in externalLedger.ReadDispositionsAsync(DemoScenarioExecutionContext.CurrentCancellationToken)
+                    .WithCancellation(DemoScenarioExecutionContext.CurrentCancellationToken))
+                    ScenarioInvariant.False(disposition.Disposition is ArtifactDisposition.Unaccounted or ArtifactDisposition.Failed);
+                await foreach (var lineage in externalLedger.ReadLineageAsync(DemoScenarioExecutionContext.CurrentCancellationToken)
+                    .WithCancellation(DemoScenarioExecutionContext.CurrentCancellationToken))
+                    ScenarioInvariant.Equal(LineageBasis.GraphDerivedExpected, lineage.Basis);
             }
             var correctedCounts = BusinessCounts(corrected.Findings, falseReverseEdges: 0);
-            Assert.Equal(18, correctedCounts.Count);
-            Assert.Equal(0L, correctedCounts.Values.Sum());
+            ScenarioInvariant.Equal(18, correctedCounts.Count);
+            ScenarioInvariant.Equal(0L, correctedCounts.Values.Sum());
 
             var defective = await VerifyExternalAsync(service, configuration, defectiveScenario, defectiveCapture,
                 defectiveTarget, rules, contextFactory, targetConnector, new FilesystemShadowTargetConnector(),
-                postgresContainer, directory, "defective", performanceRecorder);
-            Assert.Equal(VerificationOutcome.Failed, defective.Run.Outcome);
+                startedPostgresContainer, directory, "defective", performanceRecorder);
+            ScenarioInvariant.Equal(VerificationOutcome.Failed, defective.Run.Outcome);
             var falseReverseEdges = defectiveScenario.Graph.Edges.Where(edge => edge.Recovery?.Mode == RecoveryMode.Reverse).ToArray();
-            Assert.Equal(2, falseReverseEdges.Length);
-            Assert.All(falseReverseEdges, edge => Assert.False(TransformationLossAnalyzer.Analyze(edge).IsReversible));
+            ScenarioInvariant.Equal(2, falseReverseEdges.Length);
+            ScenarioInvariant.All(falseReverseEdges, edge => ScenarioInvariant.False(TransformationLossAnalyzer.Analyze(edge).IsReversible));
             var defects = BusinessCounts(defective.Findings, falseReverseEdges.Length);
-            Assert.Equal(ExpectedDefects(), defects);
-            Assert.Equal(149L, defects.Values.Sum());
+            ScenarioInvariant.Equal(ExpectedDefects(), defects);
+            ScenarioInvariant.Equal(149L, defects.Values.Sum());
 
             var externalEvidenceStore = new FileSystemEvidenceStore(Path.Combine(directory, "external-evidence"));
-            await externalEvidenceStore.SaveAsync(corrected.EvidenceGraph, TestContext.Current.CancellationToken);
-            await externalEvidenceStore.SaveAsync(defective.EvidenceGraph, TestContext.Current.CancellationToken);
-            Assert.True(await externalEvidenceStore.VerifyIntegrityAsync(corrected.Run.Id, TestContext.Current.CancellationToken));
-            Assert.True(await externalEvidenceStore.VerifyIntegrityAsync(defective.Run.Id, TestContext.Current.CancellationToken));
+            await externalEvidenceStore.SaveAsync(corrected.EvidenceGraph, DemoScenarioExecutionContext.CurrentCancellationToken);
+            await externalEvidenceStore.SaveAsync(defective.EvidenceGraph, DemoScenarioExecutionContext.CurrentCancellationToken);
+            ScenarioInvariant.True(await externalEvidenceStore.VerifyIntegrityAsync(corrected.Run.Id, DemoScenarioExecutionContext.CurrentCancellationToken));
+            ScenarioInvariant.True(await externalEvidenceStore.VerifyIntegrityAsync(defective.Run.Id, DemoScenarioExecutionContext.CurrentCancellationToken));
 
             var repeated = await VerifyExternalAsync(service, configuration, correctedScenario, correctedCapture,
                 cleanTarget, rules, contextFactory, targetConnector, new FilesystemShadowTargetConnector(),
-                postgresContainer, directory, "corrected-repeat", performanceRecorder);
-            Assert.Equal(corrected.Run.TargetFingerprint, repeated.Run.TargetFingerprint);
-            Assert.Equal(corrected.Run.RuleSetFingerprint, repeated.Run.RuleSetFingerprint);
-            Assert.Equal(corrected.Run.EvidenceFingerprint, repeated.Run.EvidenceFingerprint);
-            Assert.Equal(corrected.Ledger.Fingerprint, repeated.Ledger.Fingerprint);
+                startedPostgresContainer, directory, "corrected-repeat", performanceRecorder);
+            ScenarioInvariant.Equal(corrected.Run.TargetFingerprint, repeated.Run.TargetFingerprint);
+            ScenarioInvariant.Equal(corrected.Run.RuleSetFingerprint, repeated.Run.RuleSetFingerprint);
+            ScenarioInvariant.Equal(corrected.Run.EvidenceFingerprint, repeated.Run.EvidenceFingerprint);
+            ScenarioInvariant.Equal(corrected.Ledger.Fingerprint, repeated.Ledger.Fingerprint);
             externalVerificationStopwatch.Stop();
 
             var integratedAssuranceStopwatch = Stopwatch.StartNew();
             using (var targetTemplateStage = performanceRecorder.StartStage(PerformanceStageKind.Fixture,
                 "PostgreSQL shadow target template setup"))
             {
-                await CreatePostgresTargetTemplatesAsync(postgresContainer, cleanTarget, correctedScenario);
+                await CreatePostgresTargetTemplatesAsync(startedPostgresContainer, cleanTarget, correctedScenario);
                 targetTemplateStage.AddArtifacts(correctedScenario.TargetNodes.Count);
             }
             var targetConnectors = new ShadowTargetConnectorRegistry([targetConnector, new FilesystemShadowTargetConnector()]);
             var correctedPipeline = await ProjectVerifyAndQualifyAsync(checkpointStore, sourceConnectors, targetConnectors,
                 contextFactory, configuration, correctedScenario, correctedCapture, rules, directory,
                 "projected-corrected", performanceRecorder, expectedWorksets: expectedWorksets);
-            Assert.Equal(ProjectionStatus.Succeeded, correctedPipeline.Projection.Status);
-            Assert.Equal(expectedProjectionSourceVisits, correctedPipeline.Projection.SourceArtifactCount);
-            Assert.Equal(expectedTargetArtifacts, correctedPipeline.Projection.TargetArtifactCount);
-            Assert.Equal(VerificationOutcome.Passed, correctedPipeline.Verification.Run.Outcome);
-            Assert.Equal(expectedCheckpointArtifacts, correctedPipeline.Verification.Ledger.DispositionCount);
-            Assert.Equal(expectedTargetArtifacts, correctedPipeline.Verification.Ledger.LineageCount);
-            Assert.Equal(DryRunQualificationStatus.Qualified, correctedPipeline.Recovery.Qualification.Status);
+            ScenarioInvariant.Equal(ProjectionStatus.Succeeded, correctedPipeline.Projection.Status);
+            ScenarioInvariant.Equal(expectedProjectionSourceVisits, correctedPipeline.Projection.SourceArtifactCount);
+            ScenarioInvariant.Equal(expectedTargetArtifacts, correctedPipeline.Projection.TargetArtifactCount);
+            ScenarioInvariant.Equal(VerificationOutcome.Passed, correctedPipeline.Verification.Run.Outcome);
+            ScenarioInvariant.Equal(expectedCheckpointArtifacts, correctedPipeline.Verification.Ledger.DispositionCount);
+            ScenarioInvariant.Equal(expectedTargetArtifacts, correctedPipeline.Verification.Ledger.LineageCount);
+            ScenarioInvariant.Equal(DryRunQualificationStatus.Qualified, correctedPipeline.Recovery.Qualification.Status);
             var genericReport = CrossDomainAssuranceReport.Create(configuration.Root.Project!.Name!, new PensionPack(),
                 "Configured synthetic pension migration invariants only; not regulatory, actuarial, or benefit-calculation certification.",
                 correctedPipeline.Verification, correctedPipeline.Recovery);
-            Assert.Equal("proofshift.pension", genericReport.PackId);
-            Assert.Equal("0.9.0", genericReport.PackVersion);
-            Assert.Equal("QUALIFIED", genericReport.Qualification);
-            Assert.Equal(genericReport.PackVersion, genericReport.RuntimePackVersions[genericReport.PackId]);
-            Assert.NotEmpty(genericReport.RuleVersions);
-            Assert.All(genericReport.RuleVersions.Values, version => Assert.Equal("1", version));
-            Assert.Contains(genericReport.Concepts, concept => concept.SemanticType == "Pension.Member");
-            Assert.Contains(genericReport.Rules, rule => rule.Type == "pension-member-accounting" && rule.Version == "1");
+            ScenarioInvariant.Equal("proofshift.pension", genericReport.PackId);
+            ScenarioInvariant.Equal("0.9.0", genericReport.PackVersion);
+            ScenarioInvariant.Equal("QUALIFIED", genericReport.Qualification);
+            ScenarioInvariant.Equal(genericReport.PackVersion, genericReport.RuntimePackVersions[genericReport.PackId]);
+            ScenarioInvariant.NotEmpty(genericReport.RuleVersions);
+            ScenarioInvariant.All(genericReport.RuleVersions.Values, version => ScenarioInvariant.Equal("1", version));
+            ScenarioInvariant.Contains(genericReport.Concepts, concept => concept.SemanticType == "Pension.Member");
+            ScenarioInvariant.Contains(genericReport.Rules, rule => rule.Type == "pension-member-accounting" && rule.Version == "1");
             var genericReportJson = JsonSerializer.Serialize(genericReport);
-            Assert.DoesNotContain("Justice.Case", genericReportJson, StringComparison.Ordinal);
-            Assert.DoesNotContain("Utility.Account", genericReportJson, StringComparison.Ordinal);
-            Assert.DoesNotContain("HCM.Worker", genericReportJson, StringComparison.Ordinal);
-            Assert.DoesNotContain("Fhir.Patient", genericReportJson, StringComparison.Ordinal);
+            ScenarioInvariant.DoesNotContain("Justice.Case", genericReportJson, StringComparison.Ordinal);
+            ScenarioInvariant.DoesNotContain("Utility.Account", genericReportJson, StringComparison.Ordinal);
+            ScenarioInvariant.DoesNotContain("HCM.Worker", genericReportJson, StringComparison.Ordinal);
+            ScenarioInvariant.DoesNotContain("Fhir.Patient", genericReportJson, StringComparison.Ordinal);
 
             var falseReversePipeline = await ProjectVerifyAndQualifyAsync(checkpointStore, sourceConnectors, targetConnectors,
                 contextFactory, configuration, defectiveScenario, defectiveCapture, rules, directory,
                 "projected-false-reverse", performanceRecorder, expectedWorksets: expectedWorksets);
-            Assert.Equal(ProjectionStatus.Succeeded, falseReversePipeline.Projection.Status);
-            Assert.Equal(VerificationOutcome.Passed, falseReversePipeline.Verification.Run.Outcome);
-            Assert.Equal(DryRunQualificationStatus.NotQualified, falseReversePipeline.Recovery.Qualification.Status);
-            Assert.Equal(2, falseReversePipeline.Recovery.Assessment.Edges.Count(edge =>
+            ScenarioInvariant.Equal(ProjectionStatus.Succeeded, falseReversePipeline.Projection.Status);
+            ScenarioInvariant.Equal(VerificationOutcome.Passed, falseReversePipeline.Verification.Run.Outcome);
+            ScenarioInvariant.Equal(DryRunQualificationStatus.NotQualified, falseReversePipeline.Recovery.Qualification.Status);
+            ScenarioInvariant.Equal(2, falseReversePipeline.Recovery.Assessment.Edges.Count(edge =>
                 edge.Issues.Any(issue => issue.Code == RecoveryIssueCodes.InvalidReverse)));
             foreach (var declaration in PensionDefectInjector.FalseReverseDeclarations)
-                Assert.Contains(falseReversePipeline.Recovery.Assessment.Edges, edge => edge.EdgeName == declaration.EdgeName &&
+                ScenarioInvariant.Contains(falseReversePipeline.Recovery.Assessment.Edges, edge => edge.EdgeName == declaration.EdgeName &&
                     edge.Issues.Any(issue => issue.Code == RecoveryIssueCodes.InvalidReverse));
 
             var projectedDefectivePipeline = await ProjectVerifyAndQualifyAsync(checkpointStore, sourceConnectors,
                 targetConnectors, contextFactory, configuration, defectiveScenario, defectiveCapture, rules,
                 directory, "projected-defective", performanceRecorder, async projection =>
                 {
-                    await ReplaceProjectedPostgresTargetsAsync(postgresContainer, projection.Id, defectiveTarget, defectiveScenario);
+                    await ReplaceProjectedPostgresTargetsAsync(startedPostgresContainer, projection.Id, defectiveTarget, defectiveScenario);
                     await RemoveMissingProjectedFilesAsync(targetFilesRoot, projection.Id, cleanTarget, defectiveTarget,
                         defectiveScenario);
                 }, expectedWorksets: expectedWorksets);
-            Assert.Equal(ProjectionStatus.Succeeded, projectedDefectivePipeline.Projection.Status);
-            Assert.Equal(VerificationOutcome.Failed, projectedDefectivePipeline.Verification.Run.Outcome);
-            Assert.Equal(expectedCheckpointArtifacts, projectedDefectivePipeline.Verification.Ledger.DispositionCount);
-            Assert.Equal(expectedTargetArtifacts, projectedDefectivePipeline.Verification.Ledger.LineageCount);
+            ScenarioInvariant.Equal(ProjectionStatus.Succeeded, projectedDefectivePipeline.Projection.Status);
+            ScenarioInvariant.Equal(VerificationOutcome.Failed, projectedDefectivePipeline.Verification.Run.Outcome);
+            ScenarioInvariant.Equal(expectedCheckpointArtifacts, projectedDefectivePipeline.Verification.Ledger.DispositionCount);
+            ScenarioInvariant.Equal(expectedTargetArtifacts, projectedDefectivePipeline.Verification.Ledger.LineageCount);
             var projectedDefects = BusinessCounts(projectedDefectivePipeline.Verification.Findings,
                 projectedDefectivePipeline.Recovery.Assessment.Edges.Count(edge =>
                     edge.Issues.Any(issue => issue.Code == RecoveryIssueCodes.InvalidReverse)));
-            Assert.Equal(ExpectedDefects(), projectedDefects);
-            Assert.Equal(149L, projectedDefects.Values.Sum());
-            Assert.Equal(DryRunQualificationStatus.NotQualified, projectedDefectivePipeline.Recovery.Qualification.Status);
-            Assert.Equal(2, expectedWorksets.BuildCount);
-            Assert.Equal(4, expectedWorksets.ReuseCount);
+            ScenarioInvariant.Equal(ExpectedDefects(), projectedDefects);
+            ScenarioInvariant.Equal(149L, projectedDefects.Values.Sum());
+            ScenarioInvariant.Equal(DryRunQualificationStatus.NotQualified, projectedDefectivePipeline.Recovery.Qualification.Status);
+            ScenarioInvariant.Equal(2, expectedWorksets.BuildCount);
+            ScenarioInvariant.Equal(4, expectedWorksets.ReuseCount);
 
             integratedAssuranceStopwatch.Stop();
             var persistenceAndReportStopwatch = Stopwatch.StartNew();
             var evidenceStore = new FileSystemEvidenceStore(Path.Combine(directory, ".proofshift", "verifications"));
             var evidencePersistenceStage = performanceRecorder.StartStage(PerformanceStageKind.Reporting,
                 "Verification evidence persistence");
-            await evidenceStore.SaveAsync(correctedPipeline.Verification.EvidenceGraph, TestContext.Current.CancellationToken);
-            await evidenceStore.SaveAsync(falseReversePipeline.Verification.EvidenceGraph, TestContext.Current.CancellationToken);
-            await evidenceStore.SaveAsync(projectedDefectivePipeline.Verification.EvidenceGraph, TestContext.Current.CancellationToken);
-            Assert.True(await evidenceStore.VerifyIntegrityAsync(correctedPipeline.Verification.Run.Id, TestContext.Current.CancellationToken));
-            Assert.True(await evidenceStore.VerifyIntegrityAsync(falseReversePipeline.Verification.Run.Id, TestContext.Current.CancellationToken));
-            Assert.True(await evidenceStore.VerifyIntegrityAsync(projectedDefectivePipeline.Verification.Run.Id, TestContext.Current.CancellationToken));
+            await evidenceStore.SaveAsync(correctedPipeline.Verification.EvidenceGraph, DemoScenarioExecutionContext.CurrentCancellationToken);
+            await evidenceStore.SaveAsync(falseReversePipeline.Verification.EvidenceGraph, DemoScenarioExecutionContext.CurrentCancellationToken);
+            await evidenceStore.SaveAsync(projectedDefectivePipeline.Verification.EvidenceGraph, DemoScenarioExecutionContext.CurrentCancellationToken);
+            ScenarioInvariant.True(await evidenceStore.VerifyIntegrityAsync(correctedPipeline.Verification.Run.Id, DemoScenarioExecutionContext.CurrentCancellationToken));
+            ScenarioInvariant.True(await evidenceStore.VerifyIntegrityAsync(falseReversePipeline.Verification.Run.Id, DemoScenarioExecutionContext.CurrentCancellationToken));
+            ScenarioInvariant.True(await evidenceStore.VerifyIntegrityAsync(projectedDefectivePipeline.Verification.Run.Id, DemoScenarioExecutionContext.CurrentCancellationToken));
             evidencePersistenceStage.AddArtifacts(correctedPipeline.Verification.EvidenceGraph.Records.Count +
                 falseReversePipeline.Verification.EvidenceGraph.Records.Count +
                 projectedDefectivePipeline.Verification.EvidenceGraph.Records.Count);
@@ -353,21 +388,21 @@ public sealed class PensionExternalCorpusVerificationTests
             var projectedRecoveryStore = new FileSystemRecoveryArtifactStore(Path.Combine(directory, ".proofshift", "recovery"));
             var recoveryPersistenceStage = performanceRecorder.StartStage(PerformanceStageKind.Reporting,
                 "Recovery artifact persistence");
-            var correctedReceipt = await projectedRecoveryStore.SaveAsync(correctedPipeline.Recovery, TestContext.Current.CancellationToken);
-            var falseReverseReceipt = await projectedRecoveryStore.SaveAsync(falseReversePipeline.Recovery, TestContext.Current.CancellationToken);
-            var defectiveReceipt = await projectedRecoveryStore.SaveAsync(projectedDefectivePipeline.Recovery, TestContext.Current.CancellationToken);
-            Assert.True(await projectedRecoveryStore.VerifyIntegrityAsync(correctedPipeline.Recovery.Id, TestContext.Current.CancellationToken));
-            Assert.True(await projectedRecoveryStore.VerifyIntegrityAsync(falseReversePipeline.Recovery.Id, TestContext.Current.CancellationToken));
-            Assert.Equal(DryRunQualificationStatus.Qualified,
-                (await projectedRecoveryStore.ReadSummaryAsync(correctedPipeline.Recovery.Id, TestContext.Current.CancellationToken)).Status);
-            Assert.Equal(DryRunQualificationStatus.NotQualified,
-                (await projectedRecoveryStore.ReadSummaryAsync(falseReversePipeline.Recovery.Id, TestContext.Current.CancellationToken)).Status);
-            Assert.True(await projectedRecoveryStore.VerifyIntegrityAsync(projectedDefectivePipeline.Recovery.Id, TestContext.Current.CancellationToken));
-            Assert.Equal(DryRunQualificationStatus.NotQualified,
-                (await projectedRecoveryStore.ReadSummaryAsync(projectedDefectivePipeline.Recovery.Id, TestContext.Current.CancellationToken)).Status);
-            Assert.NotEmpty(correctedReceipt.IntegrityHash);
-            Assert.NotEmpty(falseReverseReceipt.IntegrityHash);
-            Assert.NotEmpty(defectiveReceipt.IntegrityHash);
+            var correctedReceipt = await projectedRecoveryStore.SaveAsync(correctedPipeline.Recovery, DemoScenarioExecutionContext.CurrentCancellationToken);
+            var falseReverseReceipt = await projectedRecoveryStore.SaveAsync(falseReversePipeline.Recovery, DemoScenarioExecutionContext.CurrentCancellationToken);
+            var defectiveReceipt = await projectedRecoveryStore.SaveAsync(projectedDefectivePipeline.Recovery, DemoScenarioExecutionContext.CurrentCancellationToken);
+            ScenarioInvariant.True(await projectedRecoveryStore.VerifyIntegrityAsync(correctedPipeline.Recovery.Id, DemoScenarioExecutionContext.CurrentCancellationToken));
+            ScenarioInvariant.True(await projectedRecoveryStore.VerifyIntegrityAsync(falseReversePipeline.Recovery.Id, DemoScenarioExecutionContext.CurrentCancellationToken));
+            ScenarioInvariant.Equal(DryRunQualificationStatus.Qualified,
+                (await projectedRecoveryStore.ReadSummaryAsync(correctedPipeline.Recovery.Id, DemoScenarioExecutionContext.CurrentCancellationToken)).Status);
+            ScenarioInvariant.Equal(DryRunQualificationStatus.NotQualified,
+                (await projectedRecoveryStore.ReadSummaryAsync(falseReversePipeline.Recovery.Id, DemoScenarioExecutionContext.CurrentCancellationToken)).Status);
+            ScenarioInvariant.True(await projectedRecoveryStore.VerifyIntegrityAsync(projectedDefectivePipeline.Recovery.Id, DemoScenarioExecutionContext.CurrentCancellationToken));
+            ScenarioInvariant.Equal(DryRunQualificationStatus.NotQualified,
+                (await projectedRecoveryStore.ReadSummaryAsync(projectedDefectivePipeline.Recovery.Id, DemoScenarioExecutionContext.CurrentCancellationToken)).Status);
+            ScenarioInvariant.NotEmpty(correctedReceipt.IntegrityHash);
+            ScenarioInvariant.NotEmpty(falseReverseReceipt.IntegrityHash);
+            ScenarioInvariant.NotEmpty(defectiveReceipt.IntegrityHash);
             recoveryPersistenceStage.AddArtifacts(correctedPipeline.Recovery.EvidenceGraph.Graph.Records.Count +
                 falseReversePipeline.Recovery.EvidenceGraph.Graph.Records.Count +
                 projectedDefectivePipeline.Recovery.EvidenceGraph.Graph.Records.Count);
@@ -381,149 +416,148 @@ public sealed class PensionExternalCorpusVerificationTests
                 projectedDefectivePipeline.Verification, projectedDefectivePipeline.Recovery, "Synthetic PS-0.9 Fast Defective");
             var falseReverseReport = await BuildPersistedReportAsync(directory, evidenceStore, projectedRecoveryStore,
                 falseReversePipeline.Verification, falseReversePipeline.Recovery, "Synthetic PS-0.9 Fast False-Reverse");
-            Assert.Equal("QUALIFIED", correctedReport.Qualification);
-            Assert.Equal("Passed", correctedReport.RehearsalOutcome);
-            Assert.Equal(0L, correctedReport.BusinessDiscrepancyCount);
-            Assert.Equal(0L, correctedReport.UnaccountedSources);
-            Assert.Equal(0L, correctedReport.UnexplainedTargets);
-            Assert.Equal(0, correctedReport.VerificationFailureCount);
-            Assert.Equal(0L, correctedReport.FailedRecoveryEdges);
-            Assert.Equal("NOT QUALIFIED", defectiveReport.Qualification);
-            Assert.Equal("FAILED", defectiveReport.VerificationOutcome);
-            Assert.Equal(149L, defectiveReport.BusinessDiscrepancyCount);
-            Assert.Equal(ExpectedDefects(), defectiveReport.DefectCounts.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal));
-            Assert.Equal("PASSED", falseReverseReport.VerificationOutcome);
-            Assert.Equal(0L, falseReverseReport.VerificationFailureCount);
-            Assert.Equal(2L, falseReverseReport.BusinessDiscrepancyCount);
-            Assert.Equal(2L, falseReverseReport.FalseReversibleTransformations);
-            Assert.Equal(2L, falseReverseReport.FailedRecoveryEdges);
-            Assert.Equal("NOT QUALIFIED", falseReverseReport.Qualification);
-            Assert.Contains("false-reverse", falseReverseReport.Project, StringComparison.OrdinalIgnoreCase);
+            ScenarioInvariant.Equal("QUALIFIED", correctedReport.Qualification);
+            ScenarioInvariant.Equal("Passed", correctedReport.RehearsalOutcome);
+            ScenarioInvariant.Equal(0L, correctedReport.BusinessDiscrepancyCount);
+            ScenarioInvariant.Equal(0L, correctedReport.UnaccountedSources);
+            ScenarioInvariant.Equal(0L, correctedReport.UnexplainedTargets);
+            ScenarioInvariant.Equal(0, correctedReport.VerificationFailureCount);
+            ScenarioInvariant.Equal(0L, correctedReport.FailedRecoveryEdges);
+            ScenarioInvariant.Equal("NOT QUALIFIED", defectiveReport.Qualification);
+            ScenarioInvariant.Equal("FAILED", defectiveReport.VerificationOutcome);
+            ScenarioInvariant.Equal(149L, defectiveReport.BusinessDiscrepancyCount);
+            ScenarioInvariant.Equal(ExpectedDefects(), defectiveReport.DefectCounts.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal));
+            ScenarioInvariant.Equal("PASSED", falseReverseReport.VerificationOutcome);
+            ScenarioInvariant.Equal(0L, falseReverseReport.VerificationFailureCount);
+            ScenarioInvariant.Equal(2L, falseReverseReport.BusinessDiscrepancyCount);
+            ScenarioInvariant.Equal(2L, falseReverseReport.FalseReversibleTransformations);
+            ScenarioInvariant.Equal(2L, falseReverseReport.FailedRecoveryEdges);
+            ScenarioInvariant.Equal("NOT QUALIFIED", falseReverseReport.Qualification);
+            ScenarioInvariant.Contains("false-reverse", falseReverseReport.Project, StringComparison.OrdinalIgnoreCase);
             var reportDirectory = Path.Combine(directory, ".proofshift", "reports");
             Directory.CreateDirectory(reportDirectory);
             await File.WriteAllTextAsync(Path.Combine(reportDirectory, $"{correctedReport.DryRunId}.json"),
-                JsonSerializer.Serialize(correctedReport), TestContext.Current.CancellationToken);
+                JsonSerializer.Serialize(correctedReport), DemoScenarioExecutionContext.CurrentCancellationToken);
             await File.WriteAllTextAsync(Path.Combine(reportDirectory, $"{defectiveReport.DryRunId}.json"),
-                JsonSerializer.Serialize(defectiveReport), TestContext.Current.CancellationToken);
+                JsonSerializer.Serialize(defectiveReport), DemoScenarioExecutionContext.CurrentCancellationToken);
             var comparison = PensionAssuranceReportBuilder.Compare(defectiveReport, correctedReport);
-            Assert.Equal("NOT QUALIFIED", comparison.BeforeQualification);
-            Assert.Equal("QUALIFIED", comparison.AfterQualification);
-            Assert.Equal(149L, comparison.DefectsResolved.Values.Sum());
+            ScenarioInvariant.Equal("NOT QUALIFIED", comparison.BeforeQualification);
+            ScenarioInvariant.Equal("QUALIFIED", comparison.AfterQualification);
+            ScenarioInvariant.Equal(149L, comparison.DefectsResolved.Values.Sum());
             await File.WriteAllTextAsync(Path.Combine(reportDirectory, "defective-to-corrected-compare.json"),
-                JsonSerializer.Serialize(comparison), TestContext.Current.CancellationToken);
+                JsonSerializer.Serialize(comparison), DemoScenarioExecutionContext.CurrentCancellationToken);
             reportConstructionStage.AddArtifacts(3);
             reportConstructionStage.Dispose();
 
             var cliReportingStage = performanceRecorder.StartStage(PerformanceStageKind.Reporting,
                 "CLI human and JSON reports/comparison");
-            var repositoryRoot = FindRepositoryRoot(AppContext.BaseDirectory);
             var configuredCliAssembly = Environment.GetEnvironmentVariable("PROOFSHIFT_DEMO_CLI_PATH");
             var cliAssembly = !string.IsNullOrWhiteSpace(configuredCliAssembly) && File.Exists(configuredCliAssembly)
                 ? configuredCliAssembly
-                : Path.Combine(repositoryRoot, "src", "ProofShift.Cli", "bin", "Debug", "net10.0", "ProofShift.Cli.dll");
-            Assert.True(File.Exists(cliAssembly), $"CLI assembly not found: {cliAssembly}");
-            await PersistedAssuranceReportTestHelper.StageCheckpointForCliAsync(directory,
-                projectedDefectivePipeline.Recovery.Id, TestContext.Current.CancellationToken);
-            await PersistedAssuranceReportTestHelper.StageCheckpointForCliAsync(directory,
-                correctedPipeline.Recovery.Id, TestContext.Current.CancellationToken);
+                : Path.Combine(context.ContentRootDirectory, "src", "ProofShift.Cli", "bin", "Debug", "net10.0", "ProofShift.Cli.dll");
+            ScenarioInvariant.True(File.Exists(cliAssembly), $"CLI assembly not found: {cliAssembly}");
+            await DemoScenarioWorkspace.StageCheckpointForCliAsync(directory,
+                projectedDefectivePipeline.Recovery.Id, DemoScenarioExecutionContext.CurrentCancellationToken);
+            await DemoScenarioWorkspace.StageCheckpointForCliAsync(directory,
+                correctedPipeline.Recovery.Id, DemoScenarioExecutionContext.CurrentCancellationToken);
             var defectiveHuman = await RunCliAsync(directory, cliAssembly, "report", defectiveReport.DryRunId);
-            Assert.True(defectiveHuman.ExitCode == 0, defectiveHuman.StandardError);
+            ScenarioInvariant.True(defectiveHuman.ExitCode == 0, defectiveHuman.StandardError);
             var discrepancyLine = defectiveHuman.StandardOutput.Split('\n')
                 .FirstOrDefault(line => line.StartsWith("Business Discrepancies:", StringComparison.Ordinal));
-            Assert.Equal("Business Discrepancies: 149", discrepancyLine);
-            Assert.Contains("RESULT: NOT QUALIFIED", defectiveHuman.StandardOutput);
+            ScenarioInvariant.Equal("Business Discrepancies: 149", discrepancyLine);
+            ScenarioInvariant.Contains("RESULT: NOT QUALIFIED", defectiveHuman.StandardOutput);
             var correctedHuman = await RunCliAsync(directory, cliAssembly, "report", correctedReport.DryRunId);
-            Assert.True(correctedHuman.ExitCode == 0, correctedHuman.StandardError);
-            Assert.Contains("Business Discrepancies: 0", correctedHuman.StandardOutput);
-            Assert.Contains("RESULT: QUALIFIED DRY RUN", correctedHuman.StandardOutput);
+            ScenarioInvariant.True(correctedHuman.ExitCode == 0, correctedHuman.StandardError);
+            ScenarioInvariant.Contains("Business Discrepancies: 0", correctedHuman.StandardOutput);
+            ScenarioInvariant.Contains("RESULT: QUALIFIED DRY RUN", correctedHuman.StandardOutput);
 
             var defectiveMachine = await RunCliAsync(directory, cliAssembly, "report", defectiveReport.DryRunId, "--json");
             var correctedMachine = await RunCliAsync(directory, cliAssembly, "report", correctedReport.DryRunId, "--json");
-            Assert.True(defectiveMachine.ExitCode == 0, defectiveMachine.StandardError);
-            Assert.True(correctedMachine.ExitCode == 0, correctedMachine.StandardError);
+            ScenarioInvariant.True(defectiveMachine.ExitCode == 0, defectiveMachine.StandardError);
+            ScenarioInvariant.True(correctedMachine.ExitCode == 0, correctedMachine.StandardError);
             using var defectiveMachineJson = JsonDocument.Parse(defectiveMachine.StandardOutput);
             using var correctedMachineJson = JsonDocument.Parse(correctedMachine.StandardOutput);
-            Assert.Equal("proofshift.pension", defectiveMachineJson.RootElement.GetProperty("packId").GetString());
-            Assert.Equal(new PensionPack().Version, defectiveMachineJson.RootElement.GetProperty("packVersion").GetString());
-            Assert.Equal(new PensionPack().Metadata.ClaimBoundary,
+            ScenarioInvariant.Equal("proofshift.pension", defectiveMachineJson.RootElement.GetProperty("packId").GetString());
+            ScenarioInvariant.Equal(new PensionPack().Version, defectiveMachineJson.RootElement.GetProperty("packVersion").GetString());
+            ScenarioInvariant.Equal(new PensionPack().Metadata.ClaimBoundary,
                 defectiveMachineJson.RootElement.GetProperty("claimBoundary").GetString());
-            Assert.Equal("NOT QUALIFIED", defectiveMachineJson.RootElement.GetProperty("qualification").GetString());
-            Assert.Equal(149L, defectiveMachineJson.RootElement.GetProperty("businessDiscrepancyCount").GetInt64());
-            Assert.Equal(213L, defectiveMachineJson.RootElement.GetProperty("verificationFailureCount").GetInt64());
-            Assert.Equal(213L, defectiveMachineJson.RootElement.GetProperty("findingsByRuleAndCode").EnumerateObject()
+            ScenarioInvariant.Equal("NOT QUALIFIED", defectiveMachineJson.RootElement.GetProperty("qualification").GetString());
+            ScenarioInvariant.Equal(149L, defectiveMachineJson.RootElement.GetProperty("businessDiscrepancyCount").GetInt64());
+            ScenarioInvariant.Equal(213L, defectiveMachineJson.RootElement.GetProperty("verificationFailureCount").GetInt64());
+            ScenarioInvariant.Equal(213L, defectiveMachineJson.RootElement.GetProperty("findingsByRuleAndCode").EnumerateObject()
                 .Sum(property => property.Value.GetInt64()));
-            PersistedAssuranceReportTestHelper.AssertNoExpectedOrActualProperties(defectiveMachine.StandardOutput);
-            Assert.Equal("QUALIFIED", correctedMachineJson.RootElement.GetProperty("qualification").GetString());
-            Assert.Equal(0L, correctedMachineJson.RootElement.GetProperty("businessDiscrepancyCount").GetInt64());
-            Assert.Equal(0L, correctedMachineJson.RootElement.GetProperty("unaccountedSources").GetInt64());
-            Assert.Equal(0L, correctedMachineJson.RootElement.GetProperty("unexplainedTargets").GetInt64());
-            Assert.Equal("Passed", correctedMachineJson.RootElement.GetProperty("rehearsalOutcome").GetString());
+            ScenarioInvariant.AssertNoExpectedOrActualProperties(defectiveMachine.StandardOutput);
+            ScenarioInvariant.Equal("QUALIFIED", correctedMachineJson.RootElement.GetProperty("qualification").GetString());
+            ScenarioInvariant.Equal(0L, correctedMachineJson.RootElement.GetProperty("businessDiscrepancyCount").GetInt64());
+            ScenarioInvariant.Equal(0L, correctedMachineJson.RootElement.GetProperty("unaccountedSources").GetInt64());
+            ScenarioInvariant.Equal(0L, correctedMachineJson.RootElement.GetProperty("unexplainedTargets").GetInt64());
+            ScenarioInvariant.Equal("Passed", correctedMachineJson.RootElement.GetProperty("rehearsalOutcome").GetString());
             await File.WriteAllTextAsync(Path.Combine(reportDirectory, $"{defectiveReport.DryRunId}.cli.json"),
-                defectiveMachine.StandardOutput, TestContext.Current.CancellationToken);
+                defectiveMachine.StandardOutput, DemoScenarioExecutionContext.CurrentCancellationToken);
             await File.WriteAllTextAsync(Path.Combine(reportDirectory, $"{correctedReport.DryRunId}.cli.json"),
-                correctedMachine.StandardOutput, TestContext.Current.CancellationToken);
+                correctedMachine.StandardOutput, DemoScenarioExecutionContext.CurrentCancellationToken);
 
-            await PersistedAssuranceReportTestHelper.StageCheckpointForCliAsync(directory,
-                falseReversePipeline.Recovery.Id, TestContext.Current.CancellationToken);
+            await DemoScenarioWorkspace.StageCheckpointForCliAsync(directory,
+                falseReversePipeline.Recovery.Id, DemoScenarioExecutionContext.CurrentCancellationToken);
             var falseReverseMachine = await RunCliAsync(directory, cliAssembly,
                 "report", falseReverseReport.DryRunId, "--json");
-            Assert.True(falseReverseMachine.ExitCode == 0, falseReverseMachine.StandardError);
+            ScenarioInvariant.True(falseReverseMachine.ExitCode == 0, falseReverseMachine.StandardError);
             using var falseReverseMachineJson = JsonDocument.Parse(falseReverseMachine.StandardOutput);
-            Assert.Equal("PASSED", falseReverseMachineJson.RootElement.GetProperty("verificationOutcome").GetString());
-            Assert.Equal(0L, falseReverseMachineJson.RootElement.GetProperty("verificationFailureCount").GetInt64());
-            Assert.Equal(2L, falseReverseMachineJson.RootElement.GetProperty("businessDiscrepancyCount").GetInt64());
-            Assert.Equal(2L, falseReverseMachineJson.RootElement.GetProperty("falseReversibleTransformations").GetInt64());
-            Assert.Equal(2L, falseReverseMachineJson.RootElement.GetProperty("failedRecoveryEdges").GetInt64());
-            Assert.Equal("NOT QUALIFIED", falseReverseMachineJson.RootElement.GetProperty("qualification").GetString());
-            PersistedAssuranceReportTestHelper.AssertNoExpectedOrActualProperties(falseReverseMachine.StandardOutput);
+            ScenarioInvariant.Equal("PASSED", falseReverseMachineJson.RootElement.GetProperty("verificationOutcome").GetString());
+            ScenarioInvariant.Equal(0L, falseReverseMachineJson.RootElement.GetProperty("verificationFailureCount").GetInt64());
+            ScenarioInvariant.Equal(2L, falseReverseMachineJson.RootElement.GetProperty("businessDiscrepancyCount").GetInt64());
+            ScenarioInvariant.Equal(2L, falseReverseMachineJson.RootElement.GetProperty("falseReversibleTransformations").GetInt64());
+            ScenarioInvariant.Equal(2L, falseReverseMachineJson.RootElement.GetProperty("failedRecoveryEdges").GetInt64());
+            ScenarioInvariant.Equal("NOT QUALIFIED", falseReverseMachineJson.RootElement.GetProperty("qualification").GetString());
+            ScenarioInvariant.AssertNoExpectedOrActualProperties(falseReverseMachine.StandardOutput);
 
             var compareHuman = await RunCliAsync(directory, cliAssembly, "compare",
                 defectiveReport.DryRunId, correctedReport.DryRunId);
-            Assert.True(compareHuman.ExitCode == 0, compareHuman.StandardError);
-            Assert.Contains("Before: NOT QUALIFIED", compareHuman.StandardOutput);
-            Assert.Contains("After: QUALIFIED", compareHuman.StandardOutput);
+            ScenarioInvariant.True(compareHuman.ExitCode == 0, compareHuman.StandardError);
+            ScenarioInvariant.Contains("Before: NOT QUALIFIED", compareHuman.StandardOutput);
+            ScenarioInvariant.Contains("After: QUALIFIED", compareHuman.StandardOutput);
             var compareMachine = await RunCliAsync(directory, cliAssembly, "compare",
                 defectiveReport.DryRunId, correctedReport.DryRunId, "--json");
-            Assert.True(compareMachine.ExitCode == 0, compareMachine.StandardError);
+            ScenarioInvariant.True(compareMachine.ExitCode == 0, compareMachine.StandardError);
             using var comparisonJson = JsonDocument.Parse(compareMachine.StandardOutput);
-            Assert.Equal("proofshift-persisted-assurance-comparison-v1",
+            ScenarioInvariant.Equal("proofshift-persisted-assurance-comparison-v1",
                 comparisonJson.RootElement.GetProperty("format").GetString());
-            Assert.True(comparisonJson.RootElement.GetProperty("graphHashChanged").GetBoolean());
-            Assert.True(comparisonJson.RootElement.GetProperty("sourceFingerprintChanged").GetBoolean());
-            Assert.True(comparisonJson.RootElement.GetProperty("checkpointSemanticsChanged").GetBoolean());
-            Assert.Equal(213L, comparisonJson.RootElement.GetProperty("findingsResolved").EnumerateObject()
+            ScenarioInvariant.True(comparisonJson.RootElement.GetProperty("graphHashChanged").GetBoolean());
+            ScenarioInvariant.True(comparisonJson.RootElement.GetProperty("sourceFingerprintChanged").GetBoolean());
+            ScenarioInvariant.True(comparisonJson.RootElement.GetProperty("checkpointSemanticsChanged").GetBoolean());
+            ScenarioInvariant.Equal(213L, comparisonJson.RootElement.GetProperty("findingsResolved").EnumerateObject()
                 .Sum(property => property.Value.GetInt64()));
             await File.WriteAllTextAsync(Path.Combine(reportDirectory, "defective-to-corrected-compare.cli.json"),
-                compareMachine.StandardOutput, TestContext.Current.CancellationToken);
+                compareMachine.StandardOutput, DemoScenarioExecutionContext.CurrentCancellationToken);
             cliReportingStage.AddArtifacts(6);
             cliReportingStage.Dispose();
             persistenceAndReportStopwatch.Stop();
             var performanceRun = performanceRecorder.Complete();
             var journalValidationStages = performanceRun.Stages.Where(stage =>
                 stage.Kind == PerformanceStageKind.Verification && stage.Name == "projection journal validation");
-            Assert.NotEmpty(journalValidationStages);
+            ScenarioInvariant.NotEmpty(journalValidationStages);
             foreach (var stage in journalValidationStages)
             {
-                var workspaceAppend = Assert.Single(stage.Measurements,
+                var workspaceAppend = ScenarioInvariant.Single(stage.Measurements,
                     measurement => measurement.Name == "workspaceAppendElapsedMicroseconds");
-                var ledgerAppend = Assert.Single(stage.Measurements,
+                var ledgerAppend = ScenarioInvariant.Single(stage.Measurements,
                     measurement => measurement.Name == "ledgerAppendElapsedMicroseconds");
-                var journalReadAndValidation = Assert.Single(stage.Measurements,
+                var journalReadAndValidation = ScenarioInvariant.Single(stage.Measurements,
                     measurement => measurement.Name == "journalReadAndValidationElapsedMicroseconds");
-                Assert.All([workspaceAppend, ledgerAppend, journalReadAndValidation], measurement =>
-                    Assert.Equal("microseconds", measurement.Unit));
-                Assert.InRange(workspaceAppend.Value + ledgerAppend.Value + journalReadAndValidation.Value,
+                ScenarioInvariant.All([workspaceAppend, ledgerAppend, journalReadAndValidation], measurement =>
+                    ScenarioInvariant.Equal("microseconds", measurement.Unit));
+                ScenarioInvariant.InRange(workspaceAppend.Value + ledgerAppend.Value + journalReadAndValidation.Value,
                     0, stage.ElapsedMicroseconds);
             }
             var orderedArtifactQueryStages = performanceRun.Stages.Where(stage =>
                 stage.Kind == PerformanceStageKind.Verification && stage.Name.StartsWith(
                     "SQLite ordered ", StringComparison.Ordinal)).ToArray();
-            Assert.NotEmpty(orderedArtifactQueryStages);
-            Assert.All(orderedArtifactQueryStages, stage =>
+            ScenarioInvariant.NotEmpty(orderedArtifactQueryStages);
+            ScenarioInvariant.All(orderedArtifactQueryStages, stage =>
             {
-                Assert.Equal(1, Assert.Single(stage.Measurements,
+                ScenarioInvariant.Equal(1, ScenarioInvariant.Single(stage.Measurements,
                     measurement => measurement.Name == "queryExecutions").Value);
-                Assert.Equal((double)stage.ArtifactCount, Assert.Single(stage.Measurements,
+                ScenarioInvariant.Equal((double)stage.ArtifactCount, ScenarioInvariant.Single(stage.Measurements,
                     measurement => measurement.Name == "rowsReturned").Value);
             });
             var streamedReadCategories = new[]
@@ -536,12 +570,12 @@ public sealed class PensionExternalCorpusVerificationTests
             foreach (var category in streamedReadCategories)
             {
                 var stages = performanceRun.Stages.Where(stage => stage.Name == category).ToArray();
-                Assert.NotEmpty(stages);
-                Assert.All(stages, stage =>
+                ScenarioInvariant.NotEmpty(stages);
+                ScenarioInvariant.All(stages, stage =>
                 {
-                    Assert.Equal(1, Assert.Single(stage.Measurements,
+                    ScenarioInvariant.Equal(1, ScenarioInvariant.Single(stage.Measurements,
                         measurement => measurement.Name == "queryExecutions").Value);
-                    Assert.Equal((double)stage.ArtifactCount, Assert.Single(stage.Measurements,
+                    ScenarioInvariant.Equal((double)stage.ArtifactCount, ScenarioInvariant.Single(stage.Measurements,
                         measurement => measurement.Name == "recordsReturned").Value);
                 });
             }
@@ -553,17 +587,17 @@ public sealed class PensionExternalCorpusVerificationTests
             foreach (var category in ledgerWriteCategories)
             {
                 var stages = performanceRun.Stages.Where(stage => stage.Name == category).ToArray();
-                Assert.NotEmpty(stages);
-                Assert.All(stages, stage => Assert.Equal((double)stage.ArtifactCount,
-                    Assert.Single(stage.Measurements,
+                ScenarioInvariant.NotEmpty(stages);
+                ScenarioInvariant.All(stages, stage => ScenarioInvariant.Equal((double)stage.ArtifactCount,
+                    ScenarioInvariant.Single(stage.Measurements,
                         measurement => measurement.Name == "ledgerAppendOperations").Value));
             }
             var performanceJson = PerformanceReportBuilder.ToJson(performanceRun);
             var performanceText = PerformanceReportBuilder.ToHumanReadable(performanceRun);
             await File.WriteAllTextAsync(Path.Combine(directory, "performance-run.json"), performanceJson,
-                TestContext.Current.CancellationToken);
+                DemoScenarioExecutionContext.CurrentCancellationToken);
             await File.WriteAllTextAsync(Path.Combine(directory, "performance-run.txt"), performanceText,
-                TestContext.Current.CancellationToken);
+                DemoScenarioExecutionContext.CurrentCancellationToken);
             Console.WriteLine(performanceText);
 
             var physicalCounts = sourceData.GroupBy(record => record.Kind)
@@ -633,17 +667,18 @@ public sealed class PensionExternalCorpusVerificationTests
                 correctedDryRunFingerprint = correctedReport.DryRunFingerprint,
                 defectiveDryRunFingerprint = defectiveReport.DryRunFingerprint
             };
-            Assert.Equal("PASSED", demoSummary.falseReverseVerificationOutcome);
-            Assert.Equal("NOT QUALIFIED", demoSummary.falseReverseQualification);
-            Assert.Equal(2, demoSummary.falseReverseRejectedEdges);
-            Assert.Equal(0L, demoSummary.falseReverseVerificationFailures);
-            Assert.Equal(2L, demoSummary.falseReverseBusinessDiscrepancies);
+            ScenarioInvariant.Equal("PASSED", demoSummary.falseReverseVerificationOutcome);
+            ScenarioInvariant.Equal("NOT QUALIFIED", demoSummary.falseReverseQualification);
+            ScenarioInvariant.Equal(2, demoSummary.falseReverseRejectedEdges);
+            ScenarioInvariant.Equal(0L, demoSummary.falseReverseVerificationFailures);
+            ScenarioInvariant.Equal(2L, demoSummary.falseReverseBusinessDiscrepancies);
             await File.WriteAllTextAsync(Path.Combine(directory, "demo-summary.json"),
                 JsonSerializer.Serialize(demoSummary, DemoJsonOptions),
-                TestContext.Current.CancellationToken);
+                DemoScenarioExecutionContext.CurrentCancellationToken);
             Console.WriteLine($"INTEGRATED_RUN_DIRECTORY={directory}");
             Console.WriteLine($"DEFECTIVE_DRY_RUN_ID={defectiveReport.DryRunId}");
             Console.WriteLine($"CORRECTED_DRY_RUN_ID={correctedReport.DryRunId}");
+            return DemoScenarioExecutionResult.Create(demoSummary, performanceText);
         }
         finally
         {
@@ -651,17 +686,6 @@ public sealed class PensionExternalCorpusVerificationTests
             if (deleteRunDirectory && Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
         }
     }
-    private static string FindRepositoryRoot(string startDirectory)
-    {
-        var demoRoot = Environment.GetEnvironmentVariable("PROOFSHIFT_DEMO_REPOSITORY_ROOT");
-        if (!string.IsNullOrWhiteSpace(demoRoot) &&
-            File.Exists(Path.Combine(demoRoot, "scenarios", "pension-modernization", "ps010b", "proofshift.yaml")))
-            return Path.GetFullPath(demoRoot);
-        for (var directory = new DirectoryInfo(startDirectory); directory is not null; directory = directory.Parent)
-            if (File.Exists(Path.Combine(directory.FullName, "ProofShift.sln"))) return directory.FullName;
-        throw new DirectoryNotFoundException("ProofShift repository root could not be located from the test output directory.");
-    }
-
     private static ScenarioGraph ReviewedScenario(MigrationGraph graph)
     {
         var sourceNodes = Enum.GetValues<PensionRecordKind>().ToDictionary(kind => kind,
@@ -691,7 +715,7 @@ public sealed class PensionExternalCorpusVerificationTests
             ?? throw new InvalidOperationException("ProofShift CLI process could not be started.");
         var standardOutput = process.StandardOutput.ReadToEndAsync();
         var standardError = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
         return new CliResult(process.ExitCode, await standardOutput, await standardError);
     }
 
@@ -741,7 +765,7 @@ public sealed class PensionExternalCorpusVerificationTests
                     new KeyValuePair<string, string>("delimiter", ";")], SourceIdentityFields(kind))
                 : new ArtifactSelector("table", [new KeyValuePair<string, string>("schema", "dbo"),
                     new KeyValuePair<string, string>("table", SourceTableName(kind))], SourceIdentityFields(kind));
-            sourceNodes.Add(kind, new MigrationNode(Id(sourceName), sourceName, MigrationNodeType.Source,
+            sourceNodes.Add(kind, new MigrationNode(NodeId(sourceName), sourceName, MigrationNodeType.Source,
                 semanticTypes[kind], sourceSystemId, new StorageEndpointId(SourceEndpoint(kind)),
                 sourceSelector));
         }
@@ -761,10 +785,10 @@ public sealed class PensionExternalCorpusVerificationTests
             var semanticType = kind == PensionRecordKind.Document ? "Pension.DocumentPayload" : "Pension.HistoricalExportPayload";
             var sourceName = $"source-{fileKind}-files";
             var targetName = $"target-{fileKind}-files";
-            fileSourceNodes.Add(kind, new MigrationNode(Id(sourceName), sourceName, MigrationNodeType.Source,
+            fileSourceNodes.Add(kind, new MigrationNode(NodeId(sourceName), sourceName, MigrationNodeType.Source,
                 semanticType, sourceSystemId, new StorageEndpointId("pension-source-files"),
                 new ArtifactSelector("file-pattern", [new KeyValuePair<string, string>("pattern", FilePattern(kind))], ["relativePath"])));
-            fileTargetNodes.Add(kind, new MigrationNode(Id(targetName), targetName, MigrationNodeType.Archive,
+            fileTargetNodes.Add(kind, new MigrationNode(NodeId(targetName), targetName, MigrationNodeType.Archive,
                 semanticType, targetSystemId, new StorageEndpointId("external-files"),
                 new ArtifactSelector("file-pattern", [new KeyValuePair<string, string>("pathField", "relativePath")], ["relativePath"])));
         }
@@ -792,7 +816,7 @@ public sealed class PensionExternalCorpusVerificationTests
         var names = nodes.ToDictionary(node => node.Id, node => node.Name);
         var canonical = GraphCanonicalizer.Canonicalize(1, nodes, edges, names);
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
-        return new ScenarioGraph(new MigrationGraph(new MigrationGraphId(Id("pension-fast-graph").Value), nodes, edges, hash,
+        return new ScenarioGraph(new MigrationGraph(new MigrationGraphId(NodeId("pension-fast-graph").Value), nodes, edges, hash,
             GraphCanonicalizer.FormatVersion), sourceNodes, targetNodes, fileSourceNodes, fileTargetNodes);
     }
 
@@ -865,25 +889,6 @@ public sealed class PensionExternalCorpusVerificationTests
     private static TransformationStep Map(params (string Key, string Value)[] values) =>
         new(TransformationStepType.CodeMap, "1", values.Select(pair => new KeyValuePair<string, string>(pair.Key, pair.Value)));
 
-    private static VerificationRuleDefinition[] CreateRules()
-    {
-        var definitions = PensionSemanticRuleTests.RuleDefinitions();
-        return definitions.Select(definition => definition.Id.Value switch
-        {
-            "member-status" => new VerificationRuleDefinition(definition.Id, definition.Type, definition.Version, definition.Severity,
-                definition.Options.Where(pair => pair.Key is not ("targetNode" or "semanticType"))
-                    .Append(new KeyValuePair<string, string>("targetNode", "target-member-status"))
-                    .Append(new KeyValuePair<string, string>("semanticType", "Pension.MemberStatus"))),
-            "employment-timeline" => new VerificationRuleDefinition(definition.Id, definition.Type, definition.Version, definition.Severity,
-                definition.Options.Where(pair => pair.Key is not ("sourceMemberField" or "sourceStartField" or "sourceEndField" or "sourceStatusField"))
-                    .Append(new KeyValuePair<string, string>("sourceMemberField", "MEMBER_ID"))
-                    .Append(new KeyValuePair<string, string>("sourceStartField", "PERIOD_FROM"))
-                    .Append(new KeyValuePair<string, string>("sourceEndField", "PERIOD_TO"))
-                    .Append(new KeyValuePair<string, string>("sourceStatusField", "EMPLOYMENT_STATUS"))),
-            _ => definition
-        }).ToArray();
-    }
-
     private static async Task<ExternalVerificationResult> VerifyExternalAsync(VerificationService service,
         LoadedProjectConfiguration configuration, ScenarioGraph scenario, SnapshotCaptureResult checkpoint,
         PensionSyntheticRecord[] targetData, VerificationRuleSet rules,
@@ -898,7 +903,7 @@ public sealed class PensionExternalCorpusVerificationTests
             var targetRecords = ToTargetRecords(targetData, scenario);
             await LoadExternalTargetAsync(postgresContainer, observationRunId, targetRecords);
             await LoadExternalFilesystemTargetAsync(configuration, scenario, contextFactory, fileConnector,
-                targetData, observationRunId, TestContext.Current.CancellationToken);
+                targetData, observationRunId, DemoScenarioExecutionContext.CurrentCancellationToken);
             fixtureLoadStage.AddArtifacts(targetData.Length);
         }
         var runtimes = scenario.TargetNodes.Values.Select(node => new VerificationTargetRuntime(node.Name, connector,
@@ -910,10 +915,10 @@ public sealed class PensionExternalCorpusVerificationTests
         {
             var node = scenario.Graph.Nodes.Single(item => item.Name == runtime.NodeKey);
             await foreach (var record in runtime.Connector.ObserveAsync(new TargetObservationRequest(runtime.Context, node.Selector, new ReadOptions()),
-                TestContext.Current.CancellationToken).WithCancellation(TestContext.Current.CancellationToken).ConfigureAwait(false))
+                DemoScenarioExecutionContext.CurrentCancellationToken).WithCancellation(DemoScenarioExecutionContext.CurrentCancellationToken).ConfigureAwait(false))
             {
                 foreach (var identityField in node.Selector.IdentityFields)
-                    Assert.True(record.Values.TryGetValue(identityField, out var value) && value is not NullValue,
+                    ScenarioInvariant.True(record.Values.TryGetValue(identityField, out var value) && value is not NullValue,
                         $"External target node '{node.Name}' has no value for identity field '{identityField}'. Fields: {string.Join(',', record.Values.Keys)}");
             }
         }
@@ -928,7 +933,7 @@ public sealed class PensionExternalCorpusVerificationTests
             }), DateTimeOffset.UnixEpoch);
         return await service.VerifyExternalTargetAsync(configuration, scenario.Graph, observation, rules,
             Path.Combine(directory, $"working-{observationId}"), "0.9-test", runtimes, performanceRecorder,
-            TestContext.Current.CancellationToken);
+            DemoScenarioExecutionContext.CurrentCancellationToken);
     }
 
     private static async Task LoadExternalFilesystemTargetAsync(LoadedProjectConfiguration configuration,
@@ -975,7 +980,7 @@ public sealed class PensionExternalCorpusVerificationTests
                 await csv.WriteLineAsync(string.Join(';', mappings.Values.Select(EscapeCsv))).ConfigureAwait(false);
                 foreach (var record in records.Where(record => record.Kind == kind))
                 {
-                    TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+                    DemoScenarioExecutionContext.CurrentCancellationToken.ThrowIfCancellationRequested();
                     await csv.WriteLineAsync(string.Join(';', mappings.Keys.Select(field =>
                         EscapeCsv(DatabaseText(record.Values[field]))))).ConfigureAwait(false);
                     var relativePath = ((StringValue)record.Values["relative_path"]).Value;
@@ -983,8 +988,8 @@ public sealed class PensionExternalCorpusVerificationTests
                     Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
                     var bytes = SyntheticPayload(record);
                     var expectedHash = ((StringValue)record.Values["content_hash"]).Value;
-                    Assert.Equal(expectedHash, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
-                    await File.WriteAllBytesAsync(fullPath, bytes, TestContext.Current.CancellationToken);
+                    ScenarioInvariant.Equal(expectedHash, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
+                    await File.WriteAllBytesAsync(fullPath, bytes, DemoScenarioExecutionContext.CurrentCancellationToken);
                     File.SetLastWriteTimeUtc(fullPath, stableModifiedAt);
                 }
             }
@@ -1019,7 +1024,7 @@ public sealed class PensionExternalCorpusVerificationTests
     {
         var recordsByNode = ToTargetRecords(targetData, scenario);
         await using var connection = new NpgsqlConnection(container.GetConnectionString());
-        await connection.OpenAsync(TestContext.Current.CancellationToken);
+        await connection.OpenAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
         foreach (var node in scenario.TargetNodes.Values.OrderBy(node => node.Name, StringComparer.Ordinal))
         {
             var records = recordsByNode[node.Name];
@@ -1033,7 +1038,7 @@ public sealed class PensionExternalCorpusVerificationTests
             });
             await using var create = connection.CreateCommand();
             create.CommandText = $"CREATE TABLE public.{QuoteIdentifier(TableName(node.Name))} ({string.Join(", ", definitions)})";
-            await create.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+            await create.ExecuteNonQueryAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
         }
     }
 
@@ -1062,20 +1067,20 @@ public sealed class PensionExternalCorpusVerificationTests
             VerificationExpectedWorksetScope? expectedWorksets = null)
     {
         await using var checkpoint = await checkpointStore.OpenCompleteAsync(
-            capture.Id.Value.ToString("N", System.Globalization.CultureInfo.InvariantCulture), TestContext.Current.CancellationToken);
+            capture.Id.Value.ToString("N", System.Globalization.CultureInfo.InvariantCulture), DemoScenarioExecutionContext.CurrentCancellationToken);
         var projection = await new ShadowProjectionService(sourceConnectors, targetConnectors, contextFactory,
             new CheckpointSourceArtifactStreamProvider(checkpoint)).ProjectAsync(configuration, scenario.Graph,
-                projectDirectory, performanceRecorder, TestContext.Current.CancellationToken);
-        Assert.Equal(ProjectionStatus.Succeeded, projection.Status);
+                projectDirectory, performanceRecorder, DemoScenarioExecutionContext.CurrentCancellationToken);
+        ScenarioInvariant.Equal(ProjectionStatus.Succeeded, projection.Status);
         var manifestHash = await ProjectionRunManifestStore.WriteAsync(projectDirectory, projection,
-            TestContext.Current.CancellationToken);
+            DemoScenarioExecutionContext.CurrentCancellationToken);
         var manifest = await ProjectionRunManifestStore.ReadAsync(projectDirectory, projection.Id,
-            TestContext.Current.CancellationToken);
+            DemoScenarioExecutionContext.CurrentCancellationToken);
         var binding = new ProjectionVerificationBinding(projection.Id, projection.ConfigurationHash, projection.GraphHash,
             capture.Id, capture.Checkpoint!.ManifestHash!, capture.Checkpoint.SourceFingerprint!, projection.Fingerprint!,
             projection.FingerprintVersion, projection.SourceArtifactCount, projection.TargetArtifactCount, "succeeded",
             manifestHash, projection.JournalPath, projection.ConnectorVersions);
-        Assert.Equal(manifestHash, manifest.ManifestHash);
+        ScenarioInvariant.Equal(manifestHash, manifest.ManifestHash);
 
         var targets = scenario.TargetNodes.Values.Concat(scenario.FileTargetNodes.Values).Select(node => new VerificationTargetRuntime(node.Name,
             targetConnectors.Resolve(configuration.Systems.Single(system => system.Id == node.SystemId)
@@ -1093,11 +1098,11 @@ public sealed class PensionExternalCorpusVerificationTests
         var verification = await new VerificationService(checkpointStore, expectedWorksets, partitionCount,
             GetVerificationExecutionMode(), GetMaxPartitionWorkers()).VerifyAsync(configuration, scenario.Graph, binding,
             rules, projectDirectory, Path.Combine(projectDirectory, ".proofshift", "temporary", runName), "0.9-test",
-            targets, performanceRecorder, TestContext.Current.CancellationToken);
+            targets, performanceRecorder, DemoScenarioExecutionContext.CurrentCancellationToken);
         var recovery = await new RecoveryService(checkpointStore,
             new RecoveryCompensatorRegistry([new ShadowBaselineRestoreCompensator()]))
             .AssessAndRehearseAsync(configuration, scenario.Graph, binding, verification, new EffectiveRecoveryPolicy(),
-                targets, projectDirectory, performanceRecorder, TestContext.Current.CancellationToken);
+                targets, projectDirectory, performanceRecorder, DemoScenarioExecutionContext.CurrentCancellationToken);
         return (projection, verification, recovery);
     }
 
@@ -1107,7 +1112,7 @@ public sealed class PensionExternalCorpusVerificationTests
         var schema = $"proofshift_shadow_{runId.Value:N}";
         var recordsByNode = ToTargetRecords(targetData, scenario);
         await using var connection = new NpgsqlConnection(container.GetConnectionString());
-        await connection.OpenAsync(TestContext.Current.CancellationToken);
+        await connection.OpenAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
         foreach (var (nodeName, records) in recordsByNode.OrderBy(pair => pair.Key, StringComparer.Ordinal))
         {
             var columns = records.SelectMany(record => record.Values.Keys).Distinct(StringComparer.Ordinal)
@@ -1115,22 +1120,22 @@ public sealed class PensionExternalCorpusVerificationTests
             await using (var replace = connection.CreateCommand())
             {
                 replace.CommandText = $"DROP TABLE \"{schema}\".{QuoteIdentifier(TableName(nodeName))}; CREATE TABLE \"{schema}\".{QuoteIdentifier(TableName(nodeName))} ({string.Join(", ", columns.Select(column => $"{QuoteIdentifier(column)} text"))})";
-                await replace.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+                await replace.ExecuteNonQueryAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
             }
             var copy = $"COPY \"{schema}\".{QuoteIdentifier(TableName(nodeName))} ({string.Join(", ", columns.Select(QuoteIdentifier))}) FROM STDIN (FORMAT BINARY)";
-            await using var importer = await connection.BeginBinaryImportAsync(copy, TestContext.Current.CancellationToken);
+            await using var importer = await connection.BeginBinaryImportAsync(copy, DemoScenarioExecutionContext.CurrentCancellationToken);
             foreach (var record in records)
             {
-                await importer.StartRowAsync(TestContext.Current.CancellationToken);
+                await importer.StartRowAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
                 foreach (var column in columns)
                 {
                     if (!record.Values.TryGetValue(column, out var value) || value is NullValue)
-                        await importer.WriteNullAsync(TestContext.Current.CancellationToken);
+                        await importer.WriteNullAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
                     else
-                        await importer.WriteAsync(DatabaseText(value), NpgsqlTypes.NpgsqlDbType.Text, TestContext.Current.CancellationToken);
+                        await importer.WriteAsync(DatabaseText(value), NpgsqlTypes.NpgsqlDbType.Text, DemoScenarioExecutionContext.CurrentCancellationToken);
                 }
             }
-            await importer.CompleteAsync(TestContext.Current.CancellationToken);
+            await importer.CompleteAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
         }
     }
 
@@ -1141,7 +1146,7 @@ public sealed class PensionExternalCorpusVerificationTests
         var runRoot = Path.Combine(targetFilesRoot, runId.Value.ToString("N", System.Globalization.CultureInfo.InvariantCulture));
         var indexPath = Path.Combine(runRoot, ".proofshift-internal", "identities.sqlite");
         await using var connection = new SqliteConnection($"Data Source={indexPath};Mode=ReadWrite;Cache=Private;Pooling=False");
-        await connection.OpenAsync(TestContext.Current.CancellationToken);
+        await connection.OpenAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
         foreach (var kind in scenario.FileTargetNodes.Keys)
         {
             var node = scenario.FileTargetNodes[kind];
@@ -1155,7 +1160,7 @@ public sealed class PensionExternalCorpusVerificationTests
                 remove.CommandText = "DELETE FROM identities WHERE node_key = $node AND logical_path = $path";
                 remove.Parameters.AddWithValue("$node", node.Name);
                 remove.Parameters.AddWithValue("$path", path);
-                Assert.Equal(1, await remove.ExecuteNonQueryAsync(TestContext.Current.CancellationToken));
+                ScenarioInvariant.Equal(1, await remove.ExecuteNonQueryAsync(DemoScenarioExecutionContext.CurrentCancellationToken));
                 var fullPath = Path.Combine(runRoot, node.Name, path.Replace('/', Path.DirectorySeparatorChar));
                 File.Delete(fullPath);
             }
@@ -1166,19 +1171,19 @@ public sealed class PensionExternalCorpusVerificationTests
         FileSystemEvidenceStore evidenceStore, FileSystemRecoveryArtifactStore recoveryStore,
         VerificationResult verification, RecoveryRunResult recovery, string projectName)
     {
-        Assert.True(await evidenceStore.VerifyIntegrityAsync(verification.Run.Id, TestContext.Current.CancellationToken));
-        Assert.True(await recoveryStore.VerifyIntegrityAsync(recovery.Id, TestContext.Current.CancellationToken));
-        var summary = await recoveryStore.ReadSummaryAsync(recovery.Id, TestContext.Current.CancellationToken);
-        var manifest = await evidenceStore.ReadManifestAsync(verification.Run.Id, TestContext.Current.CancellationToken);
+        ScenarioInvariant.True(await evidenceStore.VerifyIntegrityAsync(verification.Run.Id, DemoScenarioExecutionContext.CurrentCancellationToken));
+        ScenarioInvariant.True(await recoveryStore.VerifyIntegrityAsync(recovery.Id, DemoScenarioExecutionContext.CurrentCancellationToken));
+        var summary = await recoveryStore.ReadSummaryAsync(recovery.Id, DemoScenarioExecutionContext.CurrentCancellationToken);
+        var manifest = await evidenceStore.ReadManifestAsync(verification.Run.Id, DemoScenarioExecutionContext.CurrentCancellationToken);
         var report = await PensionAssuranceReportBuilder.BuildAsync(projectName, recovery.Id, manifest,
-            evidenceStore.ReadRecordsAsync(verification.Run.Id, TestContext.Current.CancellationToken), summary,
-            TestContext.Current.CancellationToken);
+            evidenceStore.ReadRecordsAsync(verification.Run.Id, DemoScenarioExecutionContext.CurrentCancellationToken), summary,
+            DemoScenarioExecutionContext.CurrentCancellationToken);
         var reportDirectory = Path.Combine(projectDirectory, ".proofshift", "reports");
         Directory.CreateDirectory(reportDirectory);
         await File.WriteAllTextAsync(Path.Combine(reportDirectory, $"{report.DryRunId}.json"),
-            JsonSerializer.Serialize(report), TestContext.Current.CancellationToken);
+            JsonSerializer.Serialize(report), DemoScenarioExecutionContext.CurrentCancellationToken);
         await File.WriteAllTextAsync(Path.Combine(reportDirectory, $"{report.DryRunId}.txt"),
-            RenderPensionReport(report), TestContext.Current.CancellationToken);
+            RenderPensionReport(report), DemoScenarioExecutionContext.CurrentCancellationToken);
         return report;
     }
 
@@ -1206,11 +1211,11 @@ public sealed class PensionExternalCorpusVerificationTests
     {
         var schema = $"proofshift_shadow_{observationRunId.Value:N}";
         await using var connection = new NpgsqlConnection(container.GetConnectionString());
-        await connection.OpenAsync(TestContext.Current.CancellationToken);
+        await connection.OpenAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
         await using (var createSchema = connection.CreateCommand())
         {
             createSchema.CommandText = $"CREATE SCHEMA \"{schema}\"";
-            await createSchema.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+            await createSchema.ExecuteNonQueryAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
         }
         foreach (var (nodeName, records) in recordsByNode.OrderBy(pair => pair.Key, StringComparer.Ordinal))
         {
@@ -1220,22 +1225,22 @@ public sealed class PensionExternalCorpusVerificationTests
             await using (var createTable = connection.CreateCommand())
             {
                 createTable.CommandText = $"CREATE TABLE \"{schema}\".\"{table}\" ({string.Join(", ", columns.Select(column => $"\"{column}\" text"))})";
-                await createTable.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+                await createTable.ExecuteNonQueryAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
             }
             var copy = $"COPY \"{schema}\".\"{table}\" ({string.Join(", ", columns.Select(column => $"\"{column}\""))}) FROM STDIN (FORMAT BINARY)";
-            await using var importer = await connection.BeginBinaryImportAsync(copy, TestContext.Current.CancellationToken);
+            await using var importer = await connection.BeginBinaryImportAsync(copy, DemoScenarioExecutionContext.CurrentCancellationToken);
             foreach (var record in records)
             {
-                await importer.StartRowAsync(TestContext.Current.CancellationToken);
+                await importer.StartRowAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
                 foreach (var column in columns)
                 {
                     if (!record.Values.TryGetValue(column, out var value) || value is NullValue)
-                        await importer.WriteNullAsync(TestContext.Current.CancellationToken);
+                        await importer.WriteNullAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
                     else
-                        await importer.WriteAsync(DatabaseText(value), NpgsqlTypes.NpgsqlDbType.Text, TestContext.Current.CancellationToken);
+                        await importer.WriteAsync(DatabaseText(value), NpgsqlTypes.NpgsqlDbType.Text, DemoScenarioExecutionContext.CurrentCancellationToken);
                 }
             }
-            await importer.CompleteAsync(TestContext.Current.CancellationToken);
+            await importer.CompleteAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
         }
     }
 
@@ -1300,7 +1305,7 @@ public sealed class PensionExternalCorpusVerificationTests
             foreach (var column in mappings.Values) table.Columns.Add(column, typeof(string));
             foreach (var record in batch)
             {
-                TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+                DemoScenarioExecutionContext.CurrentCancellationToken.ThrowIfCancellationRequested();
                 var row = table.NewRow();
                 foreach (var (sourceField, databaseColumn) in mappings)
                     row[databaseColumn] = record.Values[sourceField] is NullValue
@@ -1316,7 +1321,7 @@ public sealed class PensionExternalCorpusVerificationTests
                 BulkCopyTimeout = 0
             };
             foreach (var column in mappings.Values) bulkCopy.ColumnMappings.Add(column, column);
-            await bulkCopy.WriteToServerAsync(table, TestContext.Current.CancellationToken);
+            await bulkCopy.WriteToServerAsync(table, DemoScenarioExecutionContext.CurrentCancellationToken);
         }
     }
 
@@ -1386,7 +1391,7 @@ public sealed class PensionExternalCorpusVerificationTests
     };
 
     private static MigrationNode MakeTargetNode(string name, string semantic, SystemId system, StorageEndpointId endpoint,
-        IEnumerable<string> identities) => new(Id(name), name, MigrationNodeType.Target, semantic, system, endpoint,
+        IEnumerable<string> identities) => new(NodeId(name), name, MigrationNodeType.Target, semantic, system, endpoint,
         new ArtifactSelector("table", [new KeyValuePair<string, string>("name", $"public.{TableName(name)}")], identities));
 
     private static string TableName(string nodeName) => nodeName switch
@@ -1473,7 +1478,7 @@ public sealed class PensionExternalCorpusVerificationTests
         ["falseReversibleTransformations"] = 2
     };
 
-    private static MigrationNodeId Id(string name) => new(new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(name)).AsSpan(0, 16)));
+    private static MigrationNodeId NodeId(string name) => new(new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(name)).AsSpan(0, 16)));
     private static MigrationEdgeId EdgeId(string name) => new(new Guid(SHA256.HashData(Encoding.UTF8.GetBytes($"edge:{name}")).AsSpan(0, 16)));
 
     private sealed record ScenarioGraph(MigrationGraph Graph, IReadOnlyDictionary<PensionRecordKind, MigrationNode> SourceNodes,

@@ -365,7 +365,7 @@ internal sealed class DemoScenarioCatalog
         RequireText(stage.Name, "stage.name", manifestPath);
         RequireText(stage.Phase, "stage.phase", manifestPath);
         if (stage.Arguments.Count == 0) throw new DemoManifestException($"Stage '{stage.Id}' must declare a runner command.");
-        if (stage.Runner is not ("proofshift-cli" or "dotnet-test" or "dotnet-test-module"))
+        if (stage.Runner is not ("proofshift-cli" or "demo-runner"))
             throw new DemoManifestException($"Stage '{stage.Id}' has an unsupported runner.");
         if (stage.Runner == "proofshift-cli" && stage.Arguments[0] is not ("validate" or "plan" or "inspect" or "snapshot" or "project" or "verify" or
             "evidence" or "recovery" or "report" or "compare" or "dry-run" or "packs" or "rules" or "capabilities" or
@@ -374,38 +374,21 @@ internal sealed class DemoScenarioCatalog
         if (stage.Runner == "proofshift-cli" && stage.Arguments[0] == "demo" && (stage.Arguments.Count < 2 ||
             stage.Arguments[1] is not ("generate" or "benchmark")))
             throw new DemoManifestException($"Stage '{stage.Id}' cannot recursively invoke a demo lifecycle command.");
-        if (stage.Runner == "dotnet-test")
+        if (stage.Runner == "demo-runner")
         {
-            var projectArgumentIndex = stage.Arguments.ToList().IndexOf("--project");
-            if (projectArgumentIndex < 0 || projectArgumentIndex + 1 >= stage.Arguments.Count)
-                throw new DemoManifestException($"Test stage '{stage.Id}' must specify --project <repository-relative-test-project>.");
-            var projectPath = stage.Arguments[projectArgumentIndex + 1];
-            if (projectPath.Contains("{{", StringComparison.Ordinal) || Path.IsPathRooted(projectPath))
-                throw new DemoManifestException($"Test stage '{stage.Id}' project path must be a literal repository-relative path.");
-            var resolvedProject = DemoScenarioPaths.EnsureNoReparsePoints(contentRoot, projectPath, "Test project");
-            if (!File.Exists(resolvedProject) || !resolvedProject.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) ||
-                !projectPath.Contains(".Tests", StringComparison.OrdinalIgnoreCase))
-                throw new DemoManifestException($"Test stage '{stage.Id}' must target an in-repository test project.");
-            if (stage.Arguments.Any(argument => argument is "--settings" or "--logger" or "--results-directory"))
-                throw new DemoManifestException($"Test stage '{stage.Id}' cannot override runner output/settings paths.");
-            if (!stage.Arguments.Contains("--filter-class", StringComparer.Ordinal))
-                throw new DemoManifestException($"Test stage '{stage.Id}' must use --filter-class to keep fixture execution bounded.");
+            if (stage.Arguments.Count != 6 || stage.Arguments[0] != "run" ||
+                stage.Arguments[2] != "--workspace" || stage.Arguments[3] != "{{workspace}}" ||
+                stage.Arguments[4] != "--result-file" || stage.Arguments[5] != stage.ResultFile)
+                throw new DemoManifestException(
+                    $"Demo runner stage '{stage.Id}' must use: run <scenario-id> --workspace {{workspace}} --result-file <resultFile>.");
+            if (stage.Arguments[1].Length == 0 || stage.Arguments[1].Any(character =>
+                    !(character is >= 'a' and <= 'z' or >= '0' and <= '9' or '-')))
+                throw new DemoManifestException($"Demo runner stage '{stage.Id}' has an invalid scenario ID.");
+            if (string.IsNullOrWhiteSpace(stage.ResultFile) || Path.IsPathRooted(stage.ResultFile) ||
+                stage.ResultFile.Replace('\\', '/').Split('/').Any(segment => segment is "" or "." or ".."))
+                throw new DemoManifestException($"Demo runner stage '{stage.Id}' resultFile must be a safe workspace-relative path.");
             if (stage.OutputFile is null)
-                throw new DemoManifestException($"Test stage '{stage.Id}' must capture its runner output in outputFile.");
-        }
-        if (stage.Runner == "dotnet-test-module")
-        {
-            var modulePath = stage.Arguments[0];
-            if (modulePath.Contains("{{", StringComparison.Ordinal) || Path.IsPathRooted(modulePath))
-                throw new DemoManifestException($"Test stage '{stage.Id}' module path must be a literal package-relative path.");
-            var resolvedModule = DemoScenarioPaths.EnsureNoReparsePoints(contentRoot, modulePath, "Test module");
-            if (!File.Exists(resolvedModule) || !resolvedModule.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
-                throw new DemoManifestException($"Test stage '{stage.Id}' must target an in-package test module DLL.");
-            if (!stage.Arguments.Contains("-class", StringComparer.Ordinal) &&
-                !stage.Arguments.Contains("-method", StringComparer.Ordinal))
-                throw new DemoManifestException($"Test module stage '{stage.Id}' must use -class or -method to keep fixture execution bounded.");
-            if (stage.OutputFile is null)
-                throw new DemoManifestException($"Test module stage '{stage.Id}' must capture its runner output in outputFile.");
+                throw new DemoManifestException($"Demo runner stage '{stage.Id}' must capture its runner output in outputFile.");
         }
         if (stage.WorkingDirectory is not ("repository" or "scenario" or "workspace") &&
             !stage.WorkingDirectory.StartsWith("workspace/", StringComparison.Ordinal))

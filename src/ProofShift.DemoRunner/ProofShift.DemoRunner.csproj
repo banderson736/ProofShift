@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>ProofShift.DemoRunner</RootNamespace>
+    <AssemblyName>ProofShift.DemoRunner</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ProofShift.DemoContracts/ProofShift.DemoContracts.csproj" />
+    <ProjectReference Include="../ProofShift.DemoScenarios/ProofShift.DemoScenarios.csproj" />
+  </ItemGroup>
+</Project>

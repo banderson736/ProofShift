@@ -2,7 +2,7 @@
 
 ## Status
 
-In Progress. This slice makes the ordinary persisted `report` and `compare` commands domain-pack-neutral. It does not change accepted Verification, Evidence, Recovery, checkpoint, graph, projection, or domain semantics. The milestone is ready for review only after its implementation, tests, documentation, and candidate CI evidence are complete; implementation must not mark it Accepted.
+Accepted. Candidate `1837cad9ea05905dad491b3b0d54f0f7ba7cc852` passed GitHub Actions [run 40146586892](https://github.com/banderson736/ProofShift/actions/runs/40146586892): 338 automated test results passed, 0 failed, 0 skipped; Windows package-only smoke and all five Ubuntu packaged demos passed. PR #5 merged the candidate to `main` as `de59d85cca3a5eca4d1b9e49db69a51a8aa42ed1`. This slice made ordinary persisted `report` and `compare` domain-pack-neutral without changing accepted Verification, Evidence, Recovery, checkpoint, graph, projection, or domain semantics.
 
 ## Objective and scope
 

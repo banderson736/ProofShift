@@ -74,7 +74,8 @@ function Write-ThirdPartyNotices {
 
     $projectPaths = @(
         "src/ProofShift.Cli/ProofShift.Cli.csproj",
-        "tests/ProofShift.EndToEnd.Tests/ProofShift.EndToEnd.Tests.csproj"
+        "src/ProofShift.DemoRunner/ProofShift.DemoRunner.csproj",
+        "src/ProofShift.DemoScenarios/ProofShift.DemoScenarios.csproj"
     )
     $packages = @{}
     foreach ($projectPath in $projectPaths) {
@@ -97,7 +98,7 @@ function Write-ThirdPartyNotices {
     $lines = [System.Collections.Generic.List[string]]::new()
     $lines.Add("# Third-Party Notices")
     $lines.Add("")
-    $lines.Add("This notice is generated from the resolved NuGet dependency graphs of the published CLI and the binary evaluation fixture module.")
+    $lines.Add("This notice is generated from the resolved NuGet dependency graphs of the published CLI and non-test DemoRunner.")
     $lines.Add("License metadata is reproduced as published by package owners; inclusion is not legal advice or a general redistribution determination.")
     $lines.Add("")
     $lines.Add("| Package | Version | NuGet license metadata | Upstream | Local license/notice files |")
@@ -141,42 +142,6 @@ function Write-ThirdPartyNotices {
         [Text.UTF8Encoding]::new($false))
 }
 
-function Convert-ManifestsToBinaryRunner {
-    param([string] $StageRoot)
-
-    $modulePath = "fixtures/ProofShift.EndToEnd.Tests.dll"
-    foreach ($manifestPath in Get-ChildItem (Join-Path $StageRoot "scenarios/demos") -Filter "scenario.json" -Recurse -File) {
-        $manifest = Get-Content -LiteralPath $manifestPath.FullName -Raw | ConvertFrom-Json
-        foreach ($stage in @($manifest.runStages) + @($manifest.resetStages)) {
-            if ($stage.runner -ne "dotnet-test") { continue }
-            $arguments = @($stage.arguments)
-            $filterIndex = [Array]::IndexOf([string[]] $arguments, "--filter-class")
-            if ($filterIndex -lt 0 -or $filterIndex + 1 -ge $arguments.Length) {
-                throw "Cannot package test stage '$($stage.id)' without a bounded class filter."
-            }
-            $className = $arguments[$filterIndex + 1]
-            $stage.runner = "dotnet-test-module"
-            if ($className -eq "ProofShift.EndToEnd.Tests.PensionExternalCorpusVerificationTests") {
-                $acceptedIndexPath = Join-Path $StageRoot $manifest.acceptanceReference.indexFile
-                $acceptedIndex = Get-Content -LiteralPath $acceptedIndexPath -Raw | ConvertFrom-Json
-                $acceptedScenario = @($acceptedIndex.scenarios | Where-Object scenarioId -eq $manifest.acceptanceReference.scenarioId)
-                if ($acceptedScenario.Count -ne 1 -or $acceptedScenario[0].fixture -notmatch '::(?<method>[A-Za-z0-9_]+)$') {
-                    throw "Accepted fixture method is unavailable for packaged scenario '$($manifest.id)'."
-                }
-                $methodName = "$className.$($Matches.method)"
-                $stage.arguments = @($modulePath, "-method", $methodName, "-parallelMode", "none")
-            }
-            else {
-                $stage.arguments = @($modulePath, "-class", $className, "-parallelMode", "none")
-            }
-        }
-        $existingRequiredFiles = @($manifest.requirements.requiredFiles | Where-Object { $_ -notmatch '^tests/.*[.]cs$' })
-        $manifest.requirements.requiredFiles = @($existingRequiredFiles + $modulePath | Select-Object -Unique)
-        $json = ConvertTo-Json -InputObject $manifest -Depth 100
-        [IO.File]::WriteAllText($manifestPath.FullName, $json, [Text.UTF8Encoding]::new($false))
-    }
-}
-
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $architecture = [string] [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
 if ([string]::IsNullOrWhiteSpace($architecture)) {
@@ -209,29 +174,17 @@ try {
     New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
     Push-Location $repositoryRoot
     try {
-        Invoke-DotNet @("restore", "tests/ProofShift.EndToEnd.Tests/ProofShift.EndToEnd.Tests.csproj")
-        Invoke-DotNet @("build", "tests/ProofShift.EndToEnd.Tests/ProofShift.EndToEnd.Tests.csproj",
-            "--configuration", "Release", "--no-restore", "-p:ContinuousIntegrationBuild=true")
+        Invoke-DotNet @("restore", "src/ProofShift.Cli/ProofShift.Cli.csproj")
+        Invoke-DotNet @("restore", "src/ProofShift.DemoRunner/ProofShift.DemoRunner.csproj")
 
         Invoke-DotNet @("publish", "src/ProofShift.Cli/ProofShift.Cli.csproj", "--configuration", "Release",
             "--no-restore", "--output", (Join-Path $packageRoot "app"), "-p:UseAppHost=false",
             "-p:DebugSymbols=false", "-p:DebugType=None", "-p:ContinuousIntegrationBuild=true")
 
-        $testOutput = Join-Path $repositoryRoot "tests/ProofShift.EndToEnd.Tests/bin/Release/net10.0"
-        if (-not (Test-Path -LiteralPath (Join-Path $testOutput "ProofShift.EndToEnd.Tests.dll"))) {
-            throw "The compiled EndToEnd MTP fixture module was not produced."
-        }
-        $fixtureOutput = Join-Path $packageRoot "fixtures"
-        New-Item -ItemType Directory -Path $fixtureOutput -Force | Out-Null
-        Get-ChildItem -LiteralPath $testOutput -Recurse -File | Where-Object {
-            $_.Extension -notin @(".pdb", ".xml", ".exe") -and $_.Name -ne "ProofShift.EndToEnd.Tests" -and
-                $_.Name -notlike "*.runtimeconfig.dev.json"
-        } | ForEach-Object {
-            $relative = Get-RelativePath $testOutput $_.FullName
-            $destination = Join-Path $fixtureOutput $relative
-            New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-            Copy-Item -LiteralPath $_.FullName -Destination $destination -Force
-        }
+        Invoke-DotNet @("publish", "src/ProofShift.DemoRunner/ProofShift.DemoRunner.csproj",
+            "--configuration", "Release", "--no-restore", "--output", (Join-Path $packageRoot "demo"),
+            "-p:UseAppHost=false", "-p:DebugSymbols=false", "-p:DebugType=None",
+            "-p:ContinuousIntegrationBuild=true")
     }
     finally {
         Pop-Location
@@ -250,7 +203,14 @@ try {
         Copy-RepositoryPath $relativePath $packageRoot
     }
 
-    Convert-ManifestsToBinaryRunner $packageRoot
+    $packagedGlobalJsonPath = Join-Path $packageRoot "global.json"
+    $sourceGlobalJson = Get-Content -LiteralPath $packagedGlobalJsonPath -Raw | ConvertFrom-Json
+    if ($null -eq $sourceGlobalJson.sdk) { throw "The repository global.json has no SDK configuration." }
+    $packagedGlobalJson = [ordered]@{ sdk = $sourceGlobalJson.sdk }
+    [IO.File]::WriteAllText($packagedGlobalJsonPath,
+        (ConvertTo-Json -InputObject $packagedGlobalJson -Depth 10),
+        [Text.UTF8Encoding]::new($false))
+
     Write-ThirdPartyNotices $packageRoot
 
     $forbiddenFiles = @(Get-ChildItem -LiteralPath $packageRoot -Recurse -File | Where-Object {
@@ -260,10 +220,17 @@ try {
         $paths = $forbiddenFiles | ForEach-Object { Get-RelativePath $packageRoot $_.FullName }
         throw "Package denylist violation: $($paths -join ', ')"
     }
+    $forbiddenTestFiles = @(Get-ChildItem -LiteralPath $packageRoot -Recurse -File | Where-Object {
+        $_.Name -match '^(ProofShift\.EndToEnd\.Tests|xunit|Microsoft\.Testing|Microsoft\.NET\.Test|testhost|testplatform)'
+    })
+    if ($forbiddenTestFiles.Count -gt 0) {
+        $paths = $forbiddenTestFiles | ForEach-Object { Get-RelativePath $packageRoot $_.FullName }
+        throw "Package test-runtime denylist violation: $($paths -join ', ')"
+    }
     $forbiddenDirectories = @(Get-ChildItem -LiteralPath $packageRoot -Recurse -Directory | Where-Object {
         $relative = Get-RelativePath $packageRoot $_.FullName
-        $nativeDriverBin = $relative -match '^(app|fixtures)[\\/]clidriver[\\/]bin$'
-        $_.Name -in @(".git", ".proofshift", "TestResults", "obj") -or $_.Name -eq "bin" -and -not $nativeDriverBin
+        $nativeDriverBin = $relative -match '^(app|demo)[\\/]clidriver[\\/]bin$'
+        $_.Name -in @(".git", ".proofshift", "TestResults", "obj", "fixtures") -or $_.Name -eq "bin" -and -not $nativeDriverBin
     })
     if ($forbiddenDirectories.Count -gt 0) {
         $paths = $forbiddenDirectories | ForEach-Object { Get-RelativePath $packageRoot $_.FullName }
@@ -297,9 +264,9 @@ try {
         sourceWorktreeClean = ($worktreeStatus.Count -eq 0)
         contentSha256 = $contentHash
         entryPoint = "dotnet app/ProofShift.Cli.dll"
-        fixtureRunner = "fixtures/ProofShift.EndToEnd.Tests.dll (xUnit v3 MTP)"
-        allowlist = @("app/*.dll and runtime assets", "fixtures/*.dll/.json and runtime assets", "scenarios/**", "docs/EVALUATION.md", "docs/DEMO_RUNBOOK.md", "docs/demo/DEMO_SCENARIO_MANIFEST.md", "docs/demo/CROSS_DOMAIN_DEMOS.md", "docs/PS0_10F_SCENARIO_INDEX.json", "LICENSE", "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-LICENSES/**", "global.json")
-        denylist = @("source code", "PDB/debug symbols", ".git", ".proofshift", "TestResults", "benchmark outputs", "vendor container images", "secrets", "local environment files")
+        scenarioRunner = "demo/ProofShift.DemoRunner.dll (non-test runtime)"
+        allowlist = @("app/*.dll and runtime assets", "demo/*.dll/.json and runtime assets", "scenarios/**", "docs/EVALUATION.md", "docs/DEMO_RUNBOOK.md", "docs/demo/DEMO_SCENARIO_MANIFEST.md", "docs/demo/CROSS_DOMAIN_DEMOS.md", "docs/PS0_10F_SCENARIO_INDEX.json", "LICENSE", "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-LICENSES/**", "global.json")
+        denylist = @("source code", "test assemblies and test-platform dependencies", "PDB/debug symbols", ".git", ".proofshift", "TestResults", "benchmark outputs", "vendor container images", "secrets", "local environment files")
     }
     $manifestJson = ConvertTo-Json -InputObject $packageManifest -Depth 20
     [IO.File]::WriteAllText((Join-Path $packageRoot "package-manifest.json"), $manifestJson, [Text.UTF8Encoding]::new($false))

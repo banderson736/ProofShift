@@ -207,11 +207,16 @@ Status: Accepted for PS-0.10G (October 24, 2026; exact candidate `d3529ccabe04eb
 Evaluator demos are discovered from strict, versioned manifests in the CLI/package layer. One generic catalog and runner handles list/describe/preflight/run/reset; ordered stages invoke ProofShift CLI commands without a shell. A stage may recognize an expected nonzero defective-verification or unsafe-Recovery result only when structured output is persisted and typed assertions pass. Manifest display, paths, stage presentation, and runtime values remain outside semantic project/graph/rule fingerprints. Run state is isolated by materializing the referenced project inside a scenario-owned workspace; reset requires a matching ownership marker and fails closed on reparse points. The runner is not a generic workflow engine or migration executor. See [ADR-0029](adr/0029-generic-demo-scenario-contract.md) and [Demo Scenario Manifest v1](demo/DEMO_SCENARIO_MANIFEST.md).
 
 ### D-039 - Generic persisted report context
-Status: Proposed for PS-0.11A
+Status: Accepted for PS-0.11A (October 24, 2026; candidate `1837cad9ea05905dad491b3b0d54f0f7ba7cc852`; run `40146586892`; merged as `de59d85cca3a5eca4d1b9e49db69a51a8aa42ed1`)
 
 Ordinary persisted reporting resolves exactly one configured pack/version and renders its pack-owned claim boundary from required metadata. Persisted Evidence context records the Verification provider versions used, outside semantic Evidence canonicalization; Recovery exposes already-persisted assessment and ledger bindings through a read-only summary. Reports validate persisted Evidence, Recovery, ledger, Projection, and current project context without rerunning Verification. Comparisons require the same project and exact pack while allowing historical configuration/graph changes to be attributed. See [ADR-0030](adr/0030-generic-persisted-report-context.md) and [PS-0.11A](PS0_11A_GENERIC_OPERATOR_REPORTING.md).
 
 ### D-040 - Pack-supplied business-discrepancy aggregation
-Status: Proposed for PS-0.11A
+Status: Accepted for PS-0.11A (October 24, 2026; candidate `1837cad9ea05905dad491b3b0d54f0f7ba7cc852`; run `40146586892`; merged as `de59d85cca3a5eca4d1b9e49db69a51a8aa42ed1`)
 
 Persisted reports retain the raw failed Verification Evidence count and derive `BusinessDiscrepancyCount` from required, deterministic pack metadata. Metadata can select all failed Evidence or a declared set of Evidence codes and can explicitly include false-Reverse Recovery edges. Generic Reporting applies this contract without concrete-pack branches. Pension metadata reuses its established business-defect Evidence-code set and includes false-Reverse edges; Utility, Justice, HCM, and FHIR count all failed Evidence. Evidence, Recovery, qualification, package assertions, and semantic fingerprints are unchanged. See [ADR-0031](adr/0031-pack-supplied-business-discrepancy-aggregation.md).
+
+### D-041 - Non-test demo scenario runtime
+Status: Proposed under PS-0.11B; pending exact-candidate CI and formal review
+
+The five packaged physical synthetic scenarios are being moved to a non-test DemoScenarios library and standalone DemoRunner. EndToEnd tests consume that same implementation and independently assert exact outcomes; DemoCommands remains domain-neutral, and test assemblies/framework execution are excluded from the product runtime/package. The generic manifest/lifecycle boundary remains accepted; this proposal supersedes only the test-module execution mechanism in ADR-0029. See [ADR-0032](adr/0032-non-test-demo-scenario-runtime.md) and [PS-0.11B](PS0_11B_PRODUCT_DEMO_FIXTURE_SEPARATION.md).

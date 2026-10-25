@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using ProofShift.DemoContracts;
 
 namespace ProofShift.Cli;
 
@@ -311,13 +312,15 @@ internal static class DemoCommands
 
         var requiredFiles = entry.Manifest.Requirements.RequiredFiles.ToList();
         if (entry.Manifest.ProjectPath is { } projectPath) requiredFiles.Add(projectPath);
-        foreach (var stage in entry.Manifest.RunStages.Concat(entry.Manifest.ResetStages)
-                     .Where(stage => stage.Runner is "dotnet-test" or "dotnet-test-module"))
+        if (entry.Manifest.RunStages.Concat(entry.Manifest.ResetStages)
+            .Any(stage => stage.Runner == "demo-runner"))
         {
-            var stageArguments = stage.Arguments.ToArray();
-            var projectOption = Array.IndexOf(stageArguments, "--project");
-            if (projectOption >= 0 && projectOption + 1 < stageArguments.Length) requiredFiles.Add(stageArguments[projectOption + 1]);
-            else if (stage.Runner == "dotnet-test-module") requiredFiles.Add(stageArguments[0]);
+            var runnerPath = ResolveDemoRunnerAssembly(catalog.ContentRoot);
+            checks.Add(runnerPath is null
+                ? new DemoPreflightCheck("DEMO_RUNNER_MISSING", false,
+                    "The ProofShift DemoRunner has not been built or packaged. Build the DemoRunner project, then retry preflight.")
+                : new DemoPreflightCheck("DEMO_RUNNER_READY", true,
+                    "The non-test ProofShift DemoRunner is available."));
         }
         requiredFiles.Add(entry.Manifest.AcceptanceReference.IndexFile);
         foreach (var relativeFile in requiredFiles.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
@@ -364,20 +367,21 @@ internal static class DemoCommands
         var runnerArgumentStart = 0;
         if (stage.Runner == "proofshift-cli")
             start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "ProofShift.Cli.dll"));
-        else if (stage.Runner == "dotnet-test")
-            start.ArgumentList.Add("test");
-        else
+        else if (stage.Runner == "demo-runner")
         {
-            var modulePath = DemoScenarioPaths.EnsureNoReparsePoints(catalog.ContentRoot, stage.Arguments[0], "Test module");
-            start.ArgumentList.Add(modulePath);
-            runnerArgumentStart = 1;
+            var runnerAssembly = ResolveDemoRunnerAssembly(catalog.ContentRoot)
+                ?? throw new DemoManifestException("The ProofShift DemoRunner has not been built or packaged.");
+            start.ArgumentList.Add(runnerAssembly);
+            start.ArgumentList.Add("--content-root");
+            start.ArgumentList.Add(catalog.ContentRoot);
         }
+        else
+            throw new DemoManifestException($"Stage '{stage.Id}' has an unsupported runner.");
         foreach (var argument in stage.Arguments.Skip(runnerArgumentStart)) start.ArgumentList.Add(ExpandTokens(argument, tokens));
         foreach (var pair in stage.Environment.OrderBy(pair => pair.Key, StringComparer.Ordinal))
             start.Environment[pair.Key] = ExpandTokens(pair.Value, tokens);
         start.Environment["PROOFSHIFT_DEMO_SCENARIO_ID"] = entry.Manifest.Id;
         start.Environment["PROOFSHIFT_DEMO_WORKSPACE"] = workspace;
-        start.Environment["PROOFSHIFT_DEMO_REPOSITORY_ROOT"] = catalog.ContentRoot;
         start.Environment["PROOFSHIFT_DEMO_CLI_PATH"] = Path.Combine(AppContext.BaseDirectory, "ProofShift.Cli.dll");
 
         var resultPath = stage.ResultFile is null
@@ -399,13 +403,16 @@ internal static class DemoCommands
         var stageStopwatch = Stopwatch.StartNew();
         using var samplingCancellation = new CancellationTokenSource();
         Task<long?>? fixturePeakWorkingSetTask = null;
+        Task<string?>? stderrTask = null;
         try
         {
             if (!process.Start()) return FailedStage(stage, resultPath, outputPath, "Stage process could not be started.");
-            if (stage.Runner == "dotnet-test-module")
+            if (stage.Runner == "demo-runner")
                 fixturePeakWorkingSetTask = MeasureFixturePeakWorkingSetAsync(process, samplingCancellation.Token);
             var stdoutTask = process.StandardOutput.BaseStream.CopyToAsync(outputStream ?? Stream.Null, cancellationToken);
-            var stderrTask = process.StandardError.BaseStream.CopyToAsync(Stream.Null, cancellationToken);
+            stderrTask = stage.Runner == "demo-runner"
+                ? ReadSafeDemoRunnerDiagnosticAsync(process.StandardError, cancellationToken)
+                : DrainStandardErrorAsync(process.StandardError.BaseStream, cancellationToken);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(stage.TimeoutSeconds));
             try
@@ -417,7 +424,9 @@ internal static class DemoCommands
                 if (!process.HasExited) process.Kill(entireProcessTree: true);
                 await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
                 await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
-                return FailedStage(stage, resultPath, outputPath, $"Stage timed out after {stage.TimeoutSeconds} seconds.");
+                var diagnostic = $"Stage timed out after {stage.TimeoutSeconds} seconds.";
+                if (stderrTask?.Result is { } runnerDiagnostic) diagnostic += $" {runnerDiagnostic}";
+                return FailedStage(stage, resultPath, outputPath, diagnostic);
             }
             await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
         }
@@ -436,7 +445,11 @@ internal static class DemoCommands
         }
 
         if (process.ExitCode != stage.ExpectedExitCode)
-            return FailedStage(stage, resultPath, outputPath, $"Expected exit code {stage.ExpectedExitCode}, observed {process.ExitCode}.", process.ExitCode);
+        {
+            var diagnostic = $"Expected exit code {stage.ExpectedExitCode}, observed {process.ExitCode}.";
+            if (stderrTask?.Result is { } runnerDiagnostic) diagnostic += $" {runnerDiagnostic}";
+            return FailedStage(stage, resultPath, outputPath, diagnostic, process.ExitCode);
+        }
 
         if (stage.Assertions.Count > 0)
         {
@@ -449,7 +462,7 @@ internal static class DemoCommands
         var status = stage.ExpectedOutcome == "success" ? "completed" : "expected-state-observed";
         long? fixtureProcessElapsedMilliseconds = null;
         long? fixtureProcessPeakWorkingSetBytes = null;
-        if (stage.Runner == "dotnet-test-module")
+        if (stage.Runner == "demo-runner")
         {
             stageStopwatch.Stop();
             fixtureProcessElapsedMilliseconds = stageStopwatch.ElapsedMilliseconds;
@@ -459,6 +472,25 @@ internal static class DemoCommands
         return new DemoStageResult(stage.Id, stage.Name, stage.Phase, stage.ExpectedOutcome,
             stage.ExpectedExitCode, process.ExitCode, status, resultPath, outputPath, bindings, null,
             fixtureProcessElapsedMilliseconds, fixtureProcessPeakWorkingSetBytes);
+    }
+
+    private static async Task<string?> ReadSafeDemoRunnerDiagnosticAsync(StreamReader error,
+        CancellationToken cancellationToken)
+    {
+        string? diagnostic = null;
+        while (await error.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
+        {
+            if (diagnostic is null && SafeDemoRunnerDiagnostic.TryParseLine(line, out var safeDiagnostic))
+                diagnostic = safeDiagnostic;
+        }
+        return diagnostic;
+    }
+
+    private static async Task<string?> DrainStandardErrorAsync(Stream error,
+        CancellationToken cancellationToken)
+    {
+        await error.CopyToAsync(Stream.Null, cancellationToken).ConfigureAwait(false);
+        return null;
     }
 
     private static async Task<long?> MeasureFixturePeakWorkingSetAsync(Process process, CancellationToken cancellationToken)
@@ -492,6 +524,22 @@ internal static class DemoCommands
         if (!DemoScenarioPaths.IsWithin(workspace, resultPath)) throw new DemoManifestException($"{description} escapes the scenario workspace.");
         DemoScenarioPaths.EnsureNoReparsePoints(workspace, Path.GetRelativePath(workspace, resultPath), description);
         return resultPath;
+    }
+
+    private static string? ResolveDemoRunnerAssembly(string contentRoot)
+    {
+        var candidates = new[]
+        {
+            "demo/ProofShift.DemoRunner.dll",
+            "src/ProofShift.DemoRunner/bin/Debug/net10.0/ProofShift.DemoRunner.dll",
+            "src/ProofShift.DemoRunner/bin/Release/net10.0/ProofShift.DemoRunner.dll"
+        };
+        foreach (var relativePath in candidates)
+        {
+            var resolvedPath = DemoScenarioPaths.EnsureNoReparsePoints(contentRoot, relativePath, "DemoRunner assembly");
+            if (File.Exists(resolvedPath)) return resolvedPath;
+        }
+        return null;
     }
 
     private static string? VerifyAssertions(string resultPath, IReadOnlyList<DemoJsonAssertion> assertions,

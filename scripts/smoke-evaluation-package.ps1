@@ -25,10 +25,13 @@ function Invoke-PackagedCli {
 
     Push-Location $script:PackageRoot
     try {
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
         $output = @(& dotnet $CliPath @Arguments 2>&1)
         $exitCode = $LASTEXITCODE
     }
     finally {
+        $ErrorActionPreference = $previousErrorActionPreference
         Pop-Location
     }
     $text = $output -join [Environment]::NewLine
@@ -42,7 +45,15 @@ function Invoke-PackagedJson {
     param([string] $CliPath, [string[]] $Arguments)
 
     $text = Invoke-PackagedCli $CliPath $Arguments
-    try { return $text | ConvertFrom-Json }
+    try {
+        $value = $text | ConvertFrom-Json
+        if ($value -is [Array]) {
+            foreach ($item in $value) { Write-Output $item }
+        }
+        else {
+            Write-Output $value
+        }
+    }
     catch { throw "Packaged CLI did not return valid JSON for '$($Arguments -join ' ')'.`n$text" }
 }
 
@@ -52,6 +63,18 @@ function Assert-Equal {
     if ($Actual -ne $Expected) {
         throw "$Description expected '$Expected', found '$Actual'."
     }
+}
+
+function Get-RelativePath {
+    param([string] $Root, [string] $Path)
+
+    $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    $rootUri = [Uri]::new($rootFull)
+    $pathUri = [Uri]::new([IO.Path]::GetFullPath($Path))
+    if (-not $rootUri.IsBaseOf($pathUri)) { throw "Path is outside package root: $Path" }
+    return [Uri]::UnescapeDataString($rootUri.MakeRelativeUri($pathUri).ToString()).Replace(
+        '/', [IO.Path]::DirectorySeparatorChar)
 }
 
 $archiveFullPath = [IO.Path]::GetFullPath($ArchivePath)
@@ -95,16 +118,19 @@ Assert-Equal $archiveHash $Matches.hash "Package SHA-256 sidecar"
 Expand-Archive -LiteralPath $archiveFullPath -DestinationPath $extractionFullPath
 $packageRoot = Join-Path $extractionFullPath "ProofShift-Evaluation-PS-0.10G"
 $cliPath = Join-Path $packageRoot "app/ProofShift.Cli.dll"
-$modulePath = Join-Path $packageRoot "fixtures/ProofShift.EndToEnd.Tests.dll"
+$runnerPath = Join-Path $packageRoot "demo/ProofShift.DemoRunner.dll"
 foreach ($requiredPath in @(
     $cliPath,
-    $modulePath,
+    $runnerPath,
     (Join-Path $packageRoot "LICENSE"),
     (Join-Path $packageRoot "THIRD-PARTY-NOTICES.md"),
     (Join-Path $packageRoot "THIRD-PARTY-LICENSES"),
     (Join-Path $packageRoot "docs/EVALUATION.md"),
     (Join-Path $packageRoot "docs/DEMO_RUNBOOK.md"),
-    (Join-Path $packageRoot "docs/PS0_10F_SCENARIO_INDEX.json")
+    (Join-Path $packageRoot "docs/PS0_10F_SCENARIO_INDEX.json"),
+    (Join-Path $packageRoot "scenarios/pension-modernization/ps09/database/sqlserver-source.sql"),
+    (Join-Path $packageRoot "scenarios/pension-modernization/ps010b/proofshift.yaml"),
+    (Join-Path $packageRoot "scenarios/pension-modernization/ps010b/proofshift-false-reverse.yaml")
 )) {
     if (-not (Test-Path -LiteralPath $requiredPath)) { throw "Required packaged resource is missing: $requiredPath" }
 }
@@ -112,11 +138,19 @@ foreach ($requiredPath in @(
 $manifestPath = Join-Path $packageRoot "package-manifest.json"
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw "Package manifest is missing." }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+$packagedGlobalJson = Get-Content -LiteralPath (Join-Path $packageRoot "global.json") -Raw | ConvertFrom-Json
+if ($packagedGlobalJson.PSObject.Properties.Name -contains "test") {
+    throw "Package global.json contains test-runner metadata."
+}
 Assert-Equal $manifest.format "proofshift-evaluation-package-v2" "Package manifest format"
 Assert-Equal $manifest.targetPlatform $ExpectedPlatform "Package target platform"
 Assert-Equal $manifest.sourceRevision $ExpectedRevision "Package source revision"
 if (-not $manifest.sourceWorktreeClean) { throw "Package was not built from a clean source worktree." }
 if (-not $manifest.contentSha256) { throw "Package content digest is missing." }
+Assert-Equal $manifest.scenarioRunner "demo/ProofShift.DemoRunner.dll (non-test runtime)" "Package scenario runner"
+if ($manifest.PSObject.Properties.Name -contains "fixtureRunner") {
+    throw "Package manifest contains the retired test-module runner field."
+}
 $thirdPartyNotices = Join-Path $packageRoot "THIRD-PARTY-NOTICES.md"
 $thirdPartyLicenseFiles = @(Get-ChildItem -LiteralPath (Join-Path $packageRoot "THIRD-PARTY-LICENSES") -Recurse -File)
 if ($thirdPartyLicenseFiles.Count -eq 0) { throw "No third-party license texts were packaged." }
@@ -125,9 +159,10 @@ if ([IO.File]::ReadAllText($thirdPartyNotices) -match "UNSPECIFIED: manual revie
 }
 $script:PackageRoot = $packageRoot
 
-foreach ($name in @("PROOFSHIFT_DEMO_REPOSITORY_ROOT", "PROOFSHIFT_DEMO_CLI_PATH", "PS09_INTEGRATED_RUN_DIRECTORY")) {
+foreach ($name in @("PROOFSHIFT_DEMO_CLI_PATH", "PS09_INTEGRATED_RUN_DIRECTORY")) {
     Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
 }
+
 $syntheticConfigurationValues = @{
     PS05_SQL_CONNECTION = "synthetic-placeholder"
     PS05_POSTGRES_CONNECTION = "synthetic-placeholder"
@@ -150,21 +185,22 @@ $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = "1"
 $env:DOTNET_NOLOGO = "1"
 
 $forbiddenNames = @(
-    ".git", ".proofshift", ".vs", ".vscode", ".ssh", ".aws", ".azure", ".nuget",
+    ".git", ".proofshift", ".vs", ".vscode", ".ssh", ".aws", ".azure", ".nuget", "fixtures",
     "TestResults", "obj", "node_modules", "artifacts", "benchmarks", "benchmark",
     "workspaces", "workspace", "volumes", "logs", "cache", "caches"
 )
 $forbiddenFiles = @(Get-ChildItem -LiteralPath $packageRoot -Force -Recurse -File | Where-Object {
-    $relative = [IO.Path]::GetRelativePath($packageRoot, $_.FullName)
+    $relative = Get-RelativePath $packageRoot $_.FullName
     $segments = $relative -split '[\\/]'
     $_.Extension -in @(".cs", ".csproj", ".pdb", ".db", ".sqlite", ".wal", ".shm", ".pem", ".pfx", ".key", ".log", ".trx", ".coverage", ".dmp") -or
         $_.Name -like "*.runtimeconfig.dev.json" -or $_.Name -like ".env*" -or
         $_.Name -in @("id_rsa", "id_ed25519", "known_hosts", "secrets.json", "credentials", "credentials.json", "token.json") -or
         $_.Name -match '(?i)(private[-_]?key|service[-_]?account|cloud[-_]?credentials)' -or
-        ($segments | Where-Object { $_ -in $forbiddenNames }).Count -gt 0
+            $_.Name -match '^(ProofShift\.EndToEnd\.Tests|xunit|Microsoft\.Testing|Microsoft\.NET\.Test|testhost|testplatform)' -or
+            ($segments | Where-Object { $_ -in $forbiddenNames }).Count -gt 0
 })
 if ($forbiddenFiles.Count -gt 0) {
-    $paths = $forbiddenFiles | ForEach-Object { [IO.Path]::GetRelativePath($packageRoot, $_.FullName) }
+    $paths = $forbiddenFiles | ForEach-Object { Get-RelativePath $packageRoot $_.FullName }
     throw "Package contains forbidden source, state, log, database, or credential material: $($paths -join ', ')"
 }
 
@@ -172,10 +208,13 @@ $version = Invoke-PackagedCli $cliPath @("--version")
 if ($version -notmatch "ProofShift PS-0\.10G") { throw "Packaged version output was unexpected: $version" }
 Push-Location $script:PackageRoot
 try {
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     $rootHelpLines = @(& dotnet $cliPath "--help" 2>&1)
     $rootHelpExitCode = $LASTEXITCODE
 }
 finally {
+    $ErrorActionPreference = $previousErrorActionPreference
     Pop-Location
 }
 $rootHelp = $rootHelpLines -join [Environment]::NewLine
@@ -218,6 +257,62 @@ Assert-Equal $descriptions.justice.acceptedOutcome.expectedFindings 24 "Justice 
 Assert-Equal $descriptions.hcm.acceptedOutcome.expectedFindings 25 "HCM accepted findings"
 Assert-Equal $descriptions.fhir.acceptedOutcome.expectedFindings 15 "FHIR accepted findings"
 
+foreach ($scenarioId in $expectedScenarios) {
+    $scenarioManifestPath = Join-Path $packageRoot "scenarios/demos/$scenarioId/scenario.json"
+    if (-not (Test-Path -LiteralPath $scenarioManifestPath -PathType Leaf)) {
+        throw "Packaged scenario manifest is missing: $scenarioId"
+    }
+    $scenarioManifestText = [IO.File]::ReadAllText($scenarioManifestPath)
+    if ($scenarioManifestText -match '(?i)dotnet-test|ProofShift\.EndToEnd\.Tests|testClass|testMethod|testProject|fixtureRunner') {
+        throw "Packaged scenario '$scenarioId' contains retired test-runner metadata."
+    }
+    $scenarioManifest = $scenarioManifestText | ConvertFrom-Json
+    Assert-Equal $scenarioManifest.id $scenarioId "Scenario manifest ID"
+    $demoRunnerStages = @($scenarioManifest.runStages | Where-Object { $_.runner -eq "demo-runner" })
+    if ($demoRunnerStages.Count -eq 0 -or
+        -not ($demoRunnerStages | Where-Object { $_.arguments.Count -ge 2 -and $_.arguments[0] -eq "run" -and $_.arguments[1] -eq $scenarioId })) {
+        throw "Packaged scenario '$scenarioId' has no matching DemoRunner stage."
+    }
+}
+
+$scenarioPreflights = @{}
+foreach ($scenarioId in $expectedScenarios) {
+    Push-Location $script:PackageRoot
+    try {
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $preflightOutput = @(& dotnet $cliPath "demo" "preflight" $scenarioId "--json" 2>&1)
+        $preflightExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+        Pop-Location
+    }
+    $preflightText = $preflightOutput -join [Environment]::NewLine
+    try { $preflight = $preflightText | ConvertFrom-Json }
+    catch { throw "Packaged preflight did not return valid JSON for '$scenarioId'.`n$preflightText" }
+    $runnerChecks = @($preflight.checks | Where-Object { $_.code -eq "DEMO_RUNNER_READY" })
+    if ($runnerChecks.Count -ne 1 -or -not $runnerChecks[0].passed) {
+        throw "Packaged scenario '$scenarioId' did not resolve the non-test DemoRunner."
+    }
+    if (($preflight.ready -and $preflightExitCode -ne 0) -or
+        (-not $preflight.ready -and $preflightExitCode -ne 1)) {
+        throw "Packaged preflight exit code $preflightExitCode disagrees with readiness for '$scenarioId'."
+    }
+    if ($PackageOnly) {
+        $unexpectedBlockers = @($preflight.checks | Where-Object {
+            -not $_.passed -and $_.code -ne "DEMO_DOCKER_UNAVAILABLE"
+        })
+        if ($unexpectedBlockers.Count -gt 0) {
+            throw "Package-only preflight for '$scenarioId' found a non-Docker blocker."
+        }
+    }
+    elseif (-not $preflight.ready) {
+        throw "Packaged scenario '$scenarioId' preflight was blocked."
+    }
+    $scenarioPreflights[$scenarioId] = $preflight
+}
+
 $samples = @(
     "scenarios/pension-modernization/ps010b/proofshift.yaml",
     "scenarios/justice-case-management/proofshift.yaml",
@@ -234,8 +329,7 @@ foreach ($sample in $samples) {
 $scenarioResults = [System.Collections.Generic.List[object]]::new()
 $scenariosToRun = if ($PackageOnly) { @() } else { $expectedScenarios }
 foreach ($scenarioId in $scenariosToRun) {
-    $preflight = Invoke-PackagedJson $cliPath @("demo", "preflight", $scenarioId, "--json")
-    if (-not $preflight.ready) { throw "Packaged scenario '$scenarioId' preflight was blocked." }
+    if (-not $scenarioPreflights[$scenarioId].ready) { throw "Packaged scenario '$scenarioId' preflight was blocked." }
 
     $humanOutput = Invoke-PackagedCli $cliPath @("demo", "run", $scenarioId)
     if ($humanOutput -notmatch "Demo run: COMPLETED") { throw "Scenario '$scenarioId' did not produce the successful human-readable completion output." }

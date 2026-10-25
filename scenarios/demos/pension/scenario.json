@@ -15,9 +15,7 @@
     "minimumDotNetSdk": "10.0.100",
     "minimumFreeDiskBytes": 0,
     "requiredPorts": [],
-    "requiredFiles": [
-      "tests/ProofShift.EndToEnd.Tests/PensionExternalCorpusVerificationTests.cs"
-    ]
+    "requiredFiles": []
   },
   "sourceSystems": [
     "Synthetic legacy pension records in SQL Server, CSV, and filesystem documents"
@@ -54,23 +52,14 @@
       "id": "pension-physical-assurance",
       "name": "Run accepted physical Pension assurance",
       "phase": "Source checkpoint, observed target, Verification, Evidence, Recovery, and qualification",
-      "runner": "dotnet-test",
+      "runner": "demo-runner",
       "workingDirectory": "repository",
-      "arguments": [
-        "--project",
-        "tests/ProofShift.EndToEnd.Tests/ProofShift.EndToEnd.Tests.csproj",
-        "--filter-class",
-        "ProofShift.EndToEnd.Tests.PensionExternalCorpusVerificationTests",
-        "--parallel",
-        "none",
-        "--timeout",
-        "20m"
-      ],
+      "arguments": ["run", "pension", "--workspace", "{{workspace}}", "--result-file", "integrated-assurance/demo-summary.json"],
       "expectedOutcome": "success",
       "expectedExitCode": 0,
       "timeoutSeconds": 1500,
       "resultFile": "integrated-assurance/demo-summary.json",
-      "outputFile": "logs/pension-physical-test.log",
+      "outputFile": "logs/pension-physical-demo.log",
       "assertions": [
         { "pointer": "/checkpointArtifacts", "valueType": "number", "expected": "8495" },
         { "pointer": "/correctedProjectionTargets", "valueType": "number", "expected": "8595" },
