@@ -5,7 +5,7 @@
   <ItemGroup>
     <PackageVersion Include="YamlDotNet" Version="18.1.0" />
     <PackageVersion Include="xunit.v3" Version="4.0.1" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
     <PackageVersion Include="Npgsql" Version="10.0.3" />
     <PackageVersion Include="Oracle.ManagedDataAccess.Core" Version="23.26.301" />
     <PackageVersion Include="Net.IBM.Data.Db2" Version="10.0.0.300" />
