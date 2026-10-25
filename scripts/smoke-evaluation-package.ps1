@@ -25,10 +25,13 @@ function Invoke-PackagedCli {
 
     Push-Location $script:PackageRoot
     try {
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
         $output = @(& dotnet $CliPath @Arguments 2>&1)
         $exitCode = $LASTEXITCODE
     }
     finally {
+        $ErrorActionPreference = $previousErrorActionPreference
         Pop-Location
     }
     $text = $output -join [Environment]::NewLine
@@ -194,10 +197,13 @@ $version = Invoke-PackagedCli $cliPath @("--version")
 if ($version -notmatch "ProofShift PS-0\.10G") { throw "Packaged version output was unexpected: $version" }
 Push-Location $script:PackageRoot
 try {
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     $rootHelpLines = @(& dotnet $cliPath "--help" 2>&1)
     $rootHelpExitCode = $LASTEXITCODE
 }
 finally {
+    $ErrorActionPreference = $previousErrorActionPreference
     Pop-Location
 }
 $rootHelp = $rootHelpLines -join [Environment]::NewLine
@@ -262,10 +268,13 @@ $scenarioPreflights = @{}
 foreach ($scenarioId in $expectedScenarios) {
     Push-Location $script:PackageRoot
     try {
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
         $preflightOutput = @(& dotnet $cliPath "demo" "preflight" $scenarioId "--json" 2>&1)
         $preflightExitCode = $LASTEXITCODE
     }
     finally {
+        $ErrorActionPreference = $previousErrorActionPreference
         Pop-Location
     }
     $preflightText = $preflightOutput -join [Environment]::NewLine
