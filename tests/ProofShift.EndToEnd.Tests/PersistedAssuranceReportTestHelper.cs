@@ -86,6 +86,14 @@ internal static class PersistedAssuranceReportTestHelper
             Assert.Equal("COMPLETE", reportRoot.GetProperty("sourceAccountingStatus").GetString());
             Assert.Equal("COMPLETE", reportRoot.GetProperty("targetLineageStatus").GetString());
             Assert.Equal("Passed", reportRoot.GetProperty("recoveryAssessmentOutcome").GetString());
+            Assert.Equal(reportRoot.GetProperty("recoveryRehearsalOutcome").GetString(),
+                reportRoot.GetProperty("rehearsalOutcome").GetString());
+            Assert.Equal(reportRoot.GetProperty("sourceAccountingGapCount").GetInt64(),
+                reportRoot.GetProperty("unaccountedSources").GetInt64());
+            Assert.Equal(reportRoot.GetProperty("targetLineageGapCount").GetInt64(),
+                reportRoot.GetProperty("unexplainedTargets").GetInt64());
+            Assert.Equal(reportRoot.GetProperty("falseReversibleEdges").GetInt64(),
+                reportRoot.GetProperty("falseReversibleTransformations").GetInt64());
             AssertNoExpectedOrActualProperties(machine.StandardOutput);
             if (!ForeignPackTerms.TryGetValue(packId, out var foreignTerms))
                 throw new InvalidDataException($"No foreign-pack terminology list is configured for '{packId}'.");

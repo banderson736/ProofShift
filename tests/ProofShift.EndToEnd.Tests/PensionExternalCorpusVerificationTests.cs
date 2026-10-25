@@ -455,10 +455,27 @@ public sealed class PensionExternalCorpusVerificationTests
             PersistedAssuranceReportTestHelper.AssertNoExpectedOrActualProperties(defectiveMachine.StandardOutput);
             Assert.Equal("QUALIFIED", correctedMachineJson.RootElement.GetProperty("qualification").GetString());
             Assert.Equal(0L, correctedMachineJson.RootElement.GetProperty("businessDiscrepancyCount").GetInt64());
+            Assert.Equal(0L, correctedMachineJson.RootElement.GetProperty("unaccountedSources").GetInt64());
+            Assert.Equal(0L, correctedMachineJson.RootElement.GetProperty("unexplainedTargets").GetInt64());
+            Assert.Equal("Passed", correctedMachineJson.RootElement.GetProperty("rehearsalOutcome").GetString());
             await File.WriteAllTextAsync(Path.Combine(reportDirectory, $"{defectiveReport.DryRunId}.cli.json"),
                 defectiveMachine.StandardOutput, TestContext.Current.CancellationToken);
             await File.WriteAllTextAsync(Path.Combine(reportDirectory, $"{correctedReport.DryRunId}.cli.json"),
                 correctedMachine.StandardOutput, TestContext.Current.CancellationToken);
+
+            await PersistedAssuranceReportTestHelper.StageCheckpointForCliAsync(directory,
+                falseReversePipeline.Recovery.Id, TestContext.Current.CancellationToken);
+            var falseReverseMachine = await RunCliAsync(directory, cliAssembly,
+                "report", falseReverseReport.DryRunId, "--json");
+            Assert.True(falseReverseMachine.ExitCode == 0, falseReverseMachine.StandardError);
+            using var falseReverseMachineJson = JsonDocument.Parse(falseReverseMachine.StandardOutput);
+            Assert.Equal("PASSED", falseReverseMachineJson.RootElement.GetProperty("verificationOutcome").GetString());
+            Assert.Equal(0L, falseReverseMachineJson.RootElement.GetProperty("verificationFailureCount").GetInt64());
+            Assert.Equal(2L, falseReverseMachineJson.RootElement.GetProperty("businessDiscrepancyCount").GetInt64());
+            Assert.Equal(2L, falseReverseMachineJson.RootElement.GetProperty("falseReversibleTransformations").GetInt64());
+            Assert.Equal(2L, falseReverseMachineJson.RootElement.GetProperty("failedRecoveryEdges").GetInt64());
+            Assert.Equal("NOT QUALIFIED", falseReverseMachineJson.RootElement.GetProperty("qualification").GetString());
+            PersistedAssuranceReportTestHelper.AssertNoExpectedOrActualProperties(falseReverseMachine.StandardOutput);
 
             var compareHuman = await RunCliAsync(directory, cliAssembly, "compare",
                 defectiveReport.DryRunId, correctedReport.DryRunId);

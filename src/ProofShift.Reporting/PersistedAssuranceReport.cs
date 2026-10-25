@@ -44,6 +44,7 @@ public sealed record PersistedAssuranceReport
     public string VerificationLedgerFingerprint { get; }
     public string RecoveryAssessmentOutcome { get; }
     public string RecoveryRehearsalOutcome { get; }
+    public string RehearsalOutcome => RecoveryRehearsalOutcome;
     public string Qualification { get; }
     public string RecoveryPolicyFingerprint { get; }
     public string RecoveryAssessmentFingerprint { get; }
@@ -58,13 +59,16 @@ public sealed record PersistedAssuranceReport
     public long SourceArtifactCount { get; }
     public long AccountedSourceCount { get; }
     public long SourceAccountingGapCount { get; }
+    public long UnaccountedSources => SourceAccountingGapCount;
     public string SourceAccountingStatus { get; }
     public long TargetArtifactCount { get; }
     public long LineagedTargetCount { get; }
     public long TargetLineageGapCount { get; }
+    public long UnexplainedTargets => TargetLineageGapCount;
     public string TargetLineageStatus { get; }
     public long FailedRecoveryEdges { get; }
     public long FalseReversibleEdges { get; }
+    public long FalseReversibleTransformations => FalseReversibleEdges;
     public long AffectedRecoveryArtifacts { get; }
     public long RecoverableArtifacts { get; }
     public long IrrecoverableArtifacts { get; }
