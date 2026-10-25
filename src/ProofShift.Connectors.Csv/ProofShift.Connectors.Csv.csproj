@@ -9,6 +9,8 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="CsvHelper" />
-    <PackageReference Include="Microsoft.Data.Sqlite" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ProofShift.Connectors.Internal/ProofShift.Connectors.Internal.csproj" />
   </ItemGroup>
 </Project>

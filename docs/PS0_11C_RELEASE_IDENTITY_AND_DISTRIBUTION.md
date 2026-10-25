@@ -2,7 +2,7 @@
 
 ## Status
 
-**In Progress**, starting from accepted `main` source baseline `464ef14b235c93e08db58d575595a71eced0bafe`. PS-0.11B documentation closeout is a separate documentation-only commit on the local branch; the product implementation baseline remains the stated merge.
+**Accepted — October 25, 2026.** Candidate `286ea550e559b360fd9c85c2a65e2b1394a95408` with tree `d32fab40faa4bfc08c28b0742c46f8f372ae26c7` passed [GitHub Actions run 40178365888](https://github.com/banderson736/ProofShift/actions/runs/40178365888) and was merged to `main` as `5a1a3ec064aca98266cf0abb3c7749f7416da67e` with the same tree.
 
 Product identity: **ProofShift 0.1.0-preview.1**. Development milestone: **PS-0.11C**. The milestone is not part of the product version.
 
@@ -27,8 +27,8 @@ This is a release-engineering milestone, not an assurance-feature milestone. Pre
 
 ## Explicit exclusions
 
-No public GitHub Release, tag, NuGet publication, public registry, Docker image publication, new signing credentials, self-contained or single-file publishing, NativeAOT, installer/MSI, production migration/rollback, new domains/connectors, UI/API, AI authoring, repository governance, or unrelated refactoring. Do not begin PS-0.11D.
+No public GitHub Release, tag, NuGet publication, public registry, Docker image publication, new signing credentials, self-contained or single-file publishing, NativeAOT, installer/MSI, production migration/rollback, new domains/connectors, UI/API, AI authoring, repository governance, or unrelated refactoring was part of PS-0.11C. Those remain outside its accepted scope.
 
 ## Acceptance evidence
 
-All gates begin NOT YET in the [acceptance matrix](PS0_11C_ACCEPTANCE_MATRIX.md). The matrix is completed only from exact-candidate CI and independent-build evidence. PS-0.11C remains In Progress until formal review and acceptance; no self-acceptance is authorized.
+All 37 gates passed: 350 tests passed with 0 failures and 0 skips across build-and-test, RemoteStorage, Oracle, and Db2; Windows package-only smoke passed; all five Ubuntu packaged Docker demos passed; independent Windows and Linux builds matched archive, content, and deterministic provenance; and runtime-only evaluation passed on Microsoft.NETCore.App 10.0.13 with no SDK installed. See the [acceptance matrix](PS0_11C_ACCEPTANCE_MATRIX.md) for hashes and platform-specific lock fingerprints. PS-0.11C is accepted; no public release, tag, publication, or signing was performed.

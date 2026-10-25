@@ -468,12 +468,19 @@
           "ProofShift.Connectors.RemoteObjects": "[0.1.0-preview.1, )"
         }
       },
-      "proofshift.connectors.parquet": {
+      "proofshift.connectors.internal": {
         "type": "Project",
         "dependencies": {
           "Microsoft.Data.Sqlite": "[10.0.12, )",
+          "ProofShift.Connectors.Abstractions": "[0.1.0-preview.1, )"
+        }
+      },
+      "proofshift.connectors.parquet": {
+        "type": "Project",
+        "dependencies": {
           "Parquet.Net": "[6.1.0, )",
           "ProofShift.Connectors.Abstractions": "[0.1.0-preview.1, )",
+          "ProofShift.Connectors.Internal": "[0.1.0-preview.1, )",
           "ProofShift.Connectors.RemoteObjects": "[0.1.0-preview.1, )"
         }
       },

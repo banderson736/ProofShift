@@ -1,6 +1,6 @@
 # ADR-0033: Product Release Identity and Reproducible Distribution
 
-- Status: Proposed under PS-0.11C
+- Status: Accepted under PS-0.11C
 - Date: 2026-10-25
 - Supersedes: none
 
@@ -39,4 +39,4 @@ The evaluator package has historically exposed internal milestone labels as prod
 
 ## Validation
 
-Pending PS-0.11C implementation, exact-candidate CI, independent reproducibility evidence, and formal review. The [PS-0.11C acceptance matrix](../PS0_11C_ACCEPTANCE_MATRIX.md) is authoritative for gate evidence.
+Accepted on exact source candidate `286ea550e559b360fd9c85c2a65e2b1394a95408`, tree `d32fab40faa4bfc08c28b0742c46f8f372ae26c7`, after [GitHub Actions run 40178365888](https://github.com/banderson736/ProofShift/actions/runs/40178365888) passed. The candidate was merged to `main` as `5a1a3ec064aca98266cf0abb3c7749f7416da67e` with the same tree. The [PS-0.11C acceptance matrix](../PS0_11C_ACCEPTANCE_MATRIX.md) records all 37 passing gates, exact test totals, runtime-only evidence, independent Windows/Linux archive and content hashes, and platform-specific dependency-lock fingerprints.
