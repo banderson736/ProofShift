@@ -401,13 +401,16 @@ internal static class DemoCommands
         var stageStopwatch = Stopwatch.StartNew();
         using var samplingCancellation = new CancellationTokenSource();
         Task<long?>? fixturePeakWorkingSetTask = null;
+        Task<string?>? stderrTask = null;
         try
         {
             if (!process.Start()) return FailedStage(stage, resultPath, outputPath, "Stage process could not be started.");
             if (stage.Runner == "demo-runner")
                 fixturePeakWorkingSetTask = MeasureFixturePeakWorkingSetAsync(process, samplingCancellation.Token);
             var stdoutTask = process.StandardOutput.BaseStream.CopyToAsync(outputStream ?? Stream.Null, cancellationToken);
-            var stderrTask = process.StandardError.BaseStream.CopyToAsync(Stream.Null, cancellationToken);
+            stderrTask = stage.Runner == "demo-runner"
+                ? ReadSafeDemoRunnerDiagnosticAsync(process.StandardError, cancellationToken)
+                : DrainStandardErrorAsync(process.StandardError.BaseStream, cancellationToken);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(stage.TimeoutSeconds));
             try
@@ -419,7 +422,9 @@ internal static class DemoCommands
                 if (!process.HasExited) process.Kill(entireProcessTree: true);
                 await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
                 await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
-                return FailedStage(stage, resultPath, outputPath, $"Stage timed out after {stage.TimeoutSeconds} seconds.");
+                var diagnostic = $"Stage timed out after {stage.TimeoutSeconds} seconds.";
+                if (stderrTask?.Result is { } runnerDiagnostic) diagnostic += $" {runnerDiagnostic}";
+                return FailedStage(stage, resultPath, outputPath, diagnostic);
             }
             await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
         }
@@ -438,7 +443,11 @@ internal static class DemoCommands
         }
 
         if (process.ExitCode != stage.ExpectedExitCode)
-            return FailedStage(stage, resultPath, outputPath, $"Expected exit code {stage.ExpectedExitCode}, observed {process.ExitCode}.", process.ExitCode);
+        {
+            var diagnostic = $"Expected exit code {stage.ExpectedExitCode}, observed {process.ExitCode}.";
+            if (stderrTask?.Result is { } runnerDiagnostic) diagnostic += $" {runnerDiagnostic}";
+            return FailedStage(stage, resultPath, outputPath, diagnostic, process.ExitCode);
+        }
 
         if (stage.Assertions.Count > 0)
         {
@@ -461,6 +470,28 @@ internal static class DemoCommands
         return new DemoStageResult(stage.Id, stage.Name, stage.Phase, stage.ExpectedOutcome,
             stage.ExpectedExitCode, process.ExitCode, status, resultPath, outputPath, bindings, null,
             fixtureProcessElapsedMilliseconds, fixtureProcessPeakWorkingSetBytes);
+    }
+
+    private static async Task<string?> ReadSafeDemoRunnerDiagnosticAsync(StreamReader error,
+        CancellationToken cancellationToken)
+    {
+        const string prefix = "Demo scenario failed unexpectedly (";
+        const string suffix = "). Exception details were withheld to protect configured connection values.";
+        string? diagnostic = null;
+        while (await error.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
+        {
+            if (diagnostic is null && line.StartsWith(prefix, StringComparison.Ordinal) &&
+                line.EndsWith(suffix, StringComparison.Ordinal))
+                diagnostic = line;
+        }
+        return diagnostic;
+    }
+
+    private static async Task<string?> DrainStandardErrorAsync(Stream error,
+        CancellationToken cancellationToken)
+    {
+        await error.CopyToAsync(Stream.Null, cancellationToken).ConfigureAwait(false);
+        return null;
     }
 
     private static async Task<long?> MeasureFixturePeakWorkingSetAsync(Process process, CancellationToken cancellationToken)
