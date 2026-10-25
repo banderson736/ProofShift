@@ -14,6 +14,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/ProofShift.Cli/ProofShift.Cli.csproj" />
+    <ProjectReference Include="../../src/ProofShift.DemoScenarios/ProofShift.DemoScenarios.csproj" />
     <ProjectReference Include="../../src/ProofShift.Engine/ProofShift.Engine.csproj" />
     <ProjectReference Include="../../src/ProofShift.Projection/ProofShift.Projection.csproj" />
     <ProjectReference Include="../../src/ProofShift.Snapshots/ProofShift.Snapshots.csproj" />

@@ -20,12 +20,10 @@ using ProofShift.Recovery;
 using ProofShift.Snapshots;
 using ProofShift.Verification;
 using Testcontainers.PostgreSql;
-using Xunit;
 
-namespace ProofShift.EndToEnd.Tests;
+namespace ProofShift.DemoScenarios;
 
-[Collection("DockerIntegration")]
-public sealed class JusticePhysicalAssuranceTests
+public sealed class JusticeDemoScenario : IDemoScenario
 {
     private const int CaseCount = 2_000;
     private const string SourceSecret = "PS010F_JUSTICE_SOURCE";
@@ -52,35 +50,51 @@ public sealed class JusticePhysicalAssuranceTests
         new("unexpected-case", "unexpected artifact", "Justice.Case", "CASE-UNEXPECTED", "unexpected-target", EvidenceResult.Fail, 1)
     ];
 
-    [Fact]
-    public async Task JusticePhysicalExternalAndShadowScenariosProveExactDefectsAndQualification()
+    public string Id => "justice";
+    public string DisplayName => "Justice systems assurance";
+
+    public async Task<DemoScenarioExecutionResult> ExecuteAsync(DemoScenarioExecutionContext context)
     {
-        Assert.Equal(DefectManifest.Length, DefectManifest.Select(defect => defect.Id).Distinct(StringComparer.Ordinal).Count());
+        ArgumentNullException.ThrowIfNull(context);
+        using var executionScope = context.Activate();
+        ScenarioInvariant.Equal(DefectManifest.Length, DefectManifest.Select(defect => defect.Id).Distinct(StringComparer.Ordinal).Count());
         var fixture = CreateFixture(CaseCount);
-        var root = DemoScenarioResultWriter.CreateFixtureRoot("proofshift-justice-f3");
+        var root = Path.Combine(Path.GetFullPath(context.WorkspaceDirectory), "fixture");
         Directory.CreateDirectory(root);
-        using var cleanup = new TemporaryDirectoryCleanup(root, !DemoScenarioResultWriter.IsRunningDemo);
+        using var cleanup = DemoScenarioWorkspace.BeginFixtureCleanup(root, context.PreserveArtifacts);
         var sourceFilesRoot = Path.Combine(root, "source-files");
         var targetFilesRoot = Path.Combine(root, "target-files");
         Directory.CreateDirectory(targetFilesRoot);
-        await WriteSourceFilesAsync(fixture.Documents, sourceFilesRoot, TestContext.Current.CancellationToken);
+        await WriteSourceFilesAsync(fixture.Documents, sourceFilesRoot, DemoScenarioExecutionContext.CurrentCancellationToken);
 
-        await using var sourcePostgres = new PostgreSqlBuilder("postgres:16-alpine").Build();
-        try { await sourcePostgres.StartAsync(TestContext.Current.CancellationToken); }
-        catch (DockerUnavailableException)
+        PostgreSqlContainer? sourcePostgresContainer = null;
+        try
         {
-            await sourcePostgres.DisposeAsync();
-            throw Xunit.Sdk.SkipException.ForSkip("A Docker-compatible runtime is required for Justice physical assurance.");
+            sourcePostgresContainer = new PostgreSqlBuilder("postgres:16-alpine").Build();
+            await sourcePostgresContainer.StartAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
         }
-        await using var targetPostgres = new PostgreSqlBuilder("postgres:16-alpine").Build();
-        try { await targetPostgres.StartAsync(TestContext.Current.CancellationToken); }
-        catch (DockerUnavailableException)
+        catch (DockerUnavailableException exception)
         {
-            await targetPostgres.DisposeAsync();
-            throw Xunit.Sdk.SkipException.ForSkip("A Docker-compatible runtime is required for Justice physical assurance.");
+            if (sourcePostgresContainer is not null) await sourcePostgresContainer.DisposeAsync();
+            throw new DemoScenarioUnavailableException("A Docker-compatible runtime is required for Justice physical assurance.", exception);
         }
-        await SeedSourceAsync(sourcePostgres, fixture, TestContext.Current.CancellationToken);
-        await CreateTargetTemplatesAsync(targetPostgres, fixture, TestContext.Current.CancellationToken);
+        await using var sourcePostgres = sourcePostgresContainer
+            ?? throw new InvalidOperationException("The Justice source PostgreSQL fixture was not created.");
+        PostgreSqlContainer? targetPostgresContainer = null;
+        try
+        {
+            targetPostgresContainer = new PostgreSqlBuilder("postgres:16-alpine").Build();
+            await targetPostgresContainer.StartAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
+        }
+        catch (DockerUnavailableException exception)
+        {
+            if (targetPostgresContainer is not null) await targetPostgresContainer.DisposeAsync();
+            throw new DemoScenarioUnavailableException("A Docker-compatible runtime is required for Justice physical assurance.", exception);
+        }
+        await using var targetPostgres = targetPostgresContainer
+            ?? throw new InvalidOperationException("The Justice target PostgreSQL fixture was not created.");
+        await SeedSourceAsync(sourcePostgres, fixture, DemoScenarioExecutionContext.CurrentCancellationToken);
+        await CreateTargetTemplatesAsync(targetPostgres, fixture, DemoScenarioExecutionContext.CurrentCancellationToken);
 
         var configuration = CreateConfiguration(sourcePostgres.GetConnectionString(), targetPostgres.GetConnectionString(), sourceFilesRoot, targetFilesRoot);
         var graph = CreateGraph(fixture, configuration);
@@ -98,21 +112,21 @@ public sealed class JusticePhysicalAssuranceTests
         var contextFactory = new RuntimeConnectorContextFactory(environment);
         var checkpointStore = new FileSystemSnapshotStore(Path.Combine(root, "checkpoints"));
         var inspection = await new SourceInspectionService(sourceConnectors, contextFactory)
-            .InspectAsync(configuration, graph, TestContext.Current.CancellationToken);
-        Assert.True(inspection.IsValid, string.Join(Environment.NewLine,
+            .InspectAsync(configuration, graph, DemoScenarioExecutionContext.CurrentCancellationToken);
+        ScenarioInvariant.True(inspection.IsValid, string.Join(Environment.NewLine,
             inspection.Sources.SelectMany(source => source.Inspection.Issues).Select(issue => $"{issue.Code}: {issue.Message}")));
         var checkpoint = await new SnapshotCaptureService(sourceConnectors, checkpointStore, contextFactory)
-            .CaptureAsync(configuration, graph, TestContext.Current.CancellationToken);
-        Assert.Equal(CheckpointStatus.Complete, checkpoint.Status);
-        Assert.NotNull(checkpoint.Checkpoint);
+            .CaptureAsync(configuration, graph, DemoScenarioExecutionContext.CurrentCancellationToken);
+        ScenarioInvariant.Equal(CheckpointStatus.Complete, checkpoint.Status);
+        ScenarioInvariant.NotNull(checkpoint.Checkpoint);
 
         var registry = new PackRegistry([new JusticePack()]);
         var ruleSet = registry.Resolve(configuration.Root.Packs).Resolve(CreateRules());
         var rulePlan = VerificationExecutionPlan.Create(ruleSet, graph);
-        Assert.Equal(ruleSet.Rules.Count, rulePlan.Rules.Count);
-        Assert.All(rulePlan.Rules.Where(workset => workset.Rule.Id.Value is "party-case-reference" or "party-person-reference" or "charge-case-reference" or "sentence-disposition-reference" or "document-case-reference"),
-            workset => Assert.Equal(VerificationPartitionExecution.Global, workset.PartitionExecution));
-        Assert.Contains(rulePlan.Rules.SelectMany(workset => workset.RequiredTargetFields), field => field == "case_id");
+        ScenarioInvariant.Equal(ruleSet.Rules.Count, rulePlan.Rules.Count);
+        ScenarioInvariant.All(rulePlan.Rules.Where(workset => workset.Rule.Id.Value is "party-case-reference" or "party-person-reference" or "charge-case-reference" or "sentence-disposition-reference" or "document-case-reference"),
+            workset => ScenarioInvariant.Equal(VerificationPartitionExecution.Global, workset.PartitionExecution));
+        ScenarioInvariant.Contains(rulePlan.Rules.SelectMany(workset => workset.RequiredTargetFields), field => field == "case_id");
 
         var service = new VerificationService(checkpointStore);
         var cleanRows = BuildTargetRows(fixture);
@@ -120,36 +134,36 @@ public sealed class JusticePhysicalAssuranceTests
         var cleanExternal = await VerifyExternalAsync(service, configuration, graph, checkpoint, ruleSet, cleanRows,
             fixture.Documents, new HashSet<string>(StringComparer.Ordinal), targetPostgres, postgresTarget, filesystemTarget,
             contextFactory, Path.Combine(root, "external-corrected"));
-        Assert.Equal(VerificationOutcome.Passed, cleanExternal.Run.Outcome);
-        Assert.DoesNotContain(cleanExternal.Findings, finding => finding.Result == EvidenceResult.Fail);
-        Assert.DoesNotContain(cleanExternal.Findings, finding => finding.Result == EvidenceResult.Fail &&
+        ScenarioInvariant.Equal(VerificationOutcome.Passed, cleanExternal.Run.Outcome);
+        ScenarioInvariant.DoesNotContain(cleanExternal.Findings, finding => finding.Result == EvidenceResult.Fail);
+        ScenarioInvariant.DoesNotContain(cleanExternal.Findings, finding => finding.Result == EvidenceResult.Fail &&
             finding.Code is "UnaccountedArtifact" or "MissingLineage" or "UnexpectedTarget");
-        Assert.Equal(checkpoint.Checkpoint.ArtifactCount, cleanExternal.Ledger.DispositionCount);
-        Assert.Equal(expectedTargetCount, cleanExternal.Ledger.LineageCount);
-        Assert.Equal(expectedTargetCount, cleanExternal.Run.TargetArtifactCount);
-        Assert.Contains(cleanExternal.Findings, finding => finding.RuleId.Value == "source-accounting" &&
+        ScenarioInvariant.Equal(checkpoint.Checkpoint.ArtifactCount, cleanExternal.Ledger.DispositionCount);
+        ScenarioInvariant.Equal(expectedTargetCount, cleanExternal.Ledger.LineageCount);
+        ScenarioInvariant.Equal(expectedTargetCount, cleanExternal.Run.TargetArtifactCount);
+        ScenarioInvariant.Contains(cleanExternal.Findings, finding => finding.RuleId.Value == "source-accounting" &&
             finding.Result == EvidenceResult.Pass && finding.Expected?.Value is IntegerValue total &&
             total.Value == checkpoint.Checkpoint.ArtifactCount);
-        Assert.Contains(cleanExternal.Findings, finding => finding.Code == "ExternalTargetObserved" &&
+        ScenarioInvariant.Contains(cleanExternal.Findings, finding => finding.Code == "ExternalTargetObserved" &&
             finding.Expected?.Value is StringValue observed && observed.Value == "externally-populated-target");
         var cleanRepeat = await VerifyExternalAsync(service, configuration, graph, checkpoint, ruleSet, cleanRows,
             fixture.Documents, new HashSet<string>(StringComparer.Ordinal), targetPostgres, postgresTarget, filesystemTarget,
             contextFactory, Path.Combine(root, "external-corrected-repeat"));
-        Assert.NotEqual(cleanExternal.Run.Id, cleanRepeat.Run.Id);
-        Assert.Equal(cleanExternal.Run.TargetFingerprint, cleanRepeat.Run.TargetFingerprint);
-        Assert.Equal(cleanExternal.Run.EvidenceFingerprint, cleanRepeat.Run.EvidenceFingerprint);
-        Assert.Equal(cleanExternal.Ledger.Fingerprint, cleanRepeat.Ledger.Fingerprint);
-        Assert.Equal(cleanExternal.Ledger.DispositionCount, cleanRepeat.Ledger.DispositionCount);
-        Assert.Equal(cleanExternal.Ledger.LineageCount, cleanRepeat.Ledger.LineageCount);
+        ScenarioInvariant.NotEqual(cleanExternal.Run.Id, cleanRepeat.Run.Id);
+        ScenarioInvariant.Equal(cleanExternal.Run.TargetFingerprint, cleanRepeat.Run.TargetFingerprint);
+        ScenarioInvariant.Equal(cleanExternal.Run.EvidenceFingerprint, cleanRepeat.Run.EvidenceFingerprint);
+        ScenarioInvariant.Equal(cleanExternal.Ledger.Fingerprint, cleanRepeat.Ledger.Fingerprint);
+        ScenarioInvariant.Equal(cleanExternal.Ledger.DispositionCount, cleanRepeat.Ledger.DispositionCount);
+        ScenarioInvariant.Equal(cleanExternal.Ledger.LineageCount, cleanRepeat.Ledger.LineageCount);
 
         var defectiveRows = CloneRows(cleanRows);
         ApplyDefects(defectiveRows);
         var defective = await VerifyExternalAsync(service, configuration, graph, checkpoint, ruleSet, defectiveRows,
             fixture.Documents, new HashSet<string>(["DOC000020"], StringComparer.Ordinal), targetPostgres, postgresTarget,
             filesystemTarget, contextFactory, Path.Combine(root, "external-defective"));
-        Assert.Equal(VerificationOutcome.Failed, defective.Run.Outcome);
+        ScenarioInvariant.Equal(VerificationOutcome.Failed, defective.Run.Outcome);
         var failures = defective.Findings.Where(finding => finding.Result == EvidenceResult.Fail).ToArray();
-        Assert.Equal(DefectManifest.Sum(defect => defect.ExpectedFindingCount), failures.Length);
+        ScenarioInvariant.Equal(DefectManifest.Sum(defect => defect.ExpectedFindingCount), failures.Length);
         var expectedFailureCounts = new Dictionary<string, int>(StringComparer.Ordinal)
         {
             ["target-presence"] = 2, ["case-uniqueness"] = 1, ["person-uniqueness"] = 1,
@@ -162,93 +176,82 @@ public sealed class JusticePhysicalAssuranceTests
         };
         var observedFailureCounts = failures.GroupBy(finding => finding.RuleId.Value, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
-        Assert.Equal(expectedFailureCounts.OrderBy(pair => pair.Key, StringComparer.Ordinal),
+        ScenarioInvariant.Equal(expectedFailureCounts.OrderBy(pair => pair.Key, StringComparer.Ordinal),
             observedFailureCounts.OrderBy(pair => pair.Key, StringComparer.Ordinal));
-        Assert.All(failures, finding =>
+        ScenarioInvariant.All(failures, finding =>
         {
-            Assert.Equal("1", finding.RuleVersion);
-            Assert.NotEmpty(finding.Inputs);
-            Assert.False(string.IsNullOrWhiteSpace(finding.Explanation));
+            ScenarioInvariant.Equal("1", finding.RuleVersion);
+            ScenarioInvariant.NotEmpty(finding.Inputs);
+            ScenarioInvariant.False(string.IsNullOrWhiteSpace(finding.Explanation));
         });
-        Assert.All(DefectManifest, defect => Assert.Contains(failures,
+        ScenarioInvariant.All(DefectManifest, defect => ScenarioInvariant.Contains(failures,
             finding => finding.RuleId.Value == defect.ExpectedRuleId));
-        Assert.Equal(expectedTargetCount - 2, defective.Ledger.LineageCount);
-        Assert.Equal(2, defective.Findings.Count(finding => finding.Code == "UnaccountedArtifact"));
-        Assert.Equal(2, defective.Findings.Count(finding => finding.Code == "MissingLineage"));
+        ScenarioInvariant.Equal(expectedTargetCount - 2, defective.Ledger.LineageCount);
+        ScenarioInvariant.Equal(2, defective.Findings.Count(finding => finding.Code == "UnaccountedArtifact"));
+        ScenarioInvariant.Equal(2, defective.Findings.Count(finding => finding.Code == "MissingLineage"));
 
         var evidenceStore = new FileSystemEvidenceStore(Path.Combine(root, ".proofshift", "verifications"));
         var recoveryStore = new FileSystemRecoveryArtifactStore(Path.Combine(root, ".proofshift", "recovery"));
-        await evidenceStore.SaveAsync(cleanExternal.EvidenceGraph, TestContext.Current.CancellationToken);
-        await evidenceStore.SaveAsync(defective.EvidenceGraph, TestContext.Current.CancellationToken);
+        await evidenceStore.SaveAsync(cleanExternal.EvidenceGraph, DemoScenarioExecutionContext.CurrentCancellationToken);
+        await evidenceStore.SaveAsync(defective.EvidenceGraph, DemoScenarioExecutionContext.CurrentCancellationToken);
         var dryRun = await new DryRunOrchestrator(sourceConnectors, targets, checkpointStore, service,
             new RecoveryService(checkpointStore,
                 new RecoveryCompensatorRegistry([new ShadowBaselineRestoreCompensator()])), contextFactory)
             .RunAsync(configuration, graph, ruleSet, new EffectiveRecoveryPolicy(), Path.Combine(root, "projected-corrected"),
                 Path.Combine(root, "temporary", "projected-corrected"), "0.10F", evidenceStore, recoveryStore,
-                TestContext.Current.CancellationToken);
-        Assert.True(dryRun.Outcome == DryRunExecutionOutcome.Qualified,
+                DemoScenarioExecutionContext.CurrentCancellationToken);
+        ScenarioInvariant.True(dryRun.Outcome == DryRunExecutionOutcome.Qualified,
             $"Justice shadow dry run was {dryRun.Outcome} ({dryRun.FailureCode}); verification failures: {string.Join(", ", dryRun.Verification?.Findings.Where(finding => finding.Result == EvidenceResult.Fail).Select(finding => finding.RuleId.Value + ":" + finding.Code) ?? [])}; recovery issues: {string.Join(", ", dryRun.Recovery?.Assessment.Issues.Select(issue => issue.Code) ?? [])}; rehearsal: {dryRun.Recovery?.Rehearsal?.Outcome}");
-        Assert.Equal(VerificationOutcome.Passed, dryRun.Verification!.Run.Outcome);
-        Assert.Equal(DryRunQualificationStatus.Qualified, dryRun.Recovery!.Qualification.Status);
-        Assert.Equal(RecoveryRehearsalOutcome.Passed, dryRun.Recovery.Rehearsal.Outcome);
-        Assert.NotNull(dryRun.VerificationEvidence);
-        Assert.NotNull(dryRun.RecoveryArtifacts);
-        Assert.DoesNotContain(dryRun.Verification.Findings, finding => finding.Result == EvidenceResult.Fail &&
+        ScenarioInvariant.Equal(VerificationOutcome.Passed, dryRun.Verification!.Run.Outcome);
+        ScenarioInvariant.Equal(DryRunQualificationStatus.Qualified, dryRun.Recovery!.Qualification.Status);
+        ScenarioInvariant.Equal(RecoveryRehearsalOutcome.Passed, dryRun.Recovery.Rehearsal.Outcome);
+        ScenarioInvariant.NotNull(dryRun.VerificationEvidence);
+        ScenarioInvariant.NotNull(dryRun.RecoveryArtifacts);
+        ScenarioInvariant.DoesNotContain(dryRun.Verification.Findings, finding => finding.Result == EvidenceResult.Fail &&
             finding.Code is "UnaccountedArtifact" or "MissingLineage" or "UnexpectedTarget");
-        Assert.DoesNotContain(dryRun.Verification.Findings, finding => finding.Result == EvidenceResult.Fail);
-        Assert.Equal(RecoveryAssessmentOutcome.Passed, dryRun.Recovery.Assessment.Outcome);
+        ScenarioInvariant.DoesNotContain(dryRun.Verification.Findings, finding => finding.Result == EvidenceResult.Fail);
+        ScenarioInvariant.Equal(RecoveryAssessmentOutcome.Passed, dryRun.Recovery.Assessment.Outcome);
 
         var report = JusticeAssuranceReport.Create(configuration.Root.Project!.Name!, dryRun.Verification!, dryRun.Recovery!);
         var reportJson = JsonSerializer.Serialize(report);
         var reportPath = Path.Combine(root, "justice-assurance-report.json");
-        await File.WriteAllTextAsync(reportPath, reportJson, TestContext.Current.CancellationToken);
-        reportJson = await File.ReadAllTextAsync(reportPath, TestContext.Current.CancellationToken);
-        Assert.Contains("Justice.Case", reportJson, StringComparison.Ordinal);
-        Assert.Contains("justice-reference-integrity", reportJson, StringComparison.Ordinal);
-        Assert.Equal(0, report.VerificationFailureCount);
-        Assert.Equal(0, report.UnaccountedSourceCount);
-        Assert.Equal(0, report.UnexplainedTargetCount);
-        Assert.Equal("QUALIFIED", report.Qualification);
-        Assert.DoesNotContain("Pension.Member", reportJson, StringComparison.Ordinal);
-        Assert.DoesNotContain("Utility.Account", reportJson, StringComparison.Ordinal);
-        Assert.DoesNotContain("meter", reportJson, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("beneficiary", reportJson, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("does not validate law", reportJson, StringComparison.Ordinal);
+        await File.WriteAllTextAsync(reportPath, reportJson, DemoScenarioExecutionContext.CurrentCancellationToken);
+        reportJson = await File.ReadAllTextAsync(reportPath, DemoScenarioExecutionContext.CurrentCancellationToken);
+        ScenarioInvariant.Contains("Justice.Case", reportJson, StringComparison.Ordinal);
+        ScenarioInvariant.Contains("justice-reference-integrity", reportJson, StringComparison.Ordinal);
+        ScenarioInvariant.Equal(0, report.VerificationFailureCount);
+        ScenarioInvariant.Equal(0, report.UnaccountedSourceCount);
+        ScenarioInvariant.Equal(0, report.UnexplainedTargetCount);
+        ScenarioInvariant.Equal("QUALIFIED", report.Qualification);
+        ScenarioInvariant.DoesNotContain("Pension.Member", reportJson, StringComparison.Ordinal);
+        ScenarioInvariant.DoesNotContain("Utility.Account", reportJson, StringComparison.Ordinal);
+        ScenarioInvariant.DoesNotContain("meter", reportJson, StringComparison.OrdinalIgnoreCase);
+        ScenarioInvariant.DoesNotContain("beneficiary", reportJson, StringComparison.OrdinalIgnoreCase);
+        ScenarioInvariant.Contains("does not validate law", reportJson, StringComparison.Ordinal);
         var genericReport = CrossDomainAssuranceReport.Create(configuration.Root.Project!.Name!, new JusticePack(),
             report.ClaimBoundary, dryRun.Verification!, dryRun.Recovery!);
-        var persistedReport = await PersistedAssuranceReportTestHelper.BuildAsync(root,
-            Path.Combine(root, "projected-corrected"), configuration.Root.Project.Name!, new JusticePack(),
-            dryRun.Recovery!.Id, TestContext.Current.CancellationToken);
-        Assert.Equal("proofshift.justice", persistedReport.PackId);
-        Assert.Equal(new JusticePack().Metadata.ClaimBoundary, persistedReport.ClaimBoundary);
-        Assert.Equal("QUALIFIED", persistedReport.Qualification);
-        Assert.Empty(persistedReport.FindingsByRuleAndCode);
-        await PersistedAssuranceReportTestHelper.AssertCliReportAndComparisonAsync(root,
-            Path.Combine(root, "projected-corrected"), configuration.Root.Project.Name!,
-            new JusticePack().Id, new JusticePack().Version, new JusticePack().Metadata.ClaimBoundary,
-            dryRun.Recovery!.Id, TestContext.Current.CancellationToken);
-        Assert.Equal("proofshift.justice", genericReport.PackId);
-        Assert.Equal("0.10.0", genericReport.PackVersion);
-        Assert.Equal("QUALIFIED", genericReport.Qualification);
-        Assert.Equal(genericReport.PackVersion, genericReport.RuntimePackVersions[genericReport.PackId]);
-        Assert.NotEmpty(genericReport.RuleVersions);
-        Assert.All(genericReport.RuleVersions.Values, version => Assert.Equal("1", version));
-        Assert.Contains(genericReport.Concepts, concept => concept.SemanticType == "Justice.Case");
-        Assert.Contains(genericReport.Rules, rule => rule.Type == "justice-reference-integrity" && rule.Version == "1");
+        ScenarioInvariant.Equal("proofshift.justice", genericReport.PackId);
+        ScenarioInvariant.Equal("0.10.0", genericReport.PackVersion);
+        ScenarioInvariant.Equal("QUALIFIED", genericReport.Qualification);
+        ScenarioInvariant.Equal(genericReport.PackVersion, genericReport.RuntimePackVersions[genericReport.PackId]);
+        ScenarioInvariant.NotEmpty(genericReport.RuleVersions);
+        ScenarioInvariant.All(genericReport.RuleVersions.Values, version => ScenarioInvariant.Equal("1", version));
+        ScenarioInvariant.Contains(genericReport.Concepts, concept => concept.SemanticType == "Justice.Case");
+        ScenarioInvariant.Contains(genericReport.Rules, rule => rule.Type == "justice-reference-integrity" && rule.Version == "1");
         var genericReportJson = JsonSerializer.Serialize(genericReport);
-        Assert.DoesNotContain("Utility.Account", genericReportJson, StringComparison.Ordinal);
-        Assert.DoesNotContain("Pension.Member", genericReportJson, StringComparison.Ordinal);
-        Assert.DoesNotContain("HCM.Worker", genericReportJson, StringComparison.Ordinal);
-        Assert.DoesNotContain("Fhir.Patient", genericReportJson, StringComparison.Ordinal);
+        ScenarioInvariant.DoesNotContain("Utility.Account", genericReportJson, StringComparison.Ordinal);
+        ScenarioInvariant.DoesNotContain("Pension.Member", genericReportJson, StringComparison.Ordinal);
+        ScenarioInvariant.DoesNotContain("HCM.Worker", genericReportJson, StringComparison.Ordinal);
+        ScenarioInvariant.DoesNotContain("Fhir.Patient", genericReportJson, StringComparison.Ordinal);
         var demoReport = DemoAssuranceReport.Create(new JusticePack(), report.ClaimBoundary,
             checkpoint.Checkpoint.ArtifactCount, checkpoint.Checkpoint.Id.Value.ToString("D"), checkpoint.Checkpoint.ManifestHash!,
             DefectManifest.Length, cleanExternal, defective, dryRun.Verification!, dryRun.Recovery!);
-        Assert.Equal(24, demoReport.DefectiveExternalObservation.VerificationFailureCount);
-        Assert.Equal(24, demoReport.DefectiveExternalObservation.EvidenceReferences.Count);
-        Assert.Equal(0, demoReport.CorrectedShadow.VerificationFailureCount);
-        Assert.Equal(0, demoReport.CorrectedShadow.UnaccountedSourceCount);
-        Assert.Equal(0, demoReport.CorrectedShadow.UnexplainedTargetCount);
-        await DemoScenarioResultWriter.WriteIfRequestedAsync(demoReport, TestContext.Current.CancellationToken);
+        ScenarioInvariant.Equal(24, demoReport.DefectiveExternalObservation.VerificationFailureCount);
+        ScenarioInvariant.Equal(24, demoReport.DefectiveExternalObservation.EvidenceReferences.Count);
+        ScenarioInvariant.Equal(0, demoReport.CorrectedShadow.VerificationFailureCount);
+        ScenarioInvariant.Equal(0, demoReport.CorrectedShadow.UnaccountedSourceCount);
+        ScenarioInvariant.Equal(0, demoReport.CorrectedShadow.UnexplainedTargetCount);
+        return DemoScenarioExecutionResult.Create(demoReport, demoReport.ToHumanReadable());
     }
 
     private static Fixture CreateFixture(int caseCount)
@@ -504,24 +507,24 @@ public sealed class JusticePhysicalAssuranceTests
         RuntimeConnectorContextFactory contexts, string workDirectory)
     {
         var runId = new RunId(Guid.NewGuid());
-        await LoadExternalTargetAsync(postgres, runId, rows, graph, cancellationToken: TestContext.Current.CancellationToken);
+        await LoadExternalTargetAsync(postgres, runId, rows, graph, cancellationToken: DemoScenarioExecutionContext.CurrentCancellationToken);
         await LoadExternalFilesAsync(configuration, graph, contexts, files, documents, missingDocuments, runId,
-            TestContext.Current.CancellationToken);
+            DemoScenarioExecutionContext.CurrentCancellationToken);
         var documentNode = graph.Nodes.Single(node => node.Name == "target-document-payload");
         var documentContext = new ShadowTargetContext(contexts.Create(configuration, documentNode), runId, SystemRole.ShadowTarget);
         var expectedDocuments = documents.Where(document => !missingDocuments.Contains(document.Id))
             .ToDictionary(document => document.Path, StringComparer.Ordinal);
         var observedDocumentCount = 0;
         await foreach (var observed in files.ReadAsync(new ReadRequest(documentContext, documentNode.Selector,
-            new ReadOptions()), TestContext.Current.CancellationToken).WithCancellation(TestContext.Current.CancellationToken))
+            new ReadOptions()), DemoScenarioExecutionContext.CurrentCancellationToken).WithCancellation(DemoScenarioExecutionContext.CurrentCancellationToken))
         {
             var path = ((StringValue)observed.Values["relativePath"]).Value;
-            Assert.True(expectedDocuments.TryGetValue(path, out var expectedDocument), $"Unexpected external document path {path}.");
-            Assert.Equal(expectedDocument!.Sha256, observed.Provenance.SourceHash);
-            Assert.Equal(expectedDocument.Sha256, ((BinaryReferenceValue)observed.Values["content"]).Sha256);
+            ScenarioInvariant.True(expectedDocuments.TryGetValue(path, out var expectedDocument), $"Unexpected external document path {path}.");
+            ScenarioInvariant.Equal(expectedDocument!.Sha256, observed.Provenance.SourceHash);
+            ScenarioInvariant.Equal(expectedDocument.Sha256, ((BinaryReferenceValue)observed.Values["content"]).Sha256);
             observedDocumentCount++;
         }
-        Assert.Equal(expectedDocuments.Count, observedDocumentCount);
+        ScenarioInvariant.Equal(expectedDocuments.Count, observedDocumentCount);
         var targetNodes = graph.Nodes.Where(node => node.Type is MigrationNodeType.Target or MigrationNodeType.Archive).ToArray();
         var runtimes = targetNodes.Select(node =>
         {
@@ -536,9 +539,9 @@ public sealed class JusticePhysicalAssuranceTests
                 var connector = node.Name == "target-document-payload" ? (IShadowTargetConnector)files : target;
                 return new ExternalTargetEndpoint(node.Name, node.SystemId, node.EndpointId, connector.Id, connector.Version);
             }), DateTimeOffset.UnixEpoch);
-        Assert.Equal(checkpoint.Checkpoint.Id, observation.CheckpointId);
+        ScenarioInvariant.Equal(checkpoint.Checkpoint.Id, observation.CheckpointId);
         return await service.VerifyExternalTargetAsync(configuration, graph, observation, rules, workDirectory, "0.10F",
-            runtimes, TestContext.Current.CancellationToken);
+            runtimes, DemoScenarioExecutionContext.CurrentCancellationToken);
     }
 
     private static async Task LoadExternalTargetAsync(PostgreSqlContainer postgres, RunId runId,
@@ -605,7 +608,7 @@ public sealed class JusticePhysicalAssuranceTests
             var path = Path.Combine(root, document.Path.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             await File.WriteAllBytesAsync(path, document.Content, cancellationToken);
-            Assert.Equal(document.Sha256, Sha(await File.ReadAllBytesAsync(path, cancellationToken)));
+            ScenarioInvariant.Equal(document.Sha256, Sha(await File.ReadAllBytesAsync(path, cancellationToken)));
         }
     }
 
@@ -623,10 +626,6 @@ public sealed class JusticePhysicalAssuranceTests
         JusticeDocument[] Documents);
     private sealed record JusticeDefect(string Id, string Category, string SemanticConcept, string BusinessKey,
         string ExpectedRuleId, EvidenceResult ExpectedOutcome, int ExpectedFindingCount);
-    private sealed class TemporaryDirectoryCleanup(string path, bool deleteOnDispose) : IDisposable
-    {
-        public void Dispose() => DemoScenarioResultWriter.CleanupFixtureRoot(path, deleteOnDispose);
-    }
     private sealed class JusticeEnvironment(IReadOnlyDictionary<string, string> values) : IEnvironmentVariableProvider
     {
         public string? GetValue(string name) => values.GetValueOrDefault(name);

@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>ProofShift.DemoScenarios</RootNamespace>
+    <AssemblyName>ProofShift.DemoScenarios</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ProofShift.Configuration/ProofShift.Configuration.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.Abstractions/ProofShift.Connectors.Abstractions.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.Csv/ProofShift.Connectors.Csv.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.Files/ProofShift.Connectors.Files.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.Postgres/ProofShift.Connectors.Postgres.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.SqlServer/ProofShift.Connectors.SqlServer.csproj" />
+    <ProjectReference Include="../ProofShift.Connectors.StructuredFiles/ProofShift.Connectors.StructuredFiles.csproj" />
+    <ProjectReference Include="../ProofShift.Domain/ProofShift.Domain.csproj" />
+    <ProjectReference Include="../ProofShift.Engine/ProofShift.Engine.csproj" />
+    <ProjectReference Include="../ProofShift.Evidence/ProofShift.Evidence.csproj" />
+    <ProjectReference Include="../ProofShift.Graph/ProofShift.Graph.csproj" />
+    <ProjectReference Include="../ProofShift.Packs.Abstractions/ProofShift.Packs.Abstractions.csproj" />
+    <ProjectReference Include="../ProofShift.Packs.Fhir/ProofShift.Packs.Fhir.csproj" />
+    <ProjectReference Include="../ProofShift.Packs.Hcm/ProofShift.Packs.Hcm.csproj" />
+    <ProjectReference Include="../ProofShift.Packs.Justice/ProofShift.Packs.Justice.csproj" />
+    <ProjectReference Include="../ProofShift.Packs.Pension/ProofShift.Packs.Pension.csproj" />
+    <ProjectReference Include="../ProofShift.Packs.Utility/ProofShift.Packs.Utility.csproj" />
+    <ProjectReference Include="../ProofShift.Projection/ProofShift.Projection.csproj" />
+    <ProjectReference Include="../ProofShift.Recovery/ProofShift.Recovery.csproj" />
+    <ProjectReference Include="../ProofShift.Reporting/ProofShift.Reporting.csproj" />
+    <ProjectReference Include="../ProofShift.Snapshots/ProofShift.Snapshots.csproj" />
+    <ProjectReference Include="../ProofShift.Verification/ProofShift.Verification.csproj" />
+    <PackageReference Include="Testcontainers.MsSql" />
+    <PackageReference Include="Testcontainers.PostgreSql" />
+    <PackageReference Include="YamlDotNet" />
+  </ItemGroup>
+</Project>

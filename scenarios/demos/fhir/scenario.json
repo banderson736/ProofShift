@@ -15,9 +15,7 @@
     "minimumDotNetSdk": "10.0.100",
     "minimumFreeDiskBytes": 0,
     "requiredPorts": [],
-    "requiredFiles": [
-      "tests/ProofShift.EndToEnd.Tests/FhirPhysicalAssuranceTests.cs"
-    ]
+    "requiredFiles": []
   },
   "sourceSystems": [
     "Synthetic selected FHIR-style NDJSON resources and filesystem Binary documents"
@@ -52,23 +50,14 @@
       "id": "fhir-physical-assurance",
       "name": "Run accepted FHIR-style physical assurance",
       "phase": "External observation, exact Verification findings, Evidence, and corrected Recovery",
-      "runner": "dotnet-test",
+      "runner": "demo-runner",
       "workingDirectory": "repository",
-      "arguments": [
-        "--project",
-        "tests/ProofShift.EndToEnd.Tests/ProofShift.EndToEnd.Tests.csproj",
-        "--filter-class",
-        "ProofShift.EndToEnd.Tests.FhirPhysicalAssuranceTests",
-        "--parallel",
-        "none",
-        "--timeout",
-        "20m"
-      ],
+      "arguments": ["run", "fhir", "--workspace", "{{workspace}}", "--result-file", "fixture/assurance-report.json"],
       "expectedOutcome": "success",
       "expectedExitCode": 0,
       "timeoutSeconds": 1500,
       "resultFile": "fixture/assurance-report.json",
-      "outputFile": "logs/fhir-physical-test.log",
+      "outputFile": "logs/fhir-physical-demo.log",
       "assertions": [
         { "pointer": "/packId", "valueType": "string", "expected": "proofshift.fhir" },
         { "pointer": "/checkpointArtifactCount", "valueType": "number", "expected": "7000" },

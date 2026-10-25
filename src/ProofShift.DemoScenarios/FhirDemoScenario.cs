@@ -22,12 +22,10 @@ using ProofShift.Recovery;
 using ProofShift.Snapshots;
 using ProofShift.Verification;
 using Testcontainers.PostgreSql;
-using Xunit;
 
-namespace ProofShift.EndToEnd.Tests;
+namespace ProofShift.DemoScenarios;
 
-[Collection("DockerIntegration")]
-public sealed class FhirPhysicalAssuranceTests
+public sealed class FhirDemoScenario : IDemoScenario
 {
     private const int PatientCount = 1_000;
     private const string SourceRecordsSecret = "PS010F_FHIR_SOURCE_RECORDS";
@@ -48,33 +46,43 @@ public sealed class FhirPhysicalAssuranceTests
         new("unexpected-condition", "unexpected target resource", "Fhir.Condition", "COND-UNEXPECTED", "unexpected-target")
     ];
 
-    [Fact]
-    public async Task FhirPhysicalExternalAndShadowScenariosProveExactDefectsAndQualification()
-    {
-        Assert.Equal(DefectManifest.Length, DefectManifest.Select(defect => defect.Id).Distinct(StringComparer.Ordinal).Count());
-        var fixture = CreateFixture(PatientCount);
-        Assert.Equal(6L * PatientCount, fixture.Entities.Sum(entity => (long)fixture.SourceRows[entity.TargetNode].Count));
-        Assert.Equal(7L * PatientCount, fixture.Entities.Sum(entity => (long)fixture.SourceRows[entity.TargetNode].Count) + fixture.Documents.Count);
-        Assert.Equal(0.25m, decimal.Parse(fixture.SourceRows["target-observation"][0]["quantityValue"], CultureInfo.InvariantCulture));
+    public string Id => "fhir";
+    public string DisplayName => "FHIR-style healthcare assurance";
 
-        var root = DemoScenarioResultWriter.CreateFixtureRoot("proofshift-fhir-f5");
+    public async Task<DemoScenarioExecutionResult> ExecuteAsync(DemoScenarioExecutionContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        using var executionScope = context.Activate();
+        ScenarioInvariant.Equal(DefectManifest.Length, DefectManifest.Select(defect => defect.Id).Distinct(StringComparer.Ordinal).Count());
+        var fixture = CreateFixture(PatientCount);
+        ScenarioInvariant.Equal(6L * PatientCount, fixture.Entities.Sum(entity => (long)fixture.SourceRows[entity.TargetNode].Count));
+        ScenarioInvariant.Equal(7L * PatientCount, fixture.Entities.Sum(entity => (long)fixture.SourceRows[entity.TargetNode].Count) + fixture.Documents.Count);
+        ScenarioInvariant.Equal(0.25m, decimal.Parse(fixture.SourceRows["target-observation"][0]["quantityValue"], CultureInfo.InvariantCulture));
+
+        var root = Path.Combine(Path.GetFullPath(context.WorkspaceDirectory), "fixture");
         Directory.CreateDirectory(root);
-        using var cleanup = new TemporaryDirectoryCleanup(root, !DemoScenarioResultWriter.IsRunningDemo);
+        using var cleanup = DemoScenarioWorkspace.BeginFixtureCleanup(root, context.PreserveArtifacts);
         var sourceRecordsRoot = Path.Combine(root, "source-records");
         var sourceFilesRoot = Path.Combine(root, "source-files");
         var targetFilesRoot = Path.Combine(root, "target-files");
         Directory.CreateDirectory(sourceRecordsRoot);
         Directory.CreateDirectory(sourceFilesRoot);
         Directory.CreateDirectory(targetFilesRoot);
-        await WriteSourceRecordsAsync(fixture, sourceRecordsRoot, TestContext.Current.CancellationToken);
-        await WriteDocumentFilesAsync(fixture.Documents, sourceFilesRoot, TestContext.Current.CancellationToken);
-        await using var targetPostgres = new PostgreSqlBuilder("postgres:16-alpine").Build();
-        try { await targetPostgres.StartAsync(TestContext.Current.CancellationToken); }
-        catch (DockerUnavailableException)
+        await WriteSourceRecordsAsync(fixture, sourceRecordsRoot, DemoScenarioExecutionContext.CurrentCancellationToken);
+        await WriteDocumentFilesAsync(fixture.Documents, sourceFilesRoot, DemoScenarioExecutionContext.CurrentCancellationToken);
+        PostgreSqlContainer? targetPostgresContainer = null;
+        try
         {
-            await targetPostgres.DisposeAsync();
-            throw Xunit.Sdk.SkipException.ForSkip("A Docker-compatible runtime is required for FHIR physical assurance.");
+            targetPostgresContainer = new PostgreSqlBuilder("postgres:16-alpine").Build();
+            await targetPostgresContainer.StartAsync(DemoScenarioExecutionContext.CurrentCancellationToken);
         }
+        catch (DockerUnavailableException exception)
+        {
+            if (targetPostgresContainer is not null) await targetPostgresContainer.DisposeAsync();
+            throw new DemoScenarioUnavailableException("A Docker-compatible runtime is required for FHIR physical assurance.", exception);
+        }
+        await using var targetPostgres = targetPostgresContainer
+            ?? throw new InvalidOperationException("The FHIR target PostgreSQL fixture was not created.");
         var configuration = CreateConfiguration(targetPostgres.GetConnectionString(), sourceRecordsRoot, sourceFilesRoot, targetFilesRoot);
         var graph = CreateGraph(fixture, configuration);
         var sourceConnectors = new ConnectorRegistry([new StructuredFileConnector("ndjson"), new FilesystemSourceConnector()]);
@@ -88,50 +96,50 @@ public sealed class FhirPhysicalAssuranceTests
             [TargetDatabaseSecret] = targetPostgres.GetConnectionString(),
             [TargetFilesSecret] = targetFilesRoot
         }));
-        await CreateTargetTemplatesAsync(targetPostgres, fixture, TestContext.Current.CancellationToken);
+        await CreateTargetTemplatesAsync(targetPostgres, fixture, DemoScenarioExecutionContext.CurrentCancellationToken);
         var checkpointStore = new FileSystemSnapshotStore(Path.Combine(root, "checkpoints"));
         var inspection = await new SourceInspectionService(sourceConnectors, contexts)
-            .InspectAsync(configuration, graph, TestContext.Current.CancellationToken);
-        Assert.True(inspection.IsValid, string.Join(Environment.NewLine,
+            .InspectAsync(configuration, graph, DemoScenarioExecutionContext.CurrentCancellationToken);
+        ScenarioInvariant.True(inspection.IsValid, string.Join(Environment.NewLine,
             inspection.Sources.SelectMany(source => source.Inspection.Issues).Select(issue => $"{issue.Code}: {issue.Message}")));
         var checkpoint = await new SnapshotCaptureService(sourceConnectors, checkpointStore, contexts)
-            .CaptureAsync(configuration, graph, TestContext.Current.CancellationToken);
-        Assert.Equal(CheckpointStatus.Complete, checkpoint.Status);
-        Assert.NotNull(checkpoint.Checkpoint);
-        Assert.Equal(7L * PatientCount, checkpoint.Checkpoint.ArtifactCount);
+            .CaptureAsync(configuration, graph, DemoScenarioExecutionContext.CurrentCancellationToken);
+        ScenarioInvariant.Equal(CheckpointStatus.Complete, checkpoint.Status);
+        ScenarioInvariant.NotNull(checkpoint.Checkpoint);
+        ScenarioInvariant.Equal(7L * PatientCount, checkpoint.Checkpoint.ArtifactCount);
 
         var registry = new PackRegistry([new FhirPack()]);
         var rules = registry.Resolve(configuration.Root.Packs).Resolve(CreateRules());
         var plan = VerificationExecutionPlan.Create(rules, graph);
-        Assert.Equal(rules.Rules.Count, plan.Rules.Count);
-        Assert.All(plan.Rules.Where(workset => workset.Rule.Id.Value.StartsWith("fhir-", StringComparison.Ordinal)),
-            workset => Assert.Equal(VerificationPartitionExecution.Global, workset.PartitionExecution));
-        Assert.Contains(plan.Rules.SelectMany(workset => workset.RequiredTargetFields), field => field == "quantity_value");
-        Assert.Contains(rules.Rules, rule => rule.Id.Value == "observation-quantity");
+        ScenarioInvariant.Equal(rules.Rules.Count, plan.Rules.Count);
+        ScenarioInvariant.All(plan.Rules.Where(workset => workset.Rule.Id.Value.StartsWith("fhir-", StringComparison.Ordinal)),
+            workset => ScenarioInvariant.Equal(VerificationPartitionExecution.Global, workset.PartitionExecution));
+        ScenarioInvariant.Contains(plan.Rules.SelectMany(workset => workset.RequiredTargetFields), field => field == "quantity_value");
+        ScenarioInvariant.Contains(rules.Rules, rule => rule.Id.Value == "observation-quantity");
 
         var service = new VerificationService(checkpointStore);
         var correctedRows = BuildTargetRows(fixture);
         var expectedTargetCount = correctedRows.Values.Sum(rows => (long)rows.Count) + fixture.Documents.Count;
-        Assert.Equal(7L * PatientCount, expectedTargetCount);
+        ScenarioInvariant.Equal(7L * PatientCount, expectedTargetCount);
         var corrected = await VerifyExternalAsync(service, configuration, graph, checkpoint, rules, correctedRows,
             fixture, new HashSet<string>(StringComparer.Ordinal), targetPostgres, postgresTarget, filesystemTarget, contexts, targetFilesRoot,
             Path.Combine(root, "external-corrected"));
-        Assert.True(corrected.Run.Outcome == VerificationOutcome.Passed,
+        ScenarioInvariant.True(corrected.Run.Outcome == VerificationOutcome.Passed,
             $"Corrected external FHIR target failed: {string.Join(", ", corrected.Findings.Where(finding => finding.Result == EvidenceResult.Fail).Select(finding => finding.RuleId.Value + ":" + finding.Code).Take(50))}");
-        Assert.DoesNotContain(corrected.Findings, finding => finding.Result == EvidenceResult.Fail);
-        Assert.Equal(checkpoint.Checkpoint.ArtifactCount, corrected.Ledger.DispositionCount);
-        Assert.Equal(expectedTargetCount, corrected.Ledger.LineageCount);
-        Assert.Equal(expectedTargetCount, corrected.Run.TargetArtifactCount);
-        Assert.Contains(corrected.Findings, finding => finding.Code == "ExternalTargetObserved" &&
+        ScenarioInvariant.DoesNotContain(corrected.Findings, finding => finding.Result == EvidenceResult.Fail);
+        ScenarioInvariant.Equal(checkpoint.Checkpoint.ArtifactCount, corrected.Ledger.DispositionCount);
+        ScenarioInvariant.Equal(expectedTargetCount, corrected.Ledger.LineageCount);
+        ScenarioInvariant.Equal(expectedTargetCount, corrected.Run.TargetArtifactCount);
+        ScenarioInvariant.Contains(corrected.Findings, finding => finding.Code == "ExternalTargetObserved" &&
             finding.Expected?.Value is StringValue observed && observed.Value == "externally-populated-target");
 
         var repeat = await VerifyExternalAsync(service, configuration, graph, checkpoint, rules, correctedRows,
             fixture, new HashSet<string>(StringComparer.Ordinal), targetPostgres, postgresTarget, filesystemTarget, contexts, targetFilesRoot,
             Path.Combine(root, "external-corrected-repeat"));
-        Assert.NotEqual(corrected.Run.Id, repeat.Run.Id);
-        Assert.Equal(corrected.Run.TargetFingerprint, repeat.Run.TargetFingerprint);
-        Assert.Equal(corrected.Run.EvidenceFingerprint, repeat.Run.EvidenceFingerprint);
-        Assert.Equal(corrected.Ledger.Fingerprint, repeat.Ledger.Fingerprint);
+        ScenarioInvariant.NotEqual(corrected.Run.Id, repeat.Run.Id);
+        ScenarioInvariant.Equal(corrected.Run.TargetFingerprint, repeat.Run.TargetFingerprint);
+        ScenarioInvariant.Equal(corrected.Run.EvidenceFingerprint, repeat.Run.EvidenceFingerprint);
+        ScenarioInvariant.Equal(corrected.Ledger.Fingerprint, repeat.Ledger.Fingerprint);
 
         var defectiveRows = CloneRows(correctedRows);
         ApplyDefects(defectiveRows);
@@ -139,16 +147,16 @@ public sealed class FhirPhysicalAssuranceTests
         var defective = await VerifyExternalAsync(service, configuration, graph, checkpoint, rules, defectiveRows,
             fixture, new HashSet<string>([missingDocument], StringComparer.Ordinal), targetPostgres, postgresTarget, filesystemTarget, contexts, targetFilesRoot,
             Path.Combine(root, "external-defective"));
-        Assert.Equal(VerificationOutcome.Failed, defective.Run.Outcome);
+        ScenarioInvariant.Equal(VerificationOutcome.Failed, defective.Run.Outcome);
         var failures = defective.Findings.Where(finding => finding.Result == EvidenceResult.Fail).ToArray();
-        Assert.All(failures, finding =>
+        ScenarioInvariant.All(failures, finding =>
         {
-            Assert.Equal("1", finding.RuleVersion);
-            Assert.NotEmpty(finding.Inputs);
-            Assert.False(string.IsNullOrWhiteSpace(finding.Explanation));
+            ScenarioInvariant.Equal("1", finding.RuleVersion);
+            ScenarioInvariant.NotEmpty(finding.Inputs);
+            ScenarioInvariant.False(string.IsNullOrWhiteSpace(finding.Explanation));
         });
         var expectedFailures = DefectManifest.Sum(defect => defect.ExpectedFindingCount);
-        Assert.True(expectedFailures == failures.Length,
+        ScenarioInvariant.True(expectedFailures == failures.Length,
             $"Expected {expectedFailures} FHIR findings, observed {failures.Length}: {string.Join(", ", failures.GroupBy(finding => finding.RuleId.Value + ":" + finding.Code, StringComparer.Ordinal).Select(group => $"{group.Key}={group.Count()}"))}");
         var expectedRuleCounts = new Dictionary<string, int>(StringComparer.Ordinal)
         {
@@ -165,82 +173,71 @@ public sealed class FhirPhysicalAssuranceTests
         };
         var actualRuleCounts = failures.GroupBy(finding => finding.RuleId.Value, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
-        Assert.Equal(expectedRuleCounts.OrderBy(pair => pair.Key, StringComparer.Ordinal),
+        ScenarioInvariant.Equal(expectedRuleCounts.OrderBy(pair => pair.Key, StringComparer.Ordinal),
             actualRuleCounts.OrderBy(pair => pair.Key, StringComparer.Ordinal));
-        Assert.All(DefectManifest, defect => Assert.Contains(failures, finding => finding.RuleId.Value == defect.ExpectedRuleId));
-        Assert.Equal(expectedTargetCount - 3, defective.Ledger.LineageCount);
-        Assert.Equal(3, defective.Findings.Count(finding => finding.Code == "UnaccountedArtifact"));
-        Assert.Equal(2, defective.Findings.Count(finding => finding.Code == "MissingLineage"));
+        ScenarioInvariant.All(DefectManifest, defect => ScenarioInvariant.Contains(failures, finding => finding.RuleId.Value == defect.ExpectedRuleId));
+        ScenarioInvariant.Equal(expectedTargetCount - 3, defective.Ledger.LineageCount);
+        ScenarioInvariant.Equal(3, defective.Findings.Count(finding => finding.Code == "UnaccountedArtifact"));
+        ScenarioInvariant.Equal(2, defective.Findings.Count(finding => finding.Code == "MissingLineage"));
 
-        await WriteDocumentFilesAsync(fixture.Documents, targetFilesRoot, TestContext.Current.CancellationToken);
+        await WriteDocumentFilesAsync(fixture.Documents, targetFilesRoot, DemoScenarioExecutionContext.CurrentCancellationToken);
         var evidenceStore = new FileSystemEvidenceStore(Path.Combine(root, ".proofshift", "verifications"));
         var recoveryStore = new FileSystemRecoveryArtifactStore(Path.Combine(root, ".proofshift", "recovery"));
-        await evidenceStore.SaveAsync(corrected.EvidenceGraph, TestContext.Current.CancellationToken);
-        await evidenceStore.SaveAsync(defective.EvidenceGraph, TestContext.Current.CancellationToken);
+        await evidenceStore.SaveAsync(corrected.EvidenceGraph, DemoScenarioExecutionContext.CurrentCancellationToken);
+        await evidenceStore.SaveAsync(defective.EvidenceGraph, DemoScenarioExecutionContext.CurrentCancellationToken);
         var dryRun = await new DryRunOrchestrator(sourceConnectors, targets, checkpointStore, service,
             new RecoveryService(checkpointStore,
                 new RecoveryCompensatorRegistry([new ShadowBaselineRestoreCompensator()])), contexts)
             .RunAsync(configuration, graph, rules, new EffectiveRecoveryPolicy(), Path.Combine(root, "projected-corrected"),
                 Path.Combine(root, "temporary", "projected-corrected"), "0.10F", evidenceStore, recoveryStore,
-                TestContext.Current.CancellationToken);
-        Assert.True(dryRun.Outcome == DryRunExecutionOutcome.Qualified,
+                DemoScenarioExecutionContext.CurrentCancellationToken);
+        ScenarioInvariant.True(dryRun.Outcome == DryRunExecutionOutcome.Qualified,
             $"FHIR shadow dry run was {dryRun.Outcome} ({dryRun.FailureCode}); verification failures: {string.Join(", ", dryRun.Verification?.Findings.Where(finding => finding.Result == EvidenceResult.Fail).Select(finding => finding.RuleId.Value + ":" + finding.Code) ?? [])}; recovery issues: {string.Join(", ", dryRun.Recovery?.Assessment.Issues.Select(issue => issue.Code) ?? [])}");
-        Assert.Equal(VerificationOutcome.Passed, dryRun.Verification!.Run.Outcome);
-        Assert.Equal(DryRunQualificationStatus.Qualified, dryRun.Recovery!.Qualification.Status);
-        Assert.Equal(RecoveryAssessmentOutcome.Passed, dryRun.Recovery.Assessment.Outcome);
-        Assert.Equal(RecoveryRehearsalOutcome.Passed, dryRun.Recovery.Rehearsal.Outcome);
-        Assert.NotNull(dryRun.VerificationEvidence);
-        Assert.NotNull(dryRun.RecoveryArtifacts);
-        Assert.DoesNotContain(dryRun.Verification.Findings, finding => finding.Result == EvidenceResult.Fail);
+        ScenarioInvariant.Equal(VerificationOutcome.Passed, dryRun.Verification!.Run.Outcome);
+        ScenarioInvariant.Equal(DryRunQualificationStatus.Qualified, dryRun.Recovery!.Qualification.Status);
+        ScenarioInvariant.Equal(RecoveryAssessmentOutcome.Passed, dryRun.Recovery.Assessment.Outcome);
+        ScenarioInvariant.Equal(RecoveryRehearsalOutcome.Passed, dryRun.Recovery.Rehearsal.Outcome);
+        ScenarioInvariant.NotNull(dryRun.VerificationEvidence);
+        ScenarioInvariant.NotNull(dryRun.RecoveryArtifacts);
+        ScenarioInvariant.DoesNotContain(dryRun.Verification.Findings, finding => finding.Result == EvidenceResult.Fail);
 
         var report = FhirAssuranceReport.Create(configuration.Root.Project!.Name!, dryRun.Verification!, dryRun.Recovery!);
-        Assert.Equal(0, report.VerificationFailureCount);
-        Assert.Equal(0, report.UnaccountedSourceCount);
-        Assert.Equal(0, report.UnexplainedTargetCount);
-        Assert.Equal("QUALIFIED", report.Qualification);
-        Assert.Equal("FHIR-Style Healthcare Assurance", report.Title);
-        Assert.Equal("Synthetic selected-field migration assurance", report.Scope);
-        Assert.Contains("Fhir.Patient", report.Concepts);
-        Assert.Contains("Fhir.Binary", report.Concepts);
-        Assert.Contains("fhir-quantity-fidelity", report.RuleTypes);
-        Assert.Contains("Not FHIR/profile/US Core certification", report.ClaimBoundaryText, StringComparison.Ordinal);
-        Assert.DoesNotContain("Pension.Member", JsonSerializer.Serialize(report), StringComparison.Ordinal);
-        Assert.DoesNotContain("HCM.Worker", JsonSerializer.Serialize(report), StringComparison.Ordinal);
+        ScenarioInvariant.Equal(0, report.VerificationFailureCount);
+        ScenarioInvariant.Equal(0, report.UnaccountedSourceCount);
+        ScenarioInvariant.Equal(0, report.UnexplainedTargetCount);
+        ScenarioInvariant.Equal("QUALIFIED", report.Qualification);
+        ScenarioInvariant.Equal("FHIR-Style Healthcare Assurance", report.Title);
+        ScenarioInvariant.Equal("Synthetic selected-field migration assurance", report.Scope);
+        ScenarioInvariant.Contains("Fhir.Patient", report.Concepts);
+        ScenarioInvariant.Contains("Fhir.Binary", report.Concepts);
+        ScenarioInvariant.Contains("fhir-quantity-fidelity", report.RuleTypes);
+        ScenarioInvariant.Contains("Not FHIR/profile/US Core certification", report.ClaimBoundaryText, StringComparison.Ordinal);
+        ScenarioInvariant.DoesNotContain("Pension.Member", JsonSerializer.Serialize(report), StringComparison.Ordinal);
+        ScenarioInvariant.DoesNotContain("HCM.Worker", JsonSerializer.Serialize(report), StringComparison.Ordinal);
         var genericReport = CrossDomainAssuranceReport.Create(configuration.Root.Project!.Name!, new FhirPack(),
             report.ClaimBoundaryText, dryRun.Verification!, dryRun.Recovery!);
-        var persistedReport = await PersistedAssuranceReportTestHelper.BuildAsync(root,
-            Path.Combine(root, "projected-corrected"), configuration.Root.Project.Name!, new FhirPack(),
-            dryRun.Recovery!.Id, TestContext.Current.CancellationToken);
-        Assert.Equal("proofshift.fhir", persistedReport.PackId);
-        Assert.Equal(new FhirPack().Metadata.ClaimBoundary, persistedReport.ClaimBoundary);
-        Assert.Equal("QUALIFIED", persistedReport.Qualification);
-        Assert.Empty(persistedReport.FindingsByRuleAndCode);
-        await PersistedAssuranceReportTestHelper.AssertCliReportAndComparisonAsync(root,
-            Path.Combine(root, "projected-corrected"), configuration.Root.Project.Name!,
-            new FhirPack().Id, new FhirPack().Version, new FhirPack().Metadata.ClaimBoundary,
-            dryRun.Recovery!.Id, TestContext.Current.CancellationToken);
-        Assert.Equal("proofshift.fhir", genericReport.PackId);
-        Assert.Equal("0.10.0", genericReport.PackVersion);
-        Assert.Equal("QUALIFIED", genericReport.Qualification);
-        Assert.Equal(genericReport.PackVersion, genericReport.RuntimePackVersions[genericReport.PackId]);
-        Assert.NotEmpty(genericReport.RuleVersions);
-        Assert.All(genericReport.RuleVersions.Values, version => Assert.Equal("1", version));
-        Assert.Contains(genericReport.Concepts, concept => concept.SemanticType == "Fhir.Binary");
-        Assert.Contains(genericReport.Rules, rule => rule.Type == "fhir-quantity-fidelity" && rule.Version == "1");
+        ScenarioInvariant.Equal("proofshift.fhir", genericReport.PackId);
+        ScenarioInvariant.Equal("0.10.0", genericReport.PackVersion);
+        ScenarioInvariant.Equal("QUALIFIED", genericReport.Qualification);
+        ScenarioInvariant.Equal(genericReport.PackVersion, genericReport.RuntimePackVersions[genericReport.PackId]);
+        ScenarioInvariant.NotEmpty(genericReport.RuleVersions);
+        ScenarioInvariant.All(genericReport.RuleVersions.Values, version => ScenarioInvariant.Equal("1", version));
+        ScenarioInvariant.Contains(genericReport.Concepts, concept => concept.SemanticType == "Fhir.Binary");
+        ScenarioInvariant.Contains(genericReport.Rules, rule => rule.Type == "fhir-quantity-fidelity" && rule.Version == "1");
         var genericReportJson = JsonSerializer.Serialize(genericReport);
-        Assert.DoesNotContain("Pension.Member", genericReportJson, StringComparison.Ordinal);
-        Assert.DoesNotContain("Utility.Account", genericReportJson, StringComparison.Ordinal);
-        Assert.DoesNotContain("Justice.Case", genericReportJson, StringComparison.Ordinal);
-        Assert.DoesNotContain("HCM.Worker", genericReportJson, StringComparison.Ordinal);
+        ScenarioInvariant.DoesNotContain("Pension.Member", genericReportJson, StringComparison.Ordinal);
+        ScenarioInvariant.DoesNotContain("Utility.Account", genericReportJson, StringComparison.Ordinal);
+        ScenarioInvariant.DoesNotContain("Justice.Case", genericReportJson, StringComparison.Ordinal);
+        ScenarioInvariant.DoesNotContain("HCM.Worker", genericReportJson, StringComparison.Ordinal);
         var demoReport = DemoAssuranceReport.Create(new FhirPack(), report.ClaimBoundaryText,
             checkpoint.Checkpoint.ArtifactCount, checkpoint.Checkpoint.Id.Value.ToString("D"), checkpoint.Checkpoint.ManifestHash!,
             DefectManifest.Length, corrected, defective, dryRun.Verification!, dryRun.Recovery!);
-        Assert.Equal(15, demoReport.DefectiveExternalObservation.VerificationFailureCount);
-        Assert.Equal(15, demoReport.DefectiveExternalObservation.EvidenceReferences.Count);
-        Assert.Equal(0, demoReport.CorrectedShadow.VerificationFailureCount);
-        Assert.Equal(0, demoReport.CorrectedShadow.UnaccountedSourceCount);
-        Assert.Equal(0, demoReport.CorrectedShadow.UnexplainedTargetCount);
-        await DemoScenarioResultWriter.WriteIfRequestedAsync(demoReport, TestContext.Current.CancellationToken);
+        ScenarioInvariant.Equal(15, demoReport.DefectiveExternalObservation.VerificationFailureCount);
+        ScenarioInvariant.Equal(15, demoReport.DefectiveExternalObservation.EvidenceReferences.Count);
+        ScenarioInvariant.Equal(0, demoReport.CorrectedShadow.VerificationFailureCount);
+        ScenarioInvariant.Equal(0, demoReport.CorrectedShadow.UnaccountedSourceCount);
+        ScenarioInvariant.Equal(0, demoReport.CorrectedShadow.UnexplainedTargetCount);
+        return DemoScenarioExecutionResult.Create(demoReport, demoReport.ToHumanReadable());
     }
 
     private static FhirFixture CreateFixture(int count)
@@ -497,24 +494,24 @@ public sealed class FhirPhysicalAssuranceTests
         string workingDirectory)
     {
         var runId = new RunId(Guid.NewGuid());
-        await LoadExternalTargetAsync(postgres, runId, rows, fixture, graph, TestContext.Current.CancellationToken);
+        await LoadExternalTargetAsync(postgres, runId, rows, fixture, graph, DemoScenarioExecutionContext.CurrentCancellationToken);
         await LoadExternalFilesAsync(configuration, graph, contexts, filesystemTarget, fixture.Documents, missingFiles, runId,
-            TestContext.Current.CancellationToken);
+            DemoScenarioExecutionContext.CurrentCancellationToken);
         var targetNodes = graph.Nodes.Where(node => node.Type is MigrationNodeType.Target or MigrationNodeType.Archive).ToArray();
         var binaryNode = graph.Nodes.Single(node => node.Name == "target-binary");
         var binaryContext = new ShadowTargetContext(contexts.Create(configuration, binaryNode), runId, SystemRole.ShadowTarget);
         var expectedFiles = fixture.Documents.Where(document => !missingFiles.Contains(document.Key)).ToArray();
         var observedFiles = new HashSet<string>(StringComparer.Ordinal);
         await foreach (var observed in filesystemTarget.ReadAsync(new ReadRequest(binaryContext, binaryNode.Selector, new ReadOptions()),
-            TestContext.Current.CancellationToken).WithCancellation(TestContext.Current.CancellationToken))
+            DemoScenarioExecutionContext.CurrentCancellationToken).WithCancellation(DemoScenarioExecutionContext.CurrentCancellationToken))
         {
             var path = ((StringValue)observed.Values["relativePath"]).Value;
             var sourceDocument = fixture.Documents[path];
-            Assert.Equal(Convert.ToHexString(SHA256.HashData(sourceDocument)).ToLowerInvariant(),
+            ScenarioInvariant.Equal(Convert.ToHexString(SHA256.HashData(sourceDocument)).ToLowerInvariant(),
                 ((BinaryReferenceValue)observed.Values["content"]).Sha256);
-            Assert.True(observedFiles.Add(path), $"Duplicate external binary artifact {path}.");
+            ScenarioInvariant.True(observedFiles.Add(path), $"Duplicate external binary artifact {path}.");
         }
-        Assert.Equal(expectedFiles.Length, observedFiles.Count);
+        ScenarioInvariant.Equal(expectedFiles.Length, observedFiles.Count);
         var runtimes = targetNodes.Select(node => node.Type == MigrationNodeType.Archive
             ? new VerificationTargetRuntime(node.Name, filesystemTarget,
                 new ShadowTargetContext(contexts.Create(configuration, node), runId, SystemRole.ShadowTarget))
@@ -525,10 +522,10 @@ public sealed class FhirPhysicalAssuranceTests
             targetNodes.Select(node => new ExternalTargetEndpoint(node.Name, node.SystemId, node.EndpointId,
                 node.Type == MigrationNodeType.Archive ? filesystemTarget.Id : postgresTarget.Id,
                 node.Type == MigrationNodeType.Archive ? filesystemTarget.Version : postgresTarget.Version)), DateTimeOffset.UnixEpoch);
-        Assert.Equal(Path.GetFullPath(targetFilesRoot), Path.GetFullPath(contexts.Create(configuration, binaryNode)
+        ScenarioInvariant.Equal(Path.GetFullPath(targetFilesRoot), Path.GetFullPath(contexts.Create(configuration, binaryNode)
             .Configuration.GetRequired("root").UseValue(value => value)));
         return await service.VerifyExternalTargetAsync(configuration, graph, observation, rules, workingDirectory, "0.10F",
-            runtimes, TestContext.Current.CancellationToken);
+            runtimes, DemoScenarioExecutionContext.CurrentCancellationToken);
     }
 
     private static async Task LoadExternalTargetAsync(PostgreSqlContainer postgres, RunId runId,
@@ -606,10 +603,6 @@ public sealed class FhirPhysicalAssuranceTests
         Dictionary<string, byte[]> Documents);
     private sealed record FhirDefect(string Id, string Category, string SemanticConcept, string BusinessKey, string ExpectedRuleId,
         int ExpectedFindingCount = 1);
-    private sealed class TemporaryDirectoryCleanup(string path, bool deleteOnDispose) : IDisposable
-    {
-        public void Dispose() => DemoScenarioResultWriter.CleanupFixtureRoot(path, deleteOnDispose);
-    }
     private sealed class FhirEnvironment(IReadOnlyDictionary<string, string> values) : IEnvironmentVariableProvider
     {
         public string? GetValue(string name) => values.GetValueOrDefault(name);

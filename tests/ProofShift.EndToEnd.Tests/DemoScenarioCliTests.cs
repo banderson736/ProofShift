@@ -113,29 +113,18 @@ public sealed class DemoScenarioCliTests
     }
 
     [Fact]
-    public async Task PackagedTestModuleRunnerExecutesBoundedMtpClass()
+    public async Task TestModuleRunnerIsRejectedByTheGenericDemoCli()
     {
         var root = CreateRoot();
-        var moduleDirectory = Path.Combine(root, "fixtures");
-        Directory.CreateDirectory(moduleDirectory);
-        foreach (var file in Directory.EnumerateFiles(AppContext.BaseDirectory))
-            File.Copy(file, Path.Combine(moduleDirectory, Path.GetFileName(file)), overwrite: true);
         try
         {
             WriteScenario(root, "alpha", "alpha-fast", expectedFindings: 3,
-                runStages: [Stage("report-tests", ["fixtures/ProofShift.EndToEnd.Tests.dll", "-class",
-                    "ProofShift.EndToEnd.Tests.PensionReportAggregationTests", "-parallelMode", "none"], 0,
-                    runner: "dotnet-test-module", outputFile: "logs/report-tests.log")]);
+                runStages: [Stage("test-module", ["tests.dll"], 0,
+                    runner: "dotnet-test-module", outputFile: "logs/test-module.log")]);
 
-            var run = await RunAsync(root, "demo", "run", "alpha", "--json");
-            Assert.True(run.ExitCode == 0, $"stdout: {run.Output} stderr: {run.Error}");
-            using var result = JsonDocument.Parse(run.Output);
-            Assert.Equal("completed", result.RootElement.GetProperty("status").GetString());
-            Assert.True(result.RootElement.GetProperty("stages")[0]
-                .GetProperty("fixtureProcessElapsedMilliseconds").GetInt64() > 0);
-            Assert.True(result.RootElement.GetProperty("stages")[0]
-                .GetProperty("fixtureProcessPeakWorkingSetBytes").GetInt64() > 0);
-            Assert.True(File.Exists(Path.Combine(root, ".proofshift", "demos", "alpha", "logs", "report-tests.log")));
+            var result = await RunAsync(root, "demo", "list");
+            Assert.Equal(2, result.ExitCode);
+            Assert.Contains("unsupported runner", result.Error, StringComparison.Ordinal);
         }
         finally
         {

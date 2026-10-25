@@ -215,3 +215,8 @@ Ordinary persisted reporting resolves exactly one configured pack/version and re
 Status: Accepted for PS-0.11A (October 24, 2026; candidate `1837cad9ea05905dad491b3b0d54f0f7ba7cc852`; run `40146586892`; merged as `de59d85cca3a5eca4d1b9e49db69a51a8aa42ed1`)
 
 Persisted reports retain the raw failed Verification Evidence count and derive `BusinessDiscrepancyCount` from required, deterministic pack metadata. Metadata can select all failed Evidence or a declared set of Evidence codes and can explicitly include false-Reverse Recovery edges. Generic Reporting applies this contract without concrete-pack branches. Pension metadata reuses its established business-defect Evidence-code set and includes false-Reverse edges; Utility, Justice, HCM, and FHIR count all failed Evidence. Evidence, Recovery, qualification, package assertions, and semantic fingerprints are unchanged. See [ADR-0031](adr/0031-pack-supplied-business-discrepancy-aggregation.md).
+
+### D-041 - Non-test demo scenario runtime
+Status: Proposed under PS-0.11B; pending exact-candidate CI and formal review
+
+The five packaged physical synthetic scenarios are being moved to a non-test DemoScenarios library and standalone DemoRunner. EndToEnd tests consume that same implementation and independently assert exact outcomes; DemoCommands remains domain-neutral, and test assemblies/framework execution are excluded from the product runtime/package. The generic manifest/lifecycle boundary remains accepted; this proposal supersedes only the test-module execution mechanism in ADR-0029. See [ADR-0032](adr/0032-non-test-demo-scenario-runtime.md) and [PS-0.11B](PS0_11B_PRODUCT_DEMO_FIXTURE_SEPARATION.md).

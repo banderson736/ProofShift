@@ -129,6 +129,10 @@ ProofShift.Engine
 ProofShift.Connectors.SqlServer
 ```
 
+### Product demo runtime boundary
+
+The evaluator's physical synthetic scenarios are hosted outside the test assemblies. `ProofShift.DemoScenarios` owns the reusable fixture lifecycle and scenario execution, and `ProofShift.DemoRunner` is its standalone, non-test process host. The scenario library is an application-composition boundary and may reference concrete packs and connectors; core, generic CLI orchestration, and manifest processing remain pack-neutral. EndToEnd tests consume the same scenario implementation and independently assert its exact results. Neither the DemoRunner nor DemoScenarios runtime graph depends on the EndToEnd assembly or a test framework. See [ADR-0032](adr/0032-non-test-demo-scenario-runtime.md).
+
 The PS-0.3 graph compiler consumes the immutable generic YAML document tree produced by `ProofShift.Configuration`, maps it through graph-specific DTOs, and then creates domain graph objects. `ProofShift.Graph` does not parse YAML itself and does not reference concrete connectors or domain packs.
 
 PS-0.4 inspection orchestration lives in `ProofShift.Engine` and resolves only `ISourceConnector` abstractions. Concrete PostgreSQL, SQL Server, filesystem, and CSV registrations occur in the CLI composition root. Runtime configuration values are wrapped and redacted; inspection does not create snapshots, evidence, or target writes.

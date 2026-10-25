@@ -15,9 +15,7 @@
     "minimumDotNetSdk": "10.0.100",
     "minimumFreeDiskBytes": 0,
     "requiredPorts": [],
-    "requiredFiles": [
-      "tests/ProofShift.EndToEnd.Tests/HcmPhysicalAssuranceTests.cs"
-    ]
+    "requiredFiles": []
   },
   "sourceSystems": [
     "Synthetic PostgreSQL HCM worker, employment, compensation, payroll, benefits, and leave data"
@@ -53,23 +51,14 @@
       "id": "hcm-physical-assurance",
       "name": "Run accepted HCM physical assurance",
       "phase": "External observation, exact Verification findings, Evidence, and corrected Recovery",
-      "runner": "dotnet-test",
+      "runner": "demo-runner",
       "workingDirectory": "repository",
-      "arguments": [
-        "--project",
-        "tests/ProofShift.EndToEnd.Tests/ProofShift.EndToEnd.Tests.csproj",
-        "--filter-class",
-        "ProofShift.EndToEnd.Tests.HcmPhysicalAssuranceTests",
-        "--parallel",
-        "none",
-        "--timeout",
-        "20m"
-      ],
+      "arguments": ["run", "hcm", "--workspace", "{{workspace}}", "--result-file", "fixture/assurance-report.json"],
       "expectedOutcome": "success",
       "expectedExitCode": 0,
       "timeoutSeconds": 1800,
       "resultFile": "fixture/assurance-report.json",
-      "outputFile": "logs/hcm-physical-test.log",
+      "outputFile": "logs/hcm-physical-demo.log",
       "assertions": [
         { "pointer": "/packId", "valueType": "string", "expected": "proofshift.hcm" },
         { "pointer": "/checkpointArtifactCount", "valueType": "number", "expected": "40575" },

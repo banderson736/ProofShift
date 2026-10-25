@@ -15,9 +15,7 @@
     "minimumDotNetSdk": "10.0.100",
     "minimumFreeDiskBytes": 0,
     "requiredPorts": [],
-    "requiredFiles": [
-      "tests/ProofShift.EndToEnd.Tests/JusticePhysicalAssuranceTests.cs"
-    ]
+    "requiredFiles": []
   },
   "sourceSystems": [
     "Synthetic PostgreSQL case-management records and filesystem documents"
@@ -53,23 +51,14 @@
       "id": "justice-physical-assurance",
       "name": "Run accepted Justice physical assurance",
       "phase": "External observation, exact Verification findings, Evidence, and corrected Recovery",
-      "runner": "dotnet-test",
+      "runner": "demo-runner",
       "workingDirectory": "repository",
-      "arguments": [
-        "--project",
-        "tests/ProofShift.EndToEnd.Tests/ProofShift.EndToEnd.Tests.csproj",
-        "--filter-class",
-        "ProofShift.EndToEnd.Tests.JusticePhysicalAssuranceTests",
-        "--parallel",
-        "none",
-        "--timeout",
-        "20m"
-      ],
+      "arguments": ["run", "justice", "--workspace", "{{workspace}}", "--result-file", "fixture/assurance-report.json"],
       "expectedOutcome": "success",
       "expectedExitCode": 0,
       "timeoutSeconds": 1500,
       "resultFile": "fixture/assurance-report.json",
-      "outputFile": "logs/justice-physical-test.log",
+      "outputFile": "logs/justice-physical-demo.log",
       "assertions": [
         { "pointer": "/packId", "valueType": "string", "expected": "proofshift.justice" },
         { "pointer": "/checkpointArtifactCount", "valueType": "number", "expected": "16200" },

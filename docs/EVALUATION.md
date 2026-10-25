@@ -1,6 +1,6 @@
 # ProofShift Evaluation Kit
 
-The PS-0.10G evaluation package is a binary-only, offline-after-build evaluation kit. Separate Windows x64 and Linux x64 archives are built with `scripts/package-evaluation.ps1` on their target operating systems from the same candidate commit. Each contains the published ProofShift CLI, the compiled MTP fixture module used by the demo catalog, selected synthetic sample projects, demo manifests, and third-party notices. The package manifest records its target platform and source revision. Packages do not contain repository source, customer data, credentials, database images, or production migration tooling.
+The PS-0.10G evaluation package remains a binary-only, offline-after-build evaluation kit. Under PS-0.11B, its physical scenarios are being moved from test-module execution to the published ProofShift CLI and standalone, non-test DemoRunner backed by DemoScenarios. Separate Windows x64 and Linux x64 archives are built with `scripts/package-evaluation.ps1` on their target operating systems from the same candidate commit. Each contains the CLI, DemoRunner and required runtime assets, selected synthetic sample projects, demo manifests, and third-party notices. The package manifest records its target platform and source revision. Packages do not contain repository source, customer data, credentials, database images, EndToEnd assemblies, or test-platform execution dependencies. PS-0.11B package acceptance remains pending.
 
 ## Clean CI Acceptance
 
@@ -15,7 +15,7 @@ The Windows result proves the Windows package path only; it does not prove that 
 
 - The Windows package requires the .NET 10 runtime. Docker is not required for its clean Windows package-only acceptance check.
 - The Linux packaged-demo workflow requires the .NET 10 SDK/runtime and Linux-container Docker. Running full Docker-backed demos manually on Windows also requires a compatible local Docker setup, but that path is not part of the Windows clean-runner acceptance claim.
-- Network access on the first Linux demo run may be needed to pull the synthetic SQL Server/PostgreSQL test images; no image is redistributed. The package contains the NuGet runtime dependencies for the published CLI and fixture module.
+- Network access on the first Linux demo run may be needed to pull the synthetic SQL Server/PostgreSQL test images; no image is redistributed. The package contains the NuGet runtime dependencies for the published CLI and DemoRunner/DemoScenarios, including Testcontainers where required by fixture lifecycle code. It does not package a test runner.
 
 ## Run
 
@@ -133,11 +133,13 @@ Troubleshooting:
 - If a run says the workspace already exists, inspect and retain any wanted reports, then use `demo reset <id>` from that package root before retrying.
 - Windows may deny symbolic-link creation to unprivileged test processes. The three local test-suite skips for that capability are not demo failures; the evaluator demo itself does not require creating symlinks.
 
-For binary fixture stages, the result records elapsed fixture-process time and sampled peak working set. This is the MTP test process only; Docker container memory and whole-system peak memory are not included. Treat the measurements as host-specific diagnostics, not resource guarantees or SLAs.
+Current DemoRunner stage results record elapsed runner-process time and a sampled peak working set. The measurement covers the runner process only, excludes Docker container and whole-system peak memory, and remains a host-specific diagnostic rather than a resource guarantee or SLA. No PS-0.11B DemoRunner measurements have been accepted yet.
 
-### Windows Package Rehearsal Measurements
+The following Windows rehearsal measurements are historical PS-0.10G evidence from the pre-PS-0.11B MTP fixture package. They describe the MTP process only, exclude Docker container and whole-system peak memory, and are not measurements of the new DemoRunner package. Treat them as host-specific diagnostics, not resource guarantees or SLAs.
 
-Measured from the extracted binary-only package on Windows with .NET SDK/runtime 10.0.303 and Docker Engine 29.6.1. The sampled working set is the MTP fixture process only and excludes the SQL Server/PostgreSQL containers; sampling is every 100 ms, so brief peaks can be missed.
+### Historical Windows Package Rehearsal Measurements (PS-0.10G)
+
+Measured from the extracted binary-only package on Windows with .NET SDK/runtime 10.0.303 and Docker Engine 29.6.1 before PS-0.11B. The sampled working set is the MTP fixture process only and excludes the SQL Server/PostgreSQL containers; sampling is every 100 ms, so brief peaks can be missed.
 
 | Scenario | Fixture process time | Sampled peak working set |
 |---|---:|---:|

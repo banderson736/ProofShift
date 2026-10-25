@@ -65,3 +65,14 @@ In Progress. All gates begin **NOT YET**. This matrix records candidate evidence
 | Package job results | NOT YET |
 | Linux five-demo results | NOT YET |
 | Review status | NOT YET |
+
+### Local implementation checks (not acceptance evidence)
+
+| Check | Result |
+|---|---|
+| Full solution build | `dotnet build ProofShift.sln --no-restore` passed with 0 warnings and 0 errors. |
+| Focused DemoScenario/CLI/registry tests | 15 passed, 0 failed, 4 skipped (three Docker-dependent scenarios and one host symlink capability test). |
+| Utility and Pension wrapper tests | Utility: 1 Docker-dependent skip. Pension: configuration test passed; physical scenario skipped because Docker is unavailable. |
+| Runtime package construction | Windows x64 package construction passed; extracted archive contained 471 files, all five manifests, CLI, DemoRunner and DemoScenarios, with no test assemblies, test-platform files, source, or PDBs. Packaged `global.json` retains its SDK pin but excludes test-runner settings. Packaged CLI discovery and all five DemoRunner preflights resolved successfully. The local archive was built from a dirty worktree, inspected for runtime contents, and removed; this is not clean-runner acceptance evidence. |
+| Physical Docker scenarios | Not run locally because Docker is unavailable. |
+| Exact-candidate CI / package smoke | Pending. No self-acceptance or merge. |
