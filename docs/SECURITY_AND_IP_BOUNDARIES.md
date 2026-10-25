@@ -1,8 +1,24 @@
 # Security, Data Handling, and IP Boundaries
 
+## Repository and product status
+
+The ProofShift source repository is publicly visible but proprietary. Public
+visibility is not an open-source license or permission to use or redistribute
+the source. See the repository [LICENSE](../LICENSE). The current product
+identity is `ProofShift 0.1.0-preview.1`; it has not been publicly released,
+tagged, or published. There is no production-hosted ProofShift service.
+
+Never post secrets, vulnerability details, or sensitive customer data in
+public issues or pull requests. GitHub private vulnerability reporting was
+observed disabled on October 25, 2026. Until it is enabled, do not submit
+vulnerability details publicly; ask the maintainer to establish a private
+reporting path without including sensitive details. No security email address
+is published.
+
 ## Development-data rule
 
-Never use real customer, employer, or government production data in the public/development repository.
+Never use customer, employer, government, or other production data in the
+repository. Only deterministic synthetic fixtures are allowed.
 
 PS-0 must use deterministic synthetic data only.
 
@@ -36,6 +52,7 @@ Do not use:
 - non-public architecture documents;
 - confidential schemas;
 - customer secrets;
+- real PII or PHI;
 - internal implementation details that are not independently/publicly derived.
 
 The initial pension vertical intentionally provides separation from current healthcare/FHIR employment work.
