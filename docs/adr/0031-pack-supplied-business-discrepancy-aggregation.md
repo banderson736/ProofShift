@@ -1,6 +1,6 @@
 # ADR-0031: Pack-supplied business-discrepancy aggregation
 
-- Status: Proposed for PS-0.11A
+- Status: Accepted for PS-0.11A
 - Date: 2026-10-24
 
 ## Context
@@ -35,4 +35,4 @@ PS-0.11A must preserve the accepted PS-0.10G package behavior and scenario seman
 
 ## Validation
 
-The five-pack conformance test verifies each pack's declared aggregation mode. Pension report coverage verifies 149 defective, zero corrected, and two false-Reverse discrepancies; required packaged demo CI remains necessary to confirm PS-0.10G compatibility. PS-0.11A remains In Progress pending all acceptance gates and formal review.
+The five-pack conformance test verifies each pack's declared aggregation mode. Pension report coverage verifies 149 defective, zero corrected, and two false-Reverse discrepancies. Accepted candidate `1837cad9ea05905dad491b3b0d54f0f7ba7cc852` passed GitHub Actions [run 40146586892](https://github.com/banderson736/ProofShift/actions/runs/40146586892), including all five Ubuntu packaged demos, and was merged to `main` as `de59d85cca3a5eca4d1b9e49db69a51a8aa42ed1`.

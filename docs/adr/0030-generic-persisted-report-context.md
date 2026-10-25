@@ -1,6 +1,6 @@
 # ADR-0030: Generic persisted report context
 
-- Status: Proposed
+- Status: Accepted for PS-0.11A
 - Date: 2026-10-24
 
 ## Context
@@ -39,4 +39,4 @@ Ordinary persisted `report` and `compare` commands need a pack-owned display nam
 
 ## Validation
 
-The full solution builds with zero warnings and errors. Focused local tests for persisted reporting/comparison, snapshots, domain-pack conformance, Evidence, Recovery, Configuration, Domain, Engine, Graph, Verification, and RemoteObjects passed (178 passed, 0 failed, 0 skipped). RemoteStorage, Oracle, Db2, and physical EndToEnd integration tests require Docker-backed fixtures and remain for candidate CI validation; Docker is unavailable in the local environment. PS-0.11A remains In Progress pending required candidate CI evidence and review.
+Accepted candidate `1837cad9ea05905dad491b3b0d54f0f7ba7cc852` passed GitHub Actions [run 40146586892](https://github.com/banderson736/ProofShift/actions/runs/40146586892): build-and-test 281 passed, RemoteStorage 53 passed, Oracle 2 passed, Db2 2 passed, with zero failures or skips; Windows package-only smoke and all five Ubuntu packaged demos passed. The candidate was merged to `main` as `de59d85cca3a5eca4d1b9e49db69a51a8aa42ed1`.
