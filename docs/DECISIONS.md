@@ -225,3 +225,13 @@ The five packaged physical synthetic scenarios run from a non-test DemoScenarios
 Status: Accepted under PS-0.11C (October 25, 2026)
 
 Product release identity is `0.1.0-preview.1`, centrally versioned and independent of internal milestones. The accepted distribution contract pins the build SDK, locks NuGet dependencies (with separate OS-specific graphs where required), records source revision separately from source tree, and emits deterministic unsigned provenance for framework-dependent runtime packages. Candidate `286ea550e559b360fd9c85c2a65e2b1394a95408` / tree `d32fab40faa4bfc08c28b0742c46f8f372ae26c7` passed run `40178365888` and was merged as `5a1a3ec064aca98266cf0abb3c7749f7416da67e` with the same tree. All 37 acceptance gates passed. See [ADR-0033](adr/0033-product-release-identity-and-reproducible-distribution.md) and [PS-0.11C acceptance matrix](PS0_11C_ACCEPTANCE_MATRIX.md).
+
+### D-043 - Internal consolidation and maintainability
+Status: Accepted under PS-0.11D (October 25, 2026)
+
+The shared disk-backed identity index has one connector-internal owner; CLI workflows have cohesive internal command modules behind the existing composition root; and Verification ordering/diagnostic support is extracted without changing partition execution. Candidate `6a23233670e5be04d22cdf7b6304fd8090ca493a` (tree `077aaba4a5c0d9fe69e12627c18fe06557510b20`) passed push CI `40185263041` and PR CI `40185376379`, with 359 tests and all distribution jobs passing, then merged to `main` as `34056aaf7342e1426bda66b0d69ba6ae763c7938` with the same tree. See the [PS-0.11D acceptance matrix](PS0_11D_ACCEPTANCE_MATRIX.md).
+
+### D-044 - Repository and product governance
+Status: Proposed under PS-0.11E
+
+Repository governance policy proposes PR-only `main`, strict required CI with current-base evidence, merge-commit lineage, least-privilege workflows pinned to verified immutable action commits, explicit dependency-lock review, synthetic-only repository data, and accurate proprietary-public-source wording. Repository visibility remains owner-controlled and is not changed by this milestone. See [ADR-0034](adr/0034-repository-product-governance.md) and [PS-0.11E scope](PS0_11E_REPOSITORY_AND_PRODUCT_GOVERNANCE.md).

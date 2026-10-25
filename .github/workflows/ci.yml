@@ -12,14 +12,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify candidate SHA
         shell: bash
         run: |
           actual_sha="$(git rev-parse HEAD)"
           printf 'github.sha=%s\nHEAD=%s\n' "$GITHUB_SHA" "$actual_sha"
           test "$actual_sha" = "$GITHUB_SHA"
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.402
       - name: Record build identity
@@ -40,12 +40,26 @@ jobs:
             dotnet test --project "$project" --no-restore
           done
 
+  dependency-review:
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          base-ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'refs/heads/main' }}
+          head-ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fail-on-severity: high
+          comment-summary-in-pr: never
+
   windows-package-smoke:
     needs: build-and-test
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify candidate SHA
         shell: pwsh
         run: |
@@ -53,7 +67,7 @@ jobs:
           Write-Output "github.sha=$env:GITHUB_SHA"
           Write-Output "HEAD=$actualSha"
           if ($LASTEXITCODE -ne 0 -or $actualSha -ne $env:GITHUB_SHA) { throw "Checked-out commit does not match the workflow candidate SHA." }
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.402
       - name: Record build identity
@@ -110,7 +124,7 @@ jobs:
           $driveRoot = [IO.Path]::GetPathRoot($env:RUNNER_TEMP)
           $drive = [IO.DriveInfo]::new($driveRoot)
           Write-Output "Free disk bytes on ${driveRoot}: $($drive.AvailableFreeSpace)"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: proofshift-evaluation-win-x64-${{ github.sha }}
           path: |
@@ -125,14 +139,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify candidate SHA
         shell: bash
         run: |
           actual_sha="$(git rev-parse HEAD)"
           printf 'github.sha=%s\nHEAD=%s\n' "$GITHUB_SHA" "$actual_sha"
           test "$actual_sha" = "$GITHUB_SHA"
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.402
       - name: Record build identity
@@ -191,7 +205,7 @@ jobs:
           docker system df
           printf '\nRunner disk availability after demos:\n'
           df --block-size=1 "$RUNNER_TEMP"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: proofshift-evaluation-linux-x64-${{ github.sha }}
           path: |
@@ -205,13 +219,13 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify candidate SHA
         shell: pwsh
         run: |
           $actualSha = (git rev-parse HEAD).Trim()
           if ($LASTEXITCODE -ne 0 -or $actualSha -ne $env:GITHUB_SHA) { throw "Checked-out commit does not match the workflow candidate SHA." }
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.402
       - name: Record independent build identity
@@ -228,7 +242,7 @@ jobs:
           $version = (& dotnet msbuild src/ProofShift.Cli/ProofShift.Cli.csproj -getProperty:ProofShiftProductVersion).Trim()
           $archive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-$version-win-x64.zip"
           ./scripts/package-evaluation.ps1 -OutputFile $archive
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: proofshift-evaluation-win-x64-build-b-${{ github.sha }}
           path: |
@@ -241,14 +255,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify candidate SHA
         shell: bash
         run: |
           actual_sha="$(git rev-parse HEAD)"
           printf 'github.sha=%s\nHEAD=%s\nTREE=%s\n' "$GITHUB_SHA" "$actual_sha" "$(git rev-parse 'HEAD^{tree}')"
           test "$actual_sha" = "$GITHUB_SHA"
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.402
       - name: Record independent build identity
@@ -261,7 +275,7 @@ jobs:
           $version = (& dotnet msbuild src/ProofShift.Cli/ProofShift.Cli.csproj -getProperty:ProofShiftProductVersion).Trim()
           $archive = Join-Path $env:RUNNER_TEMP "ProofShift-Evaluation-$version-linux-x64.zip"
           ./scripts/package-evaluation.ps1 -OutputFile $archive
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: proofshift-evaluation-linux-x64-build-b-${{ github.sha }}
           path: |
@@ -278,26 +292,26 @@ jobs:
       - linux-package-reproducibility-b
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify candidate and tree identity
         shell: bash
         run: |
           actual_sha="$(git rev-parse HEAD)"
           printf 'github.sha=%s\nHEAD=%s\nTREE=%s\n' "$GITHUB_SHA" "$actual_sha" "$(git rev-parse 'HEAD^{tree}')"
           test "$actual_sha" = "$GITHUB_SHA"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: proofshift-evaluation-win-x64-${{ github.sha }}
           path: ${{ runner.temp }}/windows-a
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: proofshift-evaluation-win-x64-build-b-${{ github.sha }}
           path: ${{ runner.temp }}/windows-b
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: proofshift-evaluation-linux-x64-${{ github.sha }}
           path: ${{ runner.temp }}/linux-a
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: proofshift-evaluation-linux-x64-build-b-${{ github.sha }}
           path: ${{ runner.temp }}/linux-b
@@ -312,7 +326,7 @@ jobs:
     runs-on: ubuntu-latest
     container: mcr.microsoft.com/dotnet/runtime:10.0.13
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: proofshift-evaluation-linux-x64-${{ github.sha }}
           path: package-artifact
@@ -354,14 +368,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify candidate SHA
         shell: bash
         run: |
           actual_sha="$(git rev-parse HEAD)"
           printf 'github.sha=%s\nHEAD=%s\n' "$GITHUB_SHA" "$actual_sha"
           test "$actual_sha" = "$GITHUB_SHA"
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.402
       - name: Record build identity
@@ -370,7 +384,7 @@ jobs:
           printf 'github.sha=%s\nHEAD=%s\nTREE=%s\n' "$GITHUB_SHA" "$(git rev-parse HEAD)" "$(git rev-parse 'HEAD^{tree}')"
           printf 'productVersion=%s\nSDK=%s\n' "$(dotnet msbuild src/ProofShift.Cli/ProofShift.Cli.csproj -getProperty:ProofShiftProductVersion)" "$(dotnet --version)"
       - name: Checkout official Oracle image build source
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: oracle/docker-images
           ref: f376ce7eb011e6adaacfa325f4e2aee99e9a0830
@@ -389,14 +403,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify candidate SHA
         shell: bash
         run: |
           actual_sha="$(git rev-parse HEAD)"
           printf 'github.sha=%s\nHEAD=%s\n' "$GITHUB_SHA" "$actual_sha"
           test "$actual_sha" = "$GITHUB_SHA"
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.402
       - name: Record build identity
@@ -418,14 +432,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify candidate SHA
         shell: bash
         run: |
           actual_sha="$(git rev-parse HEAD)"
           printf 'github.sha=%s\nHEAD=%s\n' "$GITHUB_SHA" "$actual_sha"
           test "$actual_sha" = "$GITHUB_SHA"
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: 10.0.402
       - name: Record build identity

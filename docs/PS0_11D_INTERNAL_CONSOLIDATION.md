@@ -2,9 +2,11 @@
 
 ## Status
 
-**In Progress.** Starting baseline: accepted PS-0.11C `main` commit
-`5a1a3ec064aca98266cf0abb3c7749f7416da67e`, tree
-`d32fab40faa4bfc08c28b0742c46f8f372ae26c7`.
+**Accepted (October 25, 2026).** Candidate
+`6a23233670e5be04d22cdf7b6304fd8090ca493a`, tree
+`077aaba4a5c0d9fe69e12627c18fe06557510b20`, passed push CI run
+`40185263041` and PR CI run `40185376379`; it was merged to `main` as
+`34056aaf7342e1426bda66b0d69ba6ae763c7938` with the same tree.
 
 Product identity remains **ProofShift 0.1.0-preview.1**. This milestone is
 internal maintainability work, not a release or performance milestone.

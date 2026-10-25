@@ -264,9 +264,13 @@ Status: **Accepted (October 25, 2026)**. Exact candidate `286ea550e559b360fd9c85
 
 #### PS-0.11D Internal Consolidation & Maintainability
 
-Status: **In Progress**, starting from `main` `5a1a3ec064aca98266cf0abb3c7749f7416da67e` (tree `d32fab40faa4bfc08c28b0742c46f8f372ae26c7`). The behavior-preserving scope consolidates shared connector implementation ownership, decomposes CLI command responsibilities behind the existing composition root, and extracts only pure Verification ordering and diagnostic support. No assurance semantics, persisted formats, package contracts, accepted domain outcomes, public Verification contracts, or execution algorithms may change. See [PS-0.11D scope](PS0_11D_INTERNAL_CONSOLIDATION.md) and [acceptance matrix](PS0_11D_ACCEPTANCE_MATRIX.md). Do not self-accept, publish/sign/tag, or begin PS-0.11E.
+Status: **Accepted (October 25, 2026).** Candidate `6a23233670e5be04d22cdf7b6304fd8090ca493a`, tree `077aaba4a5c0d9fe69e12627c18fe06557510b20`, passed push CI `40185263041` and PR CI `40185376379` with all ten jobs green; merged to `main` as `34056aaf7342e1426bda66b0d69ba6ae763c7938` with the same tree. The runs covered 359 tests with 0 failures/skips, package-only Windows smoke, five Ubuntu packaged demos, independent Windows/Linux reproducibility, and runtime-only smoke. See the [PS-0.11D scope](PS0_11D_INTERNAL_CONSOLIDATION.md) and [acceptance matrix](PS0_11D_ACCEPTANCE_MATRIX.md).
 
-Out of scope: public release/tag/package publication, signing, self-contained/AOT publishing, installers, new connectors/packs, FHIR Bulk, UI/API/auth, production migration/rollback, AI authoring, broad Verification refactoring, repository governance, and unrelated performance work.
+#### PS-0.11E Repository & Product Governance
+
+Status: **In Progress**, starting from merged `main` `34056aaf7342e1426bda66b0d69ba6ae763c7938` (tree `077aaba4a5c0d9fe69e12627c18fe06557510b20`). Establish enforceable repository, contribution, security, dependency, workflow-supply-chain, and proprietary-source governance without changing product assurance semantics. See [PS-0.11E scope](PS0_11E_REPOSITORY_AND_PRODUCT_GOVERNANCE.md), [acceptance matrix](PS0_11E_ACCEPTANCE_MATRIX.md), and [repository governance policy](REPOSITORY_GOVERNANCE.md). Do not self-accept, publish/tag/sign, or begin PS-0.11F.
+
+Out of scope: public release/tag/package publication, signing, self-contained/AOT publishing, installers, new connectors/packs, FHIR Bulk, UI/API/auth, production migration/rollback, AI authoring, product-runtime changes, and unrelated refactoring.
 
 ## Commercial validation gate after PS-0 / during PS-0
 
