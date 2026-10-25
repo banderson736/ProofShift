@@ -57,17 +57,19 @@ public sealed class PensionDemoScenario : IDemoScenario
     private const string CsvRootSecret = "PS09_CORPUS_CSV_ROOT";
     private const string SourceFilesRootSecret = "PS09_CORPUS_SOURCE_FILES_ROOT";
     private const string TargetFilesRootSecret = "PS09_CORPUS_TARGET_FILES_ROOT";
-    private const string IntegratedRunDirectoryVariable = "PS09_INTEGRATED_RUN_DIRECTORY";
     private const string BenchmarkScaleVariable = "PS010A_BENCHMARK_SCALE";
-    public static async Task ValidateCommittedReviewedConfigurationAsync(CancellationToken cancellationToken)
+    public static async Task ValidateCommittedReviewedConfigurationAsync(string contentRootDirectory,
+        CancellationToken cancellationToken)
     {
         var source = PensionSyntheticDatasetGenerator.Generate().ToArray();
         var (sourceSystem, targetSystem, legacy) = CreateConfiguration();
         var corrected = CreateScenario(source, sourceSystem.Id, targetSystem.Id, falseReverse: false);
         var falseReverse = CreateScenario(source, sourceSystem.Id, targetSystem.Id, falseReverse: true);
-        var directory = Path.Combine(FindRepositoryRoot(AppContext.BaseDirectory), "scenarios", "pension-modernization", "ps010b");
+        var configurationPath = DemoScenarioContentRoot.ResolvePath(contentRootDirectory,
+            "scenarios/pension-modernization/ps010b/proofshift.yaml");
+        var directory = Path.GetDirectoryName(configurationPath)!;
         var loaded = await new ConfigurationLoader(requireEnvironmentValues: false)
-            .LoadAsync(Path.Combine(directory, "proofshift.yaml"), cancellationToken);
+            .LoadAsync(configurationPath, cancellationToken);
         ScenarioInvariant.True(loaded.IsValid, string.Join(';', loaded.Issues.Select(issue => issue.Message)));
         var rules = VerificationRuleConfigurationLoader.Load(loaded.Configuration!);
         if (Environment.GetEnvironmentVariable("PS010B_EXPORT_REVIEWED_CONFIG") == "true")
@@ -144,7 +146,7 @@ public sealed class PensionDemoScenario : IDemoScenario
         environmentStartupStopwatch.Stop();
         environmentStage.Dispose();
         await using var postgresCleanup = startedPostgresContainer;
-        var configuredRunDirectory = Environment.GetEnvironmentVariable(IntegratedRunDirectoryVariable);
+        var configuredRunDirectory = Environment.GetEnvironmentVariable("PS09_INTEGRATED_RUN_DIRECTORY");
         var deleteRunDirectory = string.IsNullOrWhiteSpace(configuredRunDirectory) && !context.PreserveArtifacts;
         var directory = !string.IsNullOrWhiteSpace(configuredRunDirectory)
             ? Path.GetFullPath(configuredRunDirectory!)
@@ -161,15 +163,18 @@ public sealed class PensionDemoScenario : IDemoScenario
         var sourceLoadStage = performanceRecorder.StartStage(PerformanceStageKind.Fixture,
             "CSV/filesystem materialization and SQL Server bulk load");
         await MaterializeCsvAndFileSourcesAsync(sourceData, csvRoot, sourceFilesRoot);
-        var reviewedRoot = Path.Combine(FindRepositoryRoot(AppContext.BaseDirectory), "scenarios", "pension-modernization", "ps010b");
+        var reviewedConfigurationPath = DemoScenarioContentRoot.ResolvePath(context.ContentRootDirectory,
+            "scenarios/pension-modernization/ps010b/proofshift.yaml");
         var configured = await new ConfigurationLoader(requireEnvironmentValues: false).LoadAsync(
-            Path.Combine(reviewedRoot, "proofshift.yaml"), DemoScenarioExecutionContext.CurrentCancellationToken);
+            reviewedConfigurationPath, DemoScenarioExecutionContext.CurrentCancellationToken);
         ScenarioInvariant.True(configured.IsValid, string.Join(';', configured.Issues.Select(issue => issue.Message)));
         var configuration = configured.Configuration!;
         var correctedGraph = MigrationGraphCompiler.Compile(configuration);
         ScenarioInvariant.True(correctedGraph.IsValid, string.Join(';', correctedGraph.Issues.Select(issue => issue.Message)));
         var falseReverseConfiguration = await new ConfigurationLoader(requireEnvironmentValues: false).LoadAsync(
-            Path.Combine(reviewedRoot, "proofshift-false-reverse.yaml"), DemoScenarioExecutionContext.CurrentCancellationToken);
+            DemoScenarioContentRoot.ResolvePath(context.ContentRootDirectory,
+                "scenarios/pension-modernization/ps010b/proofshift-false-reverse.yaml"),
+            DemoScenarioExecutionContext.CurrentCancellationToken);
         var defectiveGraph = MigrationGraphCompiler.Compile(falseReverseConfiguration.Configuration!);
         ScenarioInvariant.True(defectiveGraph.IsValid, string.Join(';', defectiveGraph.Issues.Select(issue => issue.Message)));
         var correctedScenario = ReviewedScenario(correctedGraph.Graph!);
@@ -197,8 +202,9 @@ public sealed class PensionDemoScenario : IDemoScenario
         var targetConnector = new ProofShift.Connectors.Postgres.PostgresShadowTargetConnector();
         try
         {
-            var schemaDirectory = Path.Combine(AppContext.BaseDirectory, "scenarios", "pension-modernization", "ps09", "database");
-            var sourceSchema = await File.ReadAllTextAsync(Path.Combine(schemaDirectory, "sqlserver-source.sql"),
+            var schemaPath = DemoScenarioContentRoot.ResolvePath(context.ContentRootDirectory,
+                "scenarios/pension-modernization/ps09/database/sqlserver-source.sql");
+            var sourceSchema = await File.ReadAllTextAsync(schemaPath,
                 DemoScenarioExecutionContext.CurrentCancellationToken);
             await using (var connection = new SqlConnection(sourceConnection))
             {
@@ -445,11 +451,10 @@ public sealed class PensionDemoScenario : IDemoScenario
 
             var cliReportingStage = performanceRecorder.StartStage(PerformanceStageKind.Reporting,
                 "CLI human and JSON reports/comparison");
-            var repositoryRoot = FindRepositoryRoot(AppContext.BaseDirectory);
             var configuredCliAssembly = Environment.GetEnvironmentVariable("PROOFSHIFT_DEMO_CLI_PATH");
             var cliAssembly = !string.IsNullOrWhiteSpace(configuredCliAssembly) && File.Exists(configuredCliAssembly)
                 ? configuredCliAssembly
-                : Path.Combine(repositoryRoot, "src", "ProofShift.Cli", "bin", "Debug", "net10.0", "ProofShift.Cli.dll");
+                : Path.Combine(context.ContentRootDirectory, "src", "ProofShift.Cli", "bin", "Debug", "net10.0", "ProofShift.Cli.dll");
             ScenarioInvariant.True(File.Exists(cliAssembly), $"CLI assembly not found: {cliAssembly}");
             await DemoScenarioWorkspace.StageCheckpointForCliAsync(directory,
                 projectedDefectivePipeline.Recovery.Id, DemoScenarioExecutionContext.CurrentCancellationToken);
@@ -681,17 +686,6 @@ public sealed class PensionDemoScenario : IDemoScenario
             if (deleteRunDirectory && Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
         }
     }
-    private static string FindRepositoryRoot(string startDirectory)
-    {
-        var demoRoot = Environment.GetEnvironmentVariable("PROOFSHIFT_DEMO_REPOSITORY_ROOT");
-        if (!string.IsNullOrWhiteSpace(demoRoot) &&
-            File.Exists(Path.Combine(demoRoot, "scenarios", "pension-modernization", "ps010b", "proofshift.yaml")))
-            return Path.GetFullPath(demoRoot);
-        for (var directory = new DirectoryInfo(startDirectory); directory is not null; directory = directory.Parent)
-            if (File.Exists(Path.Combine(directory.FullName, "ProofShift.sln"))) return directory.FullName;
-        throw new DirectoryNotFoundException("ProofShift repository root could not be located from the test output directory.");
-    }
-
     private static ScenarioGraph ReviewedScenario(MigrationGraph graph)
     {
         var sourceNodes = Enum.GetValues<PensionRecordKind>().ToDictionary(kind => kind,

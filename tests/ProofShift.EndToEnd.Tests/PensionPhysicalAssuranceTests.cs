@@ -9,7 +9,8 @@ public sealed class PensionExternalCorpusVerificationTests
 {
     [Fact]
     public Task CommittedReviewedPensionConfigurationPreservesAcceptedGraphAndRuleMeaning() =>
-        PensionDemoScenario.ValidateCommittedReviewedConfigurationAsync(TestContext.Current.CancellationToken);
+        PensionDemoScenario.ValidateCommittedReviewedConfigurationAsync(
+            DemoScenarioTestPaths.FindRepositoryRoot(), TestContext.Current.CancellationToken);
 
     [Fact]
     public async Task FastDefectiveAndCorrectedDatasetsRunThroughVerificationServiceWithExactBusinessCounts()
@@ -20,6 +21,7 @@ public sealed class PensionExternalCorpusVerificationTests
         {
             var resultPath = Path.Combine(workspace, "integrated-assurance", "demo-summary.json");
             var context = new DemoScenarioExecutionContext(workspace, resultPath,
+                DemoScenarioTestPaths.FindRepositoryRoot(),
                 TestContext.Current.CancellationToken, PreserveArtifacts: true);
             DemoScenarioExecutionResult execution;
             try

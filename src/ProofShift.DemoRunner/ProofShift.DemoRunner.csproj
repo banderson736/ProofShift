@@ -5,6 +5,7 @@
     <AssemblyName>ProofShift.DemoRunner</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../ProofShift.DemoContracts/ProofShift.DemoContracts.csproj" />
     <ProjectReference Include="../ProofShift.DemoScenarios/ProofShift.DemoScenarios.csproj" />
   </ItemGroup>
 </Project>

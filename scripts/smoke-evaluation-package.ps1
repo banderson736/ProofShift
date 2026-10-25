@@ -127,7 +127,10 @@ foreach ($requiredPath in @(
     (Join-Path $packageRoot "THIRD-PARTY-LICENSES"),
     (Join-Path $packageRoot "docs/EVALUATION.md"),
     (Join-Path $packageRoot "docs/DEMO_RUNBOOK.md"),
-    (Join-Path $packageRoot "docs/PS0_10F_SCENARIO_INDEX.json")
+    (Join-Path $packageRoot "docs/PS0_10F_SCENARIO_INDEX.json"),
+    (Join-Path $packageRoot "scenarios/pension-modernization/ps09/database/sqlserver-source.sql"),
+    (Join-Path $packageRoot "scenarios/pension-modernization/ps010b/proofshift.yaml"),
+    (Join-Path $packageRoot "scenarios/pension-modernization/ps010b/proofshift-false-reverse.yaml")
 )) {
     if (-not (Test-Path -LiteralPath $requiredPath)) { throw "Required packaged resource is missing: $requiredPath" }
 }
@@ -156,7 +159,7 @@ if ([IO.File]::ReadAllText($thirdPartyNotices) -match "UNSPECIFIED: manual revie
 }
 $script:PackageRoot = $packageRoot
 
-foreach ($name in @("PROOFSHIFT_DEMO_REPOSITORY_ROOT", "PROOFSHIFT_DEMO_CLI_PATH", "PS09_INTEGRATED_RUN_DIRECTORY")) {
+foreach ($name in @("PROOFSHIFT_DEMO_CLI_PATH", "PS09_INTEGRATED_RUN_DIRECTORY")) {
     Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
 }
 

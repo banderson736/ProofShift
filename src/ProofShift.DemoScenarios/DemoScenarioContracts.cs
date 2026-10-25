@@ -29,6 +29,7 @@ public sealed record DemoScenarioExecutionResult(JsonElement Data, string HumanR
 public sealed record DemoScenarioExecutionContext(
     string WorkspaceDirectory,
     string ResultFilePath,
+    string ContentRootDirectory,
     CancellationToken CancellationToken,
     bool PreserveArtifacts = false)
 {

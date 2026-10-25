@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using System.Text.Json;
+using ProofShift.DemoContracts;
 using ProofShift.DemoScenarios;
 
 return await DemoRunnerProgram.RunAsync(args);
@@ -13,19 +13,22 @@ internal static class DemoRunnerProgram
 
     public static async Task<int> RunAsync(string[] args)
     {
-        if (args.Length != 6 || args[0] != "run" || args[2] != "--workspace" || args[4] != "--result-file")
+        if (args.Length != 8 || args[0] != "--content-root" || args[2] != "run" ||
+            args[4] != "--workspace" || args[6] != "--result-file")
         {
-            Console.Error.WriteLine("Usage: ProofShift.DemoRunner run <scenario-id> --workspace <path> --result-file <path>");
+            Console.Error.WriteLine("Usage: ProofShift.DemoRunner --content-root <path> run <scenario-id> " +
+                "--workspace <path> --result-file <path>");
             return 2;
         }
 
-        var workspace = Path.GetFullPath(args[3]);
-        if (Path.IsPathRooted(args[5]))
+        var contentRoot = Path.GetFullPath(args[1]);
+        var workspace = Path.GetFullPath(args[5]);
+        if (Path.IsPathRooted(args[7]))
         {
             Console.Error.WriteLine("The result file must be a workspace-relative path.");
             return 2;
         }
-        var resultPath = Path.GetFullPath(args[5], workspace);
+        var resultPath = Path.GetFullPath(args[7], workspace);
         if (!IsWithin(workspace, resultPath))
         {
             Console.Error.WriteLine("The result file must be located inside the scenario workspace.");
@@ -42,9 +45,9 @@ internal static class DemoRunnerProgram
 
         try
         {
-            var scenario = DefaultDemoScenarios.CreateRegistry().GetRequired(args[1]);
+            var scenario = DefaultDemoScenarios.CreateRegistry().GetRequired(args[3]);
             var result = await scenario.ExecuteAsync(new DemoScenarioExecutionContext(
-                workspace, resultPath, cancellation.Token, PreserveArtifacts: true)).ConfigureAwait(false);
+                workspace, resultPath, contentRoot, cancellation.Token, PreserveArtifacts: true)).ConfigureAwait(false);
             Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
             await File.WriteAllTextAsync(resultPath, JsonSerializer.Serialize(result.Data, JsonOptions),
                 cancellation.Token).ConfigureAwait(false);
@@ -70,18 +73,14 @@ internal static class DemoRunnerProgram
         }
         catch (Exception exception)
         {
-            var failureLocation = new StackTrace(exception, false).GetFrames()?
+            var failureLocation = new System.Diagnostics.StackTrace(exception, false).GetFrames()?
                 .Select(frame => frame.GetMethod())
                 .Where(method => method?.DeclaringType?.Assembly == typeof(IDemoScenario).Assembly)
                 .Select(method => $"{method!.DeclaringType!.FullName}.{method.Name}")
-                .Distinct(StringComparer.Ordinal)
                 .Take(3)
                 .ToArray();
-            var location = failureLocation is { Length: > 0 }
-                ? string.Join(" <- ", failureLocation)
-                : "unknown";
-            Console.Error.WriteLine($"Demo scenario failed unexpectedly ({exception.GetType().Name}) at {location}. " +
-                "Exception details were withheld to protect configured connection values.");
+            Console.Error.WriteLine(SafeDemoRunnerDiagnostic.Format(exception.GetType().Name,
+                failureLocation ?? []));
             return 1;
         }
         finally

@@ -19,6 +19,7 @@ public sealed class UtilityPhysicalAssuranceTests
         {
             var context = new DemoScenarioExecutionContext(workspace,
                 Path.Combine(workspace, "fixture", "results", "assurance-report.json"),
+                DemoScenarioTestPaths.FindRepositoryRoot(),
                 TestContext.Current.CancellationToken, PreserveArtifacts: true);
             DemoScenarioExecutionResult execution;
             try

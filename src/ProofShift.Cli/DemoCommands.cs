@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using ProofShift.DemoContracts;
 
 namespace ProofShift.Cli;
 
@@ -371,6 +372,8 @@ internal static class DemoCommands
             var runnerAssembly = ResolveDemoRunnerAssembly(catalog.ContentRoot)
                 ?? throw new DemoManifestException("The ProofShift DemoRunner has not been built or packaged.");
             start.ArgumentList.Add(runnerAssembly);
+            start.ArgumentList.Add("--content-root");
+            start.ArgumentList.Add(catalog.ContentRoot);
         }
         else
             throw new DemoManifestException($"Stage '{stage.Id}' has an unsupported runner.");
@@ -379,7 +382,6 @@ internal static class DemoCommands
             start.Environment[pair.Key] = ExpandTokens(pair.Value, tokens);
         start.Environment["PROOFSHIFT_DEMO_SCENARIO_ID"] = entry.Manifest.Id;
         start.Environment["PROOFSHIFT_DEMO_WORKSPACE"] = workspace;
-        start.Environment["PROOFSHIFT_DEMO_REPOSITORY_ROOT"] = catalog.ContentRoot;
         start.Environment["PROOFSHIFT_DEMO_CLI_PATH"] = Path.Combine(AppContext.BaseDirectory, "ProofShift.Cli.dll");
 
         var resultPath = stage.ResultFile is null
@@ -475,14 +477,11 @@ internal static class DemoCommands
     private static async Task<string?> ReadSafeDemoRunnerDiagnosticAsync(StreamReader error,
         CancellationToken cancellationToken)
     {
-        const string prefix = "Demo scenario failed unexpectedly (";
-        const string suffix = "). Exception details were withheld to protect configured connection values.";
         string? diagnostic = null;
         while (await error.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
         {
-            if (diagnostic is null && line.StartsWith(prefix, StringComparison.Ordinal) &&
-                line.EndsWith(suffix, StringComparison.Ordinal))
-                diagnostic = line;
+            if (diagnostic is null && SafeDemoRunnerDiagnostic.TryParseLine(line, out var safeDiagnostic))
+                diagnostic = safeDiagnostic;
         }
         return diagnostic;
     }
