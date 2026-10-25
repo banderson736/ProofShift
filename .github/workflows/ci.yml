@@ -278,6 +278,13 @@ jobs:
       - linux-package-reproducibility-b
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - name: Verify candidate and tree identity
+        shell: bash
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          printf 'github.sha=%s\nHEAD=%s\nTREE=%s\n' "$GITHUB_SHA" "$actual_sha" "$(git rev-parse 'HEAD^{tree}')"
+          test "$actual_sha" = "$GITHUB_SHA"
       - uses: actions/download-artifact@v4
         with:
           name: proofshift-evaluation-win-x64-${{ github.sha }}
@@ -312,6 +319,7 @@ jobs:
       - name: Run basic evaluator commands with the .NET runtime only
         shell: bash
         run: |
+          set -euo pipefail
           apt-get update
           apt-get install --yes --no-install-recommends jq unzip
           if [ -n "$(dotnet --list-sdks)" ]; then
@@ -325,15 +333,21 @@ jobs:
           mkdir -p "$RUNNER_TEMP/runtime-only-extract"
           unzip -q "$archive" -d "$RUNNER_TEMP/runtime-only-extract"
           package_root="$(find "$RUNNER_TEMP/runtime-only-extract" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          test -n "$package_root"
           manifest="$package_root/package-manifest.json"
           cli="$package_root/app/ProofShift.Cli.dll"
           product_version="$(jq -r .productVersion "$manifest")"
           printf 'github.sha=%s\nHEAD=%s\nTREE=%s\n' "$(jq -r .sourceRevision "$manifest")" "$(jq -r .sourceRevision "$manifest")" "$(jq -r .sourceTree "$manifest")"
           printf 'productVersion=%s\nbuildSDK=%s\nruntime=%s\n' "$product_version" "$(jq -r .buildSdkVersion "$manifest")" "$runtime"
+          cd "$package_root"
           test "$(dotnet "$cli" --version)" = "ProofShift $product_version"
-          dotnet "$cli" version --json | jq -e --arg version "$product_version" --arg revision "$(jq -r .sourceRevision "$manifest")" --arg tree "$(jq -r .sourceTree "$manifest")" --arg tfm "$(jq -r .targetFramework "$manifest")" '.productVersion == $version and .sourceRevision == $revision and .sourceTree == $tree and .targetFramework == $tfm'
-          dotnet "$cli" demo list --json | jq -e 'any(.[]; .id == "pension")'
-          dotnet "$cli" demo describe pension --json | jq -e '.id == "pension" and (.claimBoundary | length > 0)'
+          printf 'version: PASS\n'
+          dotnet "$cli" version --json | jq -e --arg version "$product_version" --arg revision "$(jq -r .sourceRevision "$manifest")" --arg tree "$(jq -r .sourceTree "$manifest")" --arg tfm "$(jq -r .targetFramework "$manifest")" '.productVersion == $version and .sourceRevision == $revision and .sourceTree == $tree and .targetFramework == $tfm' > /dev/null
+          printf 'version-json: PASS\n'
+          dotnet "$cli" demo list --json | jq -e 'any(.[]; .id == "pension")' > /dev/null
+          printf 'demo-list: PASS\n'
+          dotnet "$cli" demo describe pension --json | jq -e '.id == "pension" and (.claimBoundary | length > 0)' > /dev/null
+          printf 'demo-describe-pension: PASS\n'
           printf 'SDKs installed: none\nRuntime-only smoke: PASS\n'
 
   oracle-integration:
