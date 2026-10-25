@@ -1,6 +1,5 @@
 using System.Text.Json;
 using ProofShift.DemoScenarios;
-using ProofShift.Reporting;
 using Xunit;
 
 namespace ProofShift.EndToEnd.Tests;
@@ -8,24 +7,22 @@ namespace ProofShift.EndToEnd.Tests;
 [Collection("DockerIntegration")]
 public sealed class PhysicalDemoScenarioTests
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
     [Fact]
     public async Task JusticeScenarioPreservesExactPhysicalAssuranceResults()
     {
         var report = await ExecuteAsync(new JusticeDemoScenario());
 
-        Assert.Equal("proofshift.justice", report.PackId);
-        Assert.Equal(15, report.SeededDefectCount);
-        Assert.Equal(16_200, report.CheckpointArtifactCount);
-        Assert.Equal(24, report.DefectiveExternalObservation.VerificationFailureCount);
-        Assert.Equal(24, report.DefectiveExternalObservation.EvidenceReferences.Count);
-        Assert.Equal(0, report.CorrectedShadow.VerificationFailureCount);
-        Assert.Equal(0, report.CorrectedShadow.UnaccountedSourceCount);
-        Assert.Equal(0, report.CorrectedShadow.UnexplainedTargetCount);
-        Assert.Equal("PASSED", report.CorrectedShadow.RecoveryOutcome);
-        Assert.Equal("PASSED", report.CorrectedShadow.RecoveryRehearsalOutcome);
-        Assert.Equal("QUALIFIED", report.CorrectedShadow.Qualification);
+        Assert.Equal("proofshift.justice", report.GetProperty("packId").GetString());
+        Assert.Equal(15, report.GetProperty("seededDefectCount").GetInt32());
+        Assert.Equal(16_200, report.GetProperty("checkpointArtifactCount").GetInt64());
+        Assert.Equal(24, report.GetProperty("defectiveExternalObservation").GetProperty("verificationFailureCount").GetInt32());
+        Assert.Equal(24, report.GetProperty("defectiveExternalObservation").GetProperty("evidenceReferences").GetArrayLength());
+        Assert.Equal(0, report.GetProperty("correctedShadow").GetProperty("verificationFailureCount").GetInt32());
+        Assert.Equal(0, report.GetProperty("correctedShadow").GetProperty("unaccountedSourceCount").GetInt32());
+        Assert.Equal(0, report.GetProperty("correctedShadow").GetProperty("unexplainedTargetCount").GetInt32());
+        Assert.Equal("PASSED", report.GetProperty("correctedShadow").GetProperty("recoveryOutcome").GetString());
+        Assert.Equal("PASSED", report.GetProperty("correctedShadow").GetProperty("recoveryRehearsalOutcome").GetString());
+        Assert.Equal("QUALIFIED", report.GetProperty("correctedShadow").GetProperty("qualification").GetString());
     }
 
     [Fact]
@@ -33,17 +30,17 @@ public sealed class PhysicalDemoScenarioTests
     {
         var report = await ExecuteAsync(new HcmDemoScenario());
 
-        Assert.Equal("proofshift.hcm", report.PackId);
-        Assert.Equal(14, report.SeededDefectCount);
-        Assert.Equal(40_575, report.CheckpointArtifactCount);
-        Assert.Equal(25, report.DefectiveExternalObservation.VerificationFailureCount);
-        Assert.Equal(25, report.DefectiveExternalObservation.EvidenceReferences.Count);
-        Assert.Equal(0, report.CorrectedShadow.VerificationFailureCount);
-        Assert.Equal(0, report.CorrectedShadow.UnaccountedSourceCount);
-        Assert.Equal(0, report.CorrectedShadow.UnexplainedTargetCount);
-        Assert.Equal("PASSED", report.CorrectedShadow.RecoveryOutcome);
-        Assert.Equal("PASSED", report.CorrectedShadow.RecoveryRehearsalOutcome);
-        Assert.Equal("QUALIFIED", report.CorrectedShadow.Qualification);
+        Assert.Equal("proofshift.hcm", report.GetProperty("packId").GetString());
+        Assert.Equal(14, report.GetProperty("seededDefectCount").GetInt32());
+        Assert.Equal(40_575, report.GetProperty("checkpointArtifactCount").GetInt64());
+        Assert.Equal(25, report.GetProperty("defectiveExternalObservation").GetProperty("verificationFailureCount").GetInt32());
+        Assert.Equal(25, report.GetProperty("defectiveExternalObservation").GetProperty("evidenceReferences").GetArrayLength());
+        Assert.Equal(0, report.GetProperty("correctedShadow").GetProperty("verificationFailureCount").GetInt32());
+        Assert.Equal(0, report.GetProperty("correctedShadow").GetProperty("unaccountedSourceCount").GetInt32());
+        Assert.Equal(0, report.GetProperty("correctedShadow").GetProperty("unexplainedTargetCount").GetInt32());
+        Assert.Equal("PASSED", report.GetProperty("correctedShadow").GetProperty("recoveryOutcome").GetString());
+        Assert.Equal("PASSED", report.GetProperty("correctedShadow").GetProperty("recoveryRehearsalOutcome").GetString());
+        Assert.Equal("QUALIFIED", report.GetProperty("correctedShadow").GetProperty("qualification").GetString());
     }
 
     [Fact]
@@ -51,20 +48,20 @@ public sealed class PhysicalDemoScenarioTests
     {
         var report = await ExecuteAsync(new FhirDemoScenario());
 
-        Assert.Equal("proofshift.fhir", report.PackId);
-        Assert.Equal(9, report.SeededDefectCount);
-        Assert.Equal(7_000, report.CheckpointArtifactCount);
-        Assert.Equal(15, report.DefectiveExternalObservation.VerificationFailureCount);
-        Assert.Equal(15, report.DefectiveExternalObservation.EvidenceReferences.Count);
-        Assert.Equal(0, report.CorrectedShadow.VerificationFailureCount);
-        Assert.Equal(0, report.CorrectedShadow.UnaccountedSourceCount);
-        Assert.Equal(0, report.CorrectedShadow.UnexplainedTargetCount);
-        Assert.Equal("PASSED", report.CorrectedShadow.RecoveryOutcome);
-        Assert.Equal("PASSED", report.CorrectedShadow.RecoveryRehearsalOutcome);
-        Assert.Equal("QUALIFIED", report.CorrectedShadow.Qualification);
+        Assert.Equal("proofshift.fhir", report.GetProperty("packId").GetString());
+        Assert.Equal(9, report.GetProperty("seededDefectCount").GetInt32());
+        Assert.Equal(7_000, report.GetProperty("checkpointArtifactCount").GetInt64());
+        Assert.Equal(15, report.GetProperty("defectiveExternalObservation").GetProperty("verificationFailureCount").GetInt32());
+        Assert.Equal(15, report.GetProperty("defectiveExternalObservation").GetProperty("evidenceReferences").GetArrayLength());
+        Assert.Equal(0, report.GetProperty("correctedShadow").GetProperty("verificationFailureCount").GetInt32());
+        Assert.Equal(0, report.GetProperty("correctedShadow").GetProperty("unaccountedSourceCount").GetInt32());
+        Assert.Equal(0, report.GetProperty("correctedShadow").GetProperty("unexplainedTargetCount").GetInt32());
+        Assert.Equal("PASSED", report.GetProperty("correctedShadow").GetProperty("recoveryOutcome").GetString());
+        Assert.Equal("PASSED", report.GetProperty("correctedShadow").GetProperty("recoveryRehearsalOutcome").GetString());
+        Assert.Equal("QUALIFIED", report.GetProperty("correctedShadow").GetProperty("qualification").GetString());
     }
 
-    private static async Task<DemoAssuranceReport> ExecuteAsync(IDemoScenario scenario)
+    private static async Task<JsonElement> ExecuteAsync(IDemoScenario scenario)
     {
         var workspace = Path.Combine(Path.GetTempPath(), $"proofshift-{scenario.Id}-e2e-{Guid.NewGuid():N}");
         Directory.CreateDirectory(workspace);
@@ -83,8 +80,7 @@ public sealed class PhysicalDemoScenarioTests
                 throw Xunit.Sdk.SkipException.ForSkip(exception.Message);
             }
 
-            return execution.Data.Deserialize<DemoAssuranceReport>(JsonOptions)
-                ?? throw new InvalidDataException($"The {scenario.Id} scenario returned an invalid report.");
+            return execution.Data;
         }
         finally
         {
