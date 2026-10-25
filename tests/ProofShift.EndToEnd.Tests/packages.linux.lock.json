@@ -643,8 +643,8 @@
         "type": "Project",
         "dependencies": {
           "CsvHelper": "[33.1.0, )",
-          "Microsoft.Data.Sqlite": "[10.0.12, )",
           "ProofShift.Connectors.Abstractions": "[0.1.0-preview.1, )",
+          "ProofShift.Connectors.Internal": "[0.1.0-preview.1, )",
           "ProofShift.Domain": "[0.1.0-preview.1, )"
         }
       },
@@ -663,6 +663,13 @@
           "ProofShift.Domain": "[0.1.0-preview.1, )"
         }
       },
+      "proofshift.connectors.internal": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.Data.Sqlite": "[10.0.12, )",
+          "ProofShift.Connectors.Abstractions": "[0.1.0-preview.1, )"
+        }
+      },
       "proofshift.connectors.oracle": {
         "type": "Project",
         "dependencies": {
@@ -674,9 +681,9 @@
       "proofshift.connectors.parquet": {
         "type": "Project",
         "dependencies": {
-          "Microsoft.Data.Sqlite": "[10.0.12, )",
           "Parquet.Net": "[6.1.0, )",
           "ProofShift.Connectors.Abstractions": "[0.1.0-preview.1, )",
+          "ProofShift.Connectors.Internal": "[0.1.0-preview.1, )",
           "ProofShift.Connectors.RemoteObjects": "[0.1.0-preview.1, )"
         }
       },
@@ -723,8 +730,8 @@
       "proofshift.connectors.structuredfiles": {
         "type": "Project",
         "dependencies": {
-          "Microsoft.Data.Sqlite": "[10.0.12, )",
-          "ProofShift.Connectors.Abstractions": "[0.1.0-preview.1, )"
+          "ProofShift.Connectors.Abstractions": "[0.1.0-preview.1, )",
+          "ProofShift.Connectors.Internal": "[0.1.0-preview.1, )"
         }
       },
       "proofshift.democontracts": {
