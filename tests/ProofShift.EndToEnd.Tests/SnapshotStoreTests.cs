@@ -27,6 +27,10 @@ public sealed class SnapshotStoreTests
             var (store, checkpointId, checkpoint) = await CreateCheckpointAsync(directory, sourceRecord, selector,
                 (_, _) => ValueTask.FromResult<Stream>(new MemoryStream(binary)));
 
+            var manifest = await store.ReadManifestAsync(checkpointId.Value.ToString("N"), TestContext.Current.CancellationToken);
+            Assert.Equal(checkpoint.Id, manifest.Id);
+            Assert.Equal(checkpoint.ManifestHash, manifest.ManifestHash);
+            Assert.Equal(checkpoint.SourceFingerprint, manifest.SourceFingerprint);
             await using var loaded = await store.OpenCompleteAsync(checkpointId.Value.ToString("N"), TestContext.Current.CancellationToken);
             var records = new List<RecordEnvelope>();
             await foreach (var record in loaded.ReadAsync("members", selector, TestContext.Current.CancellationToken)) records.Add(record);
@@ -79,6 +83,58 @@ public sealed class SnapshotStoreTests
         }
     }
 
+    [Fact]
+    public async Task ReadManifestRejectsCorruptedManifestWithoutReplayingCheckpoint()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var sourceRecord = CreateRecord(Convert.ToHexString(SHA256.HashData([])).ToLowerInvariant(), 0);
+            var selector = new ArtifactSelector("table", [new KeyValuePair<string, string>("name", "member")], ["member_id"]);
+            var (store, checkpointId, checkpoint) = await CreateCheckpointAsync(directory, sourceRecord, selector,
+                (_, _) => ValueTask.FromResult<Stream>(new MemoryStream()));
+            var checkpointDirectory = Path.Combine(directory, checkpointId.Value.ToString("N"));
+            var manifestPath = Path.Combine(checkpointDirectory, "manifest.json");
+            var manifest = await File.ReadAllTextAsync(manifestPath, TestContext.Current.CancellationToken);
+            manifest = manifest.Replace(checkpoint.ManifestHash!, new string('0', 64), StringComparison.Ordinal);
+            await File.WriteAllTextAsync(manifestPath, manifest, TestContext.Current.CancellationToken);
+
+            var exception = await Assert.ThrowsAsync<SnapshotStoreException>(
+                () => store.ReadManifestAsync(checkpointId.Value.ToString("N"), TestContext.Current.CancellationToken));
+            Assert.Equal(SnapshotIssueCodes.IntegrityFailure, exception.Code);
+
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ReadManifestDoesNotReplayOrReadCheckpointSegments()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var sourceRecord = CreateRecord(Convert.ToHexString(SHA256.HashData([])).ToLowerInvariant(), 0);
+            var selector = new ArtifactSelector("table", [new KeyValuePair<string, string>("name", "member")], ["member_id"]);
+            var (store, checkpointId, checkpoint) = await CreateCheckpointAsync(directory, sourceRecord, selector,
+                (_, _) => ValueTask.FromResult<Stream>(new MemoryStream()));
+            var segment = Directory.GetFiles(Path.Combine(directory, checkpointId.Value.ToString("N"), "nodes"), "*.ndjson").Single();
+            await File.AppendAllTextAsync(segment, "tamper", TestContext.Current.CancellationToken);
+
+            var manifest = await store.ReadManifestAsync(checkpointId.Value.ToString("N"), TestContext.Current.CancellationToken);
+            Assert.Equal(checkpoint.ManifestHash, manifest.ManifestHash);
+            var exception = await Assert.ThrowsAsync<SnapshotStoreException>(
+                () => store.OpenCompleteAsync(checkpointId.Value.ToString("N"), TestContext.Current.CancellationToken));
+            Assert.Equal(SnapshotIssueCodes.IntegrityFailure, exception.Code);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData(CheckpointStatus.Failed)]
     [InlineData(CheckpointStatus.Cancelled)]
@@ -98,6 +154,9 @@ public sealed class SnapshotStoreTests
             var exception = await Assert.ThrowsAsync<SnapshotStoreException>(
                 () => store.OpenCompleteAsync(id.Value.ToString("N"), TestContext.Current.CancellationToken));
             Assert.Equal(SnapshotIssueCodes.CheckpointNotComplete, exception.Code);
+            var manifestException = await Assert.ThrowsAsync<SnapshotStoreException>(
+                () => store.ReadManifestAsync(id.Value.ToString("N"), TestContext.Current.CancellationToken));
+            Assert.Equal(SnapshotIssueCodes.CheckpointNotComplete, manifestException.Code);
         }
         finally
         {

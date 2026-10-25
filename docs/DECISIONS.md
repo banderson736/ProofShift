@@ -202,6 +202,16 @@ Status: Accepted for PS-0.10F (October 11, 2026; merged as `77bceb325d925eb41c44
 The absence of a domain-neutral date-interval rule created pressure to duplicate overlap and boundary logic in HCM. The generic `effective-dated-interval` rule declares its date/owner/identity fields, reads one globally ordered target stream, and supports configured overlap and optional continuity checks; generic attribute comparison handles expected boundary fidelity. It is date-valued and policy-configured, not a universal HCM rule. See [ADR-0028](adr/0028-generic-effective-dated-interval-verification.md). Verification workspace/interval tests pass 40/40; all five physical scenarios, shared conformance, registry and authoring gates passed. PS-0.10F acceptance is recorded in the [matrix](PS0_10F_ACCEPTANCE_MATRIX.md).
 
 ### D-038 - Generic demo scenario manifests and lifecycle
-Status: Proposed for PS-0.10G review
+Status: Accepted for PS-0.10G (October 24, 2026; exact candidate `d3529ccabe04eb1e7b8b3cf2ab643ff8488cf1af`; GitHub Actions run `38172351820`)
 
 Evaluator demos are discovered from strict, versioned manifests in the CLI/package layer. One generic catalog and runner handles list/describe/preflight/run/reset; ordered stages invoke ProofShift CLI commands without a shell. A stage may recognize an expected nonzero defective-verification or unsafe-Recovery result only when structured output is persisted and typed assertions pass. Manifest display, paths, stage presentation, and runtime values remain outside semantic project/graph/rule fingerprints. Run state is isolated by materializing the referenced project inside a scenario-owned workspace; reset requires a matching ownership marker and fails closed on reparse points. The runner is not a generic workflow engine or migration executor. See [ADR-0029](adr/0029-generic-demo-scenario-contract.md) and [Demo Scenario Manifest v1](demo/DEMO_SCENARIO_MANIFEST.md).
+
+### D-039 - Generic persisted report context
+Status: Proposed for PS-0.11A
+
+Ordinary persisted reporting resolves exactly one configured pack/version and renders its pack-owned claim boundary from required metadata. Persisted Evidence context records the Verification provider versions used, outside semantic Evidence canonicalization; Recovery exposes already-persisted assessment and ledger bindings through a read-only summary. Reports validate persisted Evidence, Recovery, ledger, Projection, and current project context without rerunning Verification. Comparisons require the same project and exact pack while allowing historical configuration/graph changes to be attributed. See [ADR-0030](adr/0030-generic-persisted-report-context.md) and [PS-0.11A](PS0_11A_GENERIC_OPERATOR_REPORTING.md).
+
+### D-040 - Pack-supplied business-discrepancy aggregation
+Status: Proposed for PS-0.11A
+
+Persisted reports retain the raw failed Verification Evidence count and derive `BusinessDiscrepancyCount` from required, deterministic pack metadata. Metadata can select all failed Evidence or a declared set of Evidence codes and can explicitly include false-Reverse Recovery edges. Generic Reporting applies this contract without concrete-pack branches. Pension metadata reuses its established business-defect Evidence-code set and includes false-Reverse edges; Utility, Justice, HCM, and FHIR count all failed Evidence. Evidence, Recovery, qualification, package assertions, and semantic fingerprints are unchanged. See [ADR-0031](adr/0031-pack-supplied-business-discrepancy-aggregation.md).

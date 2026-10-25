@@ -1,7 +1,7 @@
 # ADR-0029: Generic Demo Scenario Contract
 
-- Status: Proposed for PS-0.10G review
-- Date: 2026-10-11
+- Status: Accepted
+- Date: 2026-10-24
 
 ## Context
 
@@ -39,4 +39,4 @@ The accepted assurance scenarios are exercised through a mixture of physical tes
 
 ## Validation
 
-G1 process tests cover deterministic ordering/output, accepted-index binding, missing fixture and occupied-port preflight, expected nonzero verification recognition with result assertions, rejection of unasserted expected-defect stages, reset ownership refusal, unrelated workspace preservation, symlink rejection where supported, and reset/run repeatability. Full 0.10G acceptance remains pending in the 60-item matrix.
+All 60 PS-0.10G acceptance gates passed on exact candidate `d3529ccabe04eb1e7b8b3cf2ab643ff8488cf1af` in GitHub Actions run `38172351820`. All six required jobs succeeded, including Windows package-only smoke and five Ubuntu packaged Docker demos; regression jobs reported 331 passed, 0 failed, and 0 skipped. The acceptance matrix records platform claim boundaries, package hashes, resource observations, and gate-by-gate evidence.

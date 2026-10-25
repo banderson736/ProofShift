@@ -10,6 +10,7 @@ namespace ProofShift.Packs.Hcm;
 
 public sealed class HcmPack : IDomainPack
 {
+    public const string ClaimBoundary = "Configured migration invariants only; this report does not validate payroll tax, tax withholding, benefits or labor-law compliance, accounting certification, or complete payroll-engine correctness.";
     public string Id => "proofshift.hcm";
     public string Version => "0.10.0";
     public IReadOnlyCollection<VerificationRuleFactory> RuleFactories { get; }
@@ -51,7 +52,8 @@ public sealed class HcmPack : IDomainPack
             new("rules.list", "List rules", "List HCM assurance rules."),
             new("rules.describe", "Describe rules", "Describe HCM rules and versions."),
             new("schema", "Generate schema", "Generate HCM rule configuration schema.")
-        ]);
+        ], ClaimBoundary, new BusinessDiscrepancyAggregationMetadata(
+            BusinessDiscrepancyEvidenceMode.AllFailedEvidence));
     }
 
     private static VerificationRuleFactory CreateReferenceFactory()

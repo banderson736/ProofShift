@@ -169,6 +169,12 @@ public static class PensionAssuranceReportBuilder
         ("falseReversibleTransformations", [])
     ];
 
+    public static IReadOnlyCollection<string> BusinessDiscrepancyEvidenceCodes { get; } =
+        Array.AsReadOnly(BusinessDefectCategories.SelectMany(category => category.Codes)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray());
+
     private static readonly (string Name, string[] Codes)[] SectionCodes =
     [
         ("Member Conversion", ["MissingMember", "DuplicateMember", "WrongMemberStatus"]),

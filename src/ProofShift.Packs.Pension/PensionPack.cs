@@ -6,6 +6,7 @@ namespace ProofShift.Packs.Pension;
 
 public sealed class PensionPack : IDomainPack
 {
+    public const string ClaimBoundary = "Configured synthetic pension migration invariants only; not regulatory, actuarial, or benefit-calculation certification.";
     private static readonly string[] ScopeOptionNames = ["sourceNode", "targetNode", "semanticType"];
     public string Id => "proofshift.pension";
     public string Version => "0.9.0";
@@ -130,7 +131,10 @@ public sealed class PensionPack : IDomainPack
             new("rules.describe", "Describe rules", "Expose rule descriptions and supported versions."),
             new("rules.list", "List rules", "List installed rules for the selected pack."),
             new("schema", "Generate schema", "Generate configuration schema from provider-owned rule descriptors.")
-        ]);
+        ], ClaimBoundary, new BusinessDiscrepancyAggregationMetadata(
+            BusinessDiscrepancyEvidenceMode.SelectedEvidenceCodes,
+            PensionAssuranceReportBuilder.BusinessDiscrepancyEvidenceCodes,
+            includeFalseReversibleEdges: true));
     }
 
     private static VerificationRuleFactory Factory(string type, Func<VerificationRuleDefinition, ProofShift.Verification.IVerificationRule> create,

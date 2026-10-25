@@ -91,6 +91,8 @@ public interface IMaterializedSnapshotStore
 
     Task<ILoadedCheckpoint> OpenCompleteAsync(string checkpointIdOrPath, CancellationToken cancellationToken);
 
+    Task<SourceCheckpoint> ReadManifestAsync(string checkpointIdOrPath, CancellationToken cancellationToken);
+
     Task DeleteAsync(string checkpointIdOrPath, CancellationToken cancellationToken);
 }
 

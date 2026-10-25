@@ -5,6 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Oracle.ManagedDataAccess.Core" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" />
     <ProjectReference Include="../ProofShift.Connectors.Abstractions/ProofShift.Connectors.Abstractions.csproj" />
   </ItemGroup>
 </Project>

@@ -12,6 +12,7 @@ namespace ProofShift.Packs.Fhir;
 
 public sealed class FhirPack : IDomainPack
 {
+    public const string ClaimBoundary = "Not FHIR/profile/US Core certification, terminology validation, clinical correctness or medical appropriateness.";
     public string Id => "proofshift.fhir";
     public string Version => "0.10.0";
     public IReadOnlyCollection<VerificationRuleFactory> RuleFactories { get; }
@@ -104,7 +105,8 @@ public sealed class FhirPack : IDomainPack
             new("rules.list", "List rules", "List FHIR-style assurance rules."),
             new("rules.describe", "Describe rules", "Describe FHIR-style rules and versions."),
             new("schema", "Generate schema", "Generate FHIR-style rule configuration schema.")
-        ]);
+        ], ClaimBoundary, new BusinessDiscrepancyAggregationMetadata(
+            BusinessDiscrepancyEvidenceMode.AllFailedEvidence));
     }
 }
 
@@ -338,7 +340,7 @@ public sealed class FhirQuantityFidelityRule(VerificationRuleDefinition definiti
 public sealed record FhirAssuranceReport
 {
     public const string FormatVersion = "proofshift-fhir-assurance-report-v1";
-    public const string ClaimBoundary = "Not FHIR/profile/US Core certification, terminology validation, clinical correctness or medical appropriateness.";
+    public const string ClaimBoundary = FhirPack.ClaimBoundary;
 
     public string Format { get; }
     public string Project { get; }

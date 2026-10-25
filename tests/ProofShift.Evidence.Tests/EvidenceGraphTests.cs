@@ -11,8 +11,17 @@ public sealed class EvidenceGraphTests
     {
         var first = CreateGraph(new RunId(Guid.NewGuid()), DateTimeOffset.UtcNow);
         var second = CreateGraph(new RunId(Guid.NewGuid()), DateTimeOffset.UtcNow.AddDays(1));
+        var contextOnly = new EvidenceGraph(first.VerificationRunId, first.Records,
+            new EvidenceVerificationContext(new string('a', 64), new string('b', 64), Guid.NewGuid().ToString("D"),
+                new string('c', 64), new string('d', 64), new string('e', 64),
+                ProviderVersions: new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["proofshift.verification.generic"] = "1",
+                    ["proofshift.utility"] = "0.10.0"
+                }));
 
         Assert.Equal(first.Fingerprint, second.Fingerprint);
+        Assert.Equal(first.Fingerprint, contextOnly.Fingerprint);
         Assert.Equal(EvidenceFormat.CanonicalizationVersion, first.CanonicalizationVersion);
     }
 
@@ -40,7 +49,12 @@ public sealed class EvidenceGraphTests
             var graph = CreateGraph(new RunId(Guid.NewGuid()), DateTimeOffset.UtcNow);
             graph = new EvidenceGraph(graph.VerificationRunId, graph.Records,
                 new EvidenceVerificationContext(new string('a', 64), new string('b', 64), Guid.NewGuid().ToString("D"),
-                    new string('c', 64), new string('d', 64), new string('e', 64)));
+                    new string('c', 64), new string('d', 64), new string('e', 64),
+                    ProviderVersions: new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["proofshift.verification.generic"] = "1",
+                        ["proofshift.fhir"] = "0.10.0"
+                    }));
             var store = new FileSystemEvidenceStore(root);
             var receipt = await store.SaveAsync(graph, TestContext.Current.CancellationToken);
             Assert.True(await store.VerifyIntegrityAsync(graph.VerificationRunId, TestContext.Current.CancellationToken));
@@ -48,7 +62,15 @@ public sealed class EvidenceGraphTests
             Assert.True(manifest.Complete);
             Assert.Equal(EvidenceFormat.CanonicalizationVersion, manifest.CanonicalizationVersion);
             Assert.Equal(2, manifest.RecordCount);
-            Assert.Equal(graph.VerificationContext, manifest.VerificationContext);
+            Assert.Equal(graph.VerificationContext!.ConfigurationHash, manifest.VerificationContext!.ConfigurationHash);
+            Assert.Equal(graph.VerificationContext.GraphHash, manifest.VerificationContext.GraphHash);
+            Assert.Equal(graph.VerificationContext.CheckpointId, manifest.VerificationContext.CheckpointId);
+            Assert.Equal(graph.VerificationContext.CheckpointManifestHash, manifest.VerificationContext.CheckpointManifestHash);
+            Assert.Equal(graph.VerificationContext.SourceFingerprint, manifest.VerificationContext.SourceFingerprint);
+            Assert.Equal(graph.VerificationContext.RuleSetFingerprint, manifest.VerificationContext.RuleSetFingerprint);
+            Assert.Equal(graph.VerificationContext.ProviderVersions!.OrderBy(pair => pair.Key, StringComparer.Ordinal),
+                manifest.VerificationContext.ProviderVersions!.OrderBy(pair => pair.Key, StringComparer.Ordinal));
+            Assert.Equal("0.10.0", manifest.VerificationContext!.ProviderVersions!["proofshift.fhir"]);
             var streamedRecords = 0;
             await foreach (var _ in store.ReadRecordsAsync(graph.VerificationRunId, TestContext.Current.CancellationToken)
                 .WithCancellation(TestContext.Current.CancellationToken))

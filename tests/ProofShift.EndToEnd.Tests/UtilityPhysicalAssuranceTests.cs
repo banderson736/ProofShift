@@ -225,6 +225,18 @@ public sealed class UtilityPhysicalAssuranceTests
         var report = CrossDomainAssuranceReport.Create(configuration.Root.Project!.Name!, new UtilityPack(),
             "Configured Utility migration invariants only; no tariff or regulatory billing certification.",
             dryRun.Verification, dryRun.Recovery);
+        var persistedReport = await PersistedAssuranceReportTestHelper.BuildAsync(root,
+            Path.Combine(root, "projected-corrected"), configuration.Root.Project.Name!, new UtilityPack(),
+            dryRun.Recovery!.Id, TestContext.Current.CancellationToken);
+        Assert.Equal("proofshift.utility", persistedReport.PackId);
+        Assert.Equal(new UtilityPack().Metadata.ClaimBoundary, persistedReport.ClaimBoundary);
+        Assert.Equal("QUALIFIED", persistedReport.Qualification);
+        Assert.Empty(persistedReport.FindingsByRuleAndCode);
+        PersistedAssuranceReportTestHelper.AssertNoExpectedOrActualProperties(JsonSerializer.Serialize(persistedReport));
+        await PersistedAssuranceReportTestHelper.AssertCliReportAndComparisonAsync(root,
+            Path.Combine(root, "projected-corrected"), configuration.Root.Project.Name!,
+            new UtilityPack().Id, new UtilityPack().Version, new UtilityPack().Metadata.ClaimBoundary,
+            dryRun.Recovery!.Id, TestContext.Current.CancellationToken);
         Assert.Equal("proofshift.utility", report.PackId);
         Assert.Equal("0.10.0", report.PackVersion);
         Assert.Equal("QUALIFIED", report.Qualification);

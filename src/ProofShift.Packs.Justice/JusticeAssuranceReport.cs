@@ -7,7 +7,7 @@ namespace ProofShift.Packs.Justice;
 public sealed record JusticeAssuranceReport
 {
     public const string FormatVersion = "proofshift-justice-assurance-report-v1";
-    public const string ScopeBoundary = "Configured migration invariants only; this report does not validate law, jurisdiction, court rules, sentencing, charge validity, filing sufficiency, or records retention.";
+    public const string ScopeBoundary = JusticePack.ClaimBoundary;
 
     public string Format { get; }
     public string Project { get; }
