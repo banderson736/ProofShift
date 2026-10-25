@@ -45,7 +45,15 @@ function Invoke-PackagedJson {
     param([string] $CliPath, [string[]] $Arguments)
 
     $text = Invoke-PackagedCli $CliPath $Arguments
-    try { return $text | ConvertFrom-Json }
+    try {
+        $value = $text | ConvertFrom-Json
+        if ($value -is [Array]) {
+            foreach ($item in $value) { Write-Output $item }
+        }
+        else {
+            Write-Output $value
+        }
+    }
     catch { throw "Packaged CLI did not return valid JSON for '$($Arguments -join ' ')'.`n$text" }
 }
 
