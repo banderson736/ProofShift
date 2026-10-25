@@ -114,9 +114,16 @@ $archiveHash = (Get-FileHash -LiteralPath $archiveFullPath -Algorithm SHA256).Ha
 $checksumText = [IO.File]::ReadAllText("$archiveFullPath.sha256").Trim()
 if ($checksumText -notmatch '^(?<hash>[0-9a-f]{64})\s+') { throw "Package SHA-256 sidecar is invalid." }
 Assert-Equal $archiveHash $Matches.hash "Package SHA-256 sidecar"
+$provenancePath = [IO.Path]::ChangeExtension($archiveFullPath, ".provenance.json")
+if (-not (Test-Path -LiteralPath $provenancePath -PathType Leaf)) { throw "Package provenance sidecar is missing." }
+$provenance = Get-Content -LiteralPath $provenancePath -Raw | ConvertFrom-Json
+if ($provenance.productVersion -notmatch '^\d+\.\d+\.\d+-preview\.\d+$') {
+    throw "Provenance sidecar contains an invalid product version."
+}
 
 Expand-Archive -LiteralPath $archiveFullPath -DestinationPath $extractionFullPath
-$packageRoot = Join-Path $extractionFullPath "ProofShift-Evaluation-PS-0.10G"
+$manifestRoot = Join-Path $extractionFullPath "ProofShift-Evaluation-$($provenance.productVersion)"
+$packageRoot = $manifestRoot
 $cliPath = Join-Path $packageRoot "app/ProofShift.Cli.dll"
 $runnerPath = Join-Path $packageRoot "demo/ProofShift.DemoRunner.dll"
 foreach ($requiredPath in @(
@@ -138,13 +145,31 @@ foreach ($requiredPath in @(
 $manifestPath = Join-Path $packageRoot "package-manifest.json"
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw "Package manifest is missing." }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-$packagedGlobalJson = Get-Content -LiteralPath (Join-Path $packageRoot "global.json") -Raw | ConvertFrom-Json
-if ($packagedGlobalJson.PSObject.Properties.Name -contains "test") {
-    throw "Package global.json contains test-runner metadata."
+if (Test-Path -LiteralPath (Join-Path $packageRoot "global.json")) {
+    throw "The evaluator package must not contain repository SDK policy."
 }
 Assert-Equal $manifest.format "proofshift-evaluation-package-v2" "Package manifest format"
 Assert-Equal $manifest.targetPlatform $ExpectedPlatform "Package target platform"
 Assert-Equal $manifest.sourceRevision $ExpectedRevision "Package source revision"
+Assert-Equal $provenance.productVersion $manifest.productVersion "Provenance product version"
+Assert-Equal $provenance.targetPlatform $manifest.targetPlatform "Provenance target platform"
+Assert-Equal $provenance.archiveFile ([IO.Path]::GetFileName($archiveFullPath)) "Provenance archive filename"
+Assert-Equal $provenance.archiveSha256 $archiveHash "Provenance archive SHA-256"
+Assert-Equal $provenance.contentSha256 $manifest.contentSha256 "Provenance content SHA-256"
+Assert-Equal $provenance.sourceRevision $manifest.sourceRevision "Provenance source revision"
+Assert-Equal $provenance.sourceTree $manifest.sourceTree "Provenance source tree"
+Assert-Equal $provenance.dependencyLockSha256 $manifest.dependencyLockSha256 "Provenance dependency lock SHA-256"
+Assert-Equal $provenance.buildSdkVersion $manifest.buildSdkVersion "Provenance SDK version"
+Assert-Equal $provenance.targetFramework $manifest.targetFramework "Provenance target framework"
+Assert-Equal $provenance.packageFormat $manifest.format "Provenance package format"
+if ($manifest.productVersion -notmatch '^\d+\.\d+\.\d+-preview\.\d+$') {
+    throw "Product version is not a preview semantic version: $($manifest.productVersion)"
+}
+if ($manifest.sourceTree -notmatch '^[0-9a-f]{40}$' -or
+    $manifest.dependencyLockSha256 -notmatch '^[0-9a-f]{64}$' -or
+    $manifest.buildSdkVersion -ne "10.0.402" -or $manifest.targetFramework -ne "net10.0") {
+    throw "Package provenance contains invalid source, lock, SDK, or framework identity."
+}
 if (-not $manifest.sourceWorktreeClean) { throw "Package was not built from a clean source worktree." }
 if (-not $manifest.contentSha256) { throw "Package content digest is missing." }
 Assert-Equal $manifest.scenarioRunner "demo/ProofShift.DemoRunner.dll (non-test runtime)" "Package scenario runner"
@@ -205,7 +230,16 @@ if ($forbiddenFiles.Count -gt 0) {
 }
 
 $version = Invoke-PackagedCli $cliPath @("--version")
-if ($version -notmatch "ProofShift PS-0\.10G") { throw "Packaged version output was unexpected: $version" }
+Assert-Equal $version "ProofShift $($manifest.productVersion)" "Packaged CLI version"
+$structuredVersion = Invoke-PackagedCli $cliPath @("version", "--json") | ConvertFrom-Json
+Assert-Equal $structuredVersion.productVersion $manifest.productVersion "CLI JSON product version"
+Assert-Equal $structuredVersion.sourceRevision $manifest.sourceRevision "CLI JSON source revision"
+Assert-Equal $structuredVersion.sourceTree $manifest.sourceTree "CLI JSON source tree"
+Assert-Equal $structuredVersion.targetFramework $manifest.targetFramework "CLI JSON target framework"
+if ([IO.Path]::GetFileName($archiveFullPath) -ne
+    "ProofShift-Evaluation-$($manifest.productVersion)-$ExpectedPlatform.zip") {
+    throw "Package archive name does not match product version and platform."
+}
 Push-Location $script:PackageRoot
 try {
     $previousErrorActionPreference = $ErrorActionPreference
@@ -600,7 +634,12 @@ if (-not $PackageOnly) {
 
 $summaryOutput = [ordered]@{
     format = "proofshift-evaluation-package-smoke-v2"
+    productVersion = $manifest.productVersion
     sourceRevision = $manifest.sourceRevision
+    sourceTree = $manifest.sourceTree
+    dependencyLockSha256 = $manifest.dependencyLockSha256
+    buildSdkVersion = $manifest.buildSdkVersion
+    targetFramework = $manifest.targetFramework
     targetPlatform = $manifest.targetPlatform
     packageFile = [IO.Path]::GetFileName($archiveFullPath)
     packageSizeBytes = (Get-Item -LiteralPath $archiveFullPath).Length
@@ -620,5 +659,8 @@ if ($resultParent) { New-Item -ItemType Directory -Path $resultParent -Force | O
 [IO.File]::WriteAllText($resultFullPath, (ConvertTo-Json -InputObject $summaryOutput -Depth 20), [Text.UTF8Encoding]::new($false))
 Write-Output "Package SHA-256: $archiveHash"
 Write-Output "Package content SHA-256: $($manifest.contentSha256)"
+Write-Output "Product version: $($manifest.productVersion)"
+Write-Output "Source tree: $($manifest.sourceTree)"
+Write-Output "SDK: $($manifest.buildSdkVersion)"
 Write-Output "Fresh $ExpectedPlatform package smoke: PASS ($($scenarioResults.Count) scenarios)"
 Write-Output "Result: $resultFullPath"

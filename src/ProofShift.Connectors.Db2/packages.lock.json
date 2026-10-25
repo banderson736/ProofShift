@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net10.0": {
+      "Net.IBM.Data.Db2": {
+        "type": "Direct",
+        "requested": "[10.0.0.300, )",
+        "resolved": "10.0.0.300",
+        "contentHash": "WaWdwbuKp/6g6tjNdo7Nzb4JCmG/YZPB4f/esvOSTCrDVcZeaR9TSDO14BFVtl5nfEzxlNuGJm/mg3+/hNFwzA=="
+      },
+      "proofshift.connectors.abstractions": {
+        "type": "Project",
+        "dependencies": {
+          "ProofShift.Domain": "[0.1.0-preview.1, )"
+        }
+      },
+      "proofshift.domain": {
+        "type": "Project"
+      }
+    }
+  }
+}

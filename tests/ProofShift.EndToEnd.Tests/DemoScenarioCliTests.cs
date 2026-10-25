@@ -69,14 +69,26 @@ public sealed class DemoScenarioCliTests
     }
 
     [Fact]
-    public async Task CliVersionReportsCurrentMilestone()
+    public async Task CliVersionReportsProductVersionAndStructuredBuildIdentity()
     {
         var root = CreateRoot();
         try
         {
             var version = await RunAsync(root, "--version");
             Assert.Equal(0, version.ExitCode);
-            Assert.Equal("ProofShift PS-0.10G", version.Output.Trim());
+            Assert.Equal("ProofShift 0.1.0-preview.1", version.Output.Trim());
+
+            var commandVersion = await RunAsync(root, "version");
+            Assert.Equal(0, commandVersion.ExitCode);
+            Assert.Equal(version.Output.Trim(), commandVersion.Output.Trim());
+
+            var structuredVersion = await RunAsync(root, "version", "--json");
+            Assert.Equal(0, structuredVersion.ExitCode);
+            using var identity = JsonDocument.Parse(structuredVersion.Output);
+            Assert.Equal("0.1.0-preview.1", identity.RootElement.GetProperty("productVersion").GetString());
+            Assert.Equal("unknown", identity.RootElement.GetProperty("sourceRevision").GetString());
+            Assert.Equal("unknown", identity.RootElement.GetProperty("sourceTree").GetString());
+            Assert.Equal("net10.0", identity.RootElement.GetProperty("targetFramework").GetString());
         }
         finally
         {
