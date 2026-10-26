@@ -201,7 +201,7 @@ try {
     $configurationPath = Join-Path $project "proofshift.yaml"
     $validation = Invoke-ProductJson @("validate", $configurationPath, "--strict", "--json")
     Assert-Equal $validation.valid $true "Strict reviewed-mapping validation"
-    $null = Invoke-Product @("explain", $configurationPath)
+    $null = Invoke-Product @("explain", $configurationPath, "project")
     $null = Invoke-Product @("config", "show", $configurationPath, "--effective")
     $checkpoint = Invoke-ProductJson @("snapshot", $configurationPath, "--json")
     Assert-Equal $checkpoint.status "complete" "BYOM source checkpoint status"
