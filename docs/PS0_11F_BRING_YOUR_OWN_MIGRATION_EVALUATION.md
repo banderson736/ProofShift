@@ -2,11 +2,14 @@
 
 ## Status
 
-**In Progress. Not self-accepted.** PS-0.11F starts from governed `main`
-`2d5744753309643d7451123d59bf44b338472d4b`, tree
-`d6c9e33ae8e2e4d48ebf0d278249f55ef76dce43`, on branch
-`ps-0.11f-bring-your-own-migration-evaluation`. The branch's first commit
-records PS-0.11E acceptance separately.
+**Accepted (October 26, 2026), by repository-owner direction.** PS-0.11F
+started from governed `main` `2d5744753309643d7451123d59bf44b338472d4b`,
+tree `d6c9e33ae8e2e4d48ebf0d278249f55ef76dce43`. Exact source candidate
+`9748d22889dce85584915dfea06df037f925bf30`, tree
+`1d96d7f44133789831cb17c3951b6dc5a3187daf`, passed push CI `40269503856`
+and PR CI `40269505613` with all eleven required jobs green. PR #16 merged
+to `main` as `e811c08729609afdd3a2cfdf4cb7634012871205` with the same tree.
+All 45 acceptance gates pass; see the [acceptance matrix](PS0_11F_ACCEPTANCE_MATRIX.md).
 
 ## Objective
 
@@ -80,8 +83,9 @@ publication, tag, signing, and PS-0.11G are excluded.
 
 The evidence-driven gate list is maintained in the
 [PS-0.11F acceptance matrix](PS0_11F_ACCEPTANCE_MATRIX.md). Gates start as
-`NOT YET` and change only against recorded evidence. PS-0.11F is not
-self-accepted; completion may report readiness for formal review only.
+`NOT YET` and change only against recorded evidence. The repository owner
+formally accepted PS-0.11F on October 26, 2026; the implementation agent did
+not self-accept it. Formal acceptance of ADR-0035 remains separate.
 
 ## Validation and candidate policy
 
@@ -89,5 +93,7 @@ Run focused local tests first, then the documented locked restore, build, and
 applicable test suites. Docker-backed target-mutation and package-only Linux
 evaluation belong in the existing protected CI surface. Preserve all eleven
 required check names and strict current-main policy. Record exact candidate
-SHA/tree, push run, PR-context tested SHA/tree, and package evidence. Do not
-merge before formal review.
+SHA/tree, push run, PR-context tested SHA/tree, and package evidence. PR #16
+was merged before formal acceptance; the repository owner directed this
+post-merge acceptance, and the sequence is recorded in the matrix. Future
+milestone merges remain subject to formal review and repository governance.
