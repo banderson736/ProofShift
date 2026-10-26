@@ -15,7 +15,7 @@
     "findingRecords": 6,
     "findingCodeCounts": {
       "MissingTarget": 2,
-      "UnaccountedSource": 2,
+      "UnaccountedArtifact": 2,
       "AttributeMismatch": 2
     }
   },
