@@ -261,6 +261,7 @@ SELECT
     Assert-Equal $defectiveEvidence.manifest.complete $true "Persisted Evidence completeness"
     Assert-Equal (@($defectiveEvidence.records).Count) $defectiveEvidence.manifest.recordCount "Persisted Evidence record count"
     $defectGroups = @($defectiveReport.failedFindingGroups.PSObject.Properties)
+    Write-Output "Defective finding groups: $(ConvertTo-Json -InputObject $defectiveReport.failedFindingGroups -Compress)"
     $defectCount = ($defectGroups | Measure-Object -Property Value -Sum).Sum
     Assert-Equal $defectCount $expectations.defectiveTarget.findingRecords "Evidence-derived seeded defect count"
     foreach ($expectedFinding in $expectations.defectiveTarget.findingCodeCounts.PSObject.Properties) {
