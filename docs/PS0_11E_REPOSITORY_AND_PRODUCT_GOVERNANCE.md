@@ -2,11 +2,13 @@
 
 ## Status
 
-**In Progress; acceptance gates appear complete and are ready for formal
-review.** Implementation candidate `fc2411b2bd19e713af097e134388421db9d16fae`
-was merged to `main` as `97dee40ff0db732fc83e035e276c10a5747801f0`; both
-have tree `3d36bc4c054709bcfa4b996603cb4d43adeb1a60`. Do not self-accept or
-begin PS-0.11F.
+**Accepted (October 25, 2026).** Implementation candidate
+`fc2411b2bd19e713af097e134388421db9d16fae` was merged to `main` as
+`97dee40ff0db732fc83e035e276c10a5747801f0`; both have tree
+`3d36bc4c054709bcfa4b996603cb4d43adeb1a60`. Final governed-main commit
+`2d5744753309643d7451123d59bf44b338472d4b` passed all eleven required CI jobs
+in run `40244724080`. The [acceptance matrix](PS0_11E_ACCEPTANCE_MATRIX.md)
+records **37 PASS, 0 FAIL, 0 NOT YET** and the verified remote settings.
 
 PS-0.11D is closed as Accepted on October 25, 2026. Its candidate
 `6a23233670e5be04d22cdf7b6304fd8090ca493a`, tree
@@ -115,7 +117,8 @@ code.
 ## Acceptance
 
 Evidence is tracked in the [PS-0.11E acceptance matrix](PS0_11E_ACCEPTANCE_MATRIX.md).
-Formal acceptance requires exact candidate/tree lineage, remote settings
+Formal acceptance required exact candidate/tree lineage, remote settings
 readback, all required CI jobs, unchanged five-domain outcomes, reproducible
-packages, and runtime-only smoke. This implementation may report readiness
-only; it does not self-accept.
+packages, and runtime-only smoke. These gates were verified and PS-0.11E was
+formally accepted; no repository visibility change, publication, tag, or
+signing occurred.

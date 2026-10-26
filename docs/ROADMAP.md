@@ -268,7 +268,7 @@ Status: **Accepted (October 25, 2026).** Candidate `6a23233670e5be04d22cdf7b6304
 
 #### PS-0.11E Repository & Product Governance
 
-Status: **In Progress; acceptance gates appear complete and are ready for formal review.** Candidate `fc2411b2bd19e713af097e134388421db9d16fae` (tree `3d36bc4c054709bcfa4b996603cb4d43adeb1a60`) passed all 11 PR CI jobs in run `40188407180` and merged to `main` as `97dee40ff0db732fc83e035e276c10a5747801f0` with the same tree. Merged-main push CI `40225632710` also passed all 11 jobs. The configured GitHub ruleset, merge settings, and security feature state are verified in the [acceptance matrix](PS0_11E_ACCEPTANCE_MATRIX.md). Do not self-accept, publish/tag/sign, or begin PS-0.11F.
+Status: **Accepted (October 25, 2026).** Candidate `fc2411b2bd19e713af097e134388421db9d16fae` (tree `3d36bc4c054709bcfa4b996603cb4d43adeb1a60`) passed all 11 PR CI jobs in run `40188407180` and merged to `main` as `97dee40ff0db732fc83e035e276c10a5747801f0` with the same tree. Final governed-main commit `2d5744753309643d7451123d59bf44b338472d4b` (tree `d6c9e33ae8e2e4d48ebf0d278249f55ef76dce43`) passed all 11 required jobs in run `40244724080`; the test jobs reported 359 passed, 0 failed, 0 skipped. The configured GitHub ruleset, merge settings, and security feature state are verified in the [acceptance matrix](PS0_11E_ACCEPTANCE_MATRIX.md).
 
 Out of scope: public release/tag/package publication, signing, self-contained/AOT publishing, installers, new connectors/packs, FHIR Bulk, UI/API/auth, production migration/rollback, AI authoring, product-runtime changes, and unrelated refactoring.
 

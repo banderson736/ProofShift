@@ -2,8 +2,7 @@
 
 ## Status
 
-**In Progress; gates appear complete and are ready for formal review. Not
-self-accepted.** Candidate `fc2411b2bd19e713af097e134388421db9d16fae`,
+**Accepted (October 25, 2026).** Candidate `fc2411b2bd19e713af097e134388421db9d16fae`,
 tree `3d36bc4c054709bcfa4b996603cb4d43adeb1a60`, merged to `main` as
 `97dee40ff0db732fc83e035e276c10a5747801f0` with the same tree.
 
@@ -88,9 +87,11 @@ Statuses are evidence-driven: `PASS`, `FAIL`, or `NOT YET`.
 | Candidate SHA / tree | `fc2411b2bd19e713af097e134388421db9d16fae` / `3d36bc4c054709bcfa4b996603cb4d43adeb1a60` |
 | Candidate push CI / PR CI | `40188182133` (dependency graph disabled; initial run failed) / `40188407180` (all 11 jobs PASS) |
 | Main merge / tree / push CI | `97dee40ff0db732fc83e035e276c10a5747801f0` / `3d36bc4c054709bcfa4b996603cb4d43adeb1a60` / `40225632710` (all 11 jobs PASS) |
+| Final governed-main baseline / tree / CI | `2d5744753309643d7451123d59bf44b338472d4b` / `d6c9e33ae8e2e4d48ebf0d278249f55ef76dce43` / `40244724080` (all 11 required jobs PASS) |
+| Final governed-main test results | `build-and-test`: 301 passed; `remote-storage-integration`: 54 passed; Oracle: 2 passed; Db2: 2 passed; total 359 passed, 0 failed, 0 skipped |
 | GitHub remote readback | public; default `main`; active `main-protection` targeting `refs/heads/main`; PR required, 0 approvals, CODEOWNER review false; exact 11 checks required, strict=true; deletion and non-fast-forward blocked; no bypass actors |
 | Required check contexts | `build-and-test`, `remote-storage-integration`, `oracle-integration`, `db2-integration`, `dependency-review`, `windows-package-reproducibility-b`, `linux-package-reproducibility-b`, `windows-package-smoke`, `linux-package-demos`, `package-reproducibility`, `linux-runtime-only-smoke` |
 | Merge and security readback | merge commit=true; squash=false; rebase=false; delete branch on merge=true; private vulnerability reporting=true; secret scanning=enabled; push protection=enabled |
 | Read-only verifier | All 19 reported checks PASS against authenticated GitHub API readback |
 | Gates | **37 PASS, 0 FAIL, 0 NOT YET** |
-| Formal status | **In Progress; acceptance gates appear complete and are ready for formal review. Not self-accepted.** |
+| Formal status | **Accepted (October 25, 2026), based on the verified governed-main state and final CI run `40244724080`.** |
