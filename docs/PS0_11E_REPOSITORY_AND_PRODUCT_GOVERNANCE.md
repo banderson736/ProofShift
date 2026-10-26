@@ -112,7 +112,7 @@ code.
   work around a failing dependency-review or CI job.
 - If GitHub settings cannot be applied or read back, leave those gates NOT YET
   and report the exact permission/feature blocker.
-- Do not begin PS-0.11F.
+- PS-0.11F remained deferred until PS-0.11E was formally accepted.
 
 ## Acceptance
 

@@ -235,3 +235,15 @@ The shared disk-backed identity index has one connector-internal owner; CLI work
 Status: Accepted under PS-0.11E (October 25, 2026)
 
 Repository governance establishes PR-only `main`, strict required CI with current-base evidence, merge-commit lineage, least-privilege workflows pinned to verified immutable action commits, explicit dependency-lock review, synthetic-only repository data, and accurate proprietary-public-source wording. Repository visibility remains owner-controlled and was not changed by this milestone. PS-0.11E was accepted on final governed-main commit `2d5744753309643d7451123d59bf44b338472d4b` after all eleven required jobs passed in run `40244724080` and authenticated GitHub readback verified the remote settings. See [ADR-0034](adr/0034-repository-product-governance.md) and [PS-0.11E acceptance matrix](PS0_11E_ACCEPTANCE_MATRIX.md).
+
+### D-045 - Independent external Verification and Verification-only reporting
+Status: Proposed under PS-0.11F
+
+PS-0.11F proposes exposing the existing independent target-observation
+Verification service through a normal CLI command and separate persisted
+Verification-only report/compare models. The workflow binds a complete source
+checkpoint and graph to read-only observation of target-role nodes; it does
+not require Projection, assess Recovery, qualify a dry run, or claim observed
+vendor execution lineage. Existing dry-run selectors and semantics remain
+unchanged. See [ADR-0035](adr/0035-external-target-cli-and-verification-only-reporting.md)
+and the [PS-0.11F acceptance matrix](PS0_11F_ACCEPTANCE_MATRIX.md).
