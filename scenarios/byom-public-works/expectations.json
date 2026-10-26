@@ -12,9 +12,10 @@
     "history": 59,
     "total": 100,
     "verificationFailedRules": 3,
-    "findingRecords": 4,
+    "findingRecords": 6,
     "findingCodeCounts": {
       "MissingTarget": 2,
+      "UnaccountedSource": 2,
       "AttributeMismatch": 2
     }
   },

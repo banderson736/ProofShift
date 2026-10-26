@@ -18,9 +18,9 @@ independently reviewable defects:
 
 The exact artifact counts and expected generic finding-code totals are frozen
 in [expectations.json](expectations.json). The generic Verification baseline
-should report two missing targets and two attribute mismatches. The corrected
-target contains 102 artifacts, has no accounting or lineage gaps, and should
-pass with zero Verification failures.
+should report two missing targets, two unaccounted source artifacts, and two
+attribute mismatches. The corrected target contains 102 artifacts, has no
+accounting or lineage gaps, and should pass with zero Verification failures.
 Loading the corrected fixture again should preserve target and Evidence
 fingerprints while creating new run identifiers.
 
