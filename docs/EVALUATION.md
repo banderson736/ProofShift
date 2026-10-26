@@ -11,6 +11,14 @@ The acceptance workflow uses fresh independent standard GitHub-hosted jobs again
 
 The Windows result proves the Windows package path only; it does not prove that the Docker-backed demo stack runs on Windows. The Ubuntu result proves the packaged Docker-backed evaluation workflow on Ubuntu; it is not a general-purpose Linux product-support claim. Both campaign jobs are pending until the split workflow passes on one exact candidate commit.
 
+The Linux package smoke also evaluates the synthetic SQL Server-to-PostgreSQL
+public-works BYOM fixture from the extracted package. Its workflow and claim
+limits are documented in [BYOM_EVALUATION.md](./BYOM_EVALUATION.md). This
+evaluation verifies source-offline checkpoint replay, a SELECT-only target
+account, persisted Verification-only reports, exact seeded findings, and
+corrected repeat fingerprint stability. It does not execute the migration or
+make a Recovery qualification claim.
+
 ## Requirements
 
 - Operators need the compatible **.NET 10 runtime**, not the SDK, to run the framework-dependent package. Basic CLI operations are proven in an isolated runtime-only environment. Package build and development use the exact .NET SDK pinned in repository `global.json` (`10.0.402`).

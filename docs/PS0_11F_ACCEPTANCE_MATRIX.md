@@ -2,32 +2,34 @@
 
 ## Status
 
-**In Progress. Not self-accepted.** All PS-0.11F implementation and
-distribution gates begin `NOT YET`. Evidence must identify exact candidate,
-tree, workflow run, and package identity where applicable.
+**In Progress. Not self-accepted.** Local working-tree gates are marked `PASS`
+only where focused evidence supports them. Exact-candidate, physical database,
+package, and CI gates remain `NOT YET` until their required evidence is
+available. Final acceptance evidence must identify the exact candidate, tree,
+workflow run, and package identity where applicable.
 
 | Gate | Required evidence | Status |
 |---|---|---|
 | E1 | PS-0.11E acceptance matrix records formal acceptance. | PASS |
 | E2 | ADR-0034 is accepted with final governed-main evidence. | PASS |
 | E3 | Governed-main SHA/tree and CI run `40244724080` are recorded. | PASS |
-| CLI1 | `verify-external` accepts the required config, checkpoint, observation label, and JSON options. | NOT YET |
-| CLI2 | Command reuses `VerifyExternalTargetAsync` and normal config/graph/rule/checkpoint binding. | NOT YET |
+| CLI1 | `verify-external` accepts the required config, checkpoint, observation label, and JSON options. | PASS |
+| CLI2 | Command reuses `VerifyExternalTargetAsync` and normal config/graph/rule/checkpoint binding. | PASS |
 | CLI3 | Target observers resolve through generic `ConnectorCatalog.Observer`; unsupported capability fails closed. | NOT YET |
-| CLI4 | External Verification requires role `target` and never invokes a shadow writer or target mutation. | NOT YET |
-| CLI5 | Observation ID is validated, persisted, and distinct from generated observation-run and Verification-run IDs. | NOT YET |
-| CLI6 | Passed/failed outcomes, exit codes, safe error paths, human boundary, and required JSON fields are verified. | NOT YET |
-| CLI7 | Failed completed Verification persists Evidence and the finalized ledger. | NOT YET |
-| CLI8 | No Projection manifest, journal, or shadow Projection run is created. | NOT YET |
-| CLI9 | No Recovery assessment/rehearsal/Evidence or qualification is created or claimed. | NOT YET |
-| AUTH1 | Scaffold/import accept bounded target-role options; default remains `shadow-target`. | NOT YET |
-| AUTH2 | Generic baseline is opt-in and deterministically generates only rules supported by reviewed mappings. | NOT YET |
-| AUTH3 | Suggestions remain unapproved and strict validation rejects unresolved required mappings. | NOT YET |
-| AUTH4 | Existing authoring output remains compatible when new options are omitted. | NOT YET |
-| REP1 | Explicit `report --verification-run` reads persisted data and never reruns Verification. | NOT YET |
+| CLI4 | External Verification requires role `target` and never invokes a shadow writer or target mutation. | PASS |
+| CLI5 | Observation ID is validated, persisted, and distinct from generated observation-run and Verification-run IDs. | PASS |
+| CLI6 | Passed/failed outcomes, exit codes, safe error paths, human boundary, and required JSON fields are verified. | PASS |
+| CLI7 | Failed completed Verification persists Evidence and the finalized ledger. | PASS |
+| CLI8 | No Projection manifest, journal, or shadow Projection run is created. | PASS |
+| CLI9 | No Recovery assessment/rehearsal/Evidence or qualification is created or claimed. | PASS |
+| AUTH1 | Scaffold/import accept bounded target-role options; default remains `shadow-target`. | PASS |
+| AUTH2 | Generic baseline is opt-in and deterministically generates only rules supported by reviewed mappings. | PASS |
+| AUTH3 | Suggestions remain unapproved and strict validation rejects unresolved required mappings. | PASS |
+| AUTH4 | Existing authoring output remains compatible when new options are omitted. | PASS |
+| REP1 | Explicit `report --verification-run` reads persisted data and never reruns Verification. | PASS |
 | REP2 | Verification-only report verifies Evidence, ledger, checkpoint, and project/config context integrity. | NOT YET |
-| REP3 | Generic no-pack project works; report contains required fields and no sensitive expected/actual values. | NOT YET |
-| REP4 | Report explicitly excludes Recovery assessment and qualification. | NOT YET |
+| REP3 | Generic no-pack project works; report contains required fields and no sensitive expected/actual values. | PASS |
+| REP4 | Report explicitly excludes Recovery assessment and qualification. | PASS |
 | REP5 | Explicit verification-run comparison uses persisted state, rejects cross-project runs, and reports findings/fingerprint deltas. | NOT YET |
 | REP6 | Existing dry-run `--run`, `--before`, and `--after` meanings are unchanged. | NOT YET |
 | BYOM1 | Public-works work-order fixture is synthetic, deterministic, generic, and not a built-in demo or domain pack. | NOT YET |
@@ -64,5 +66,11 @@ tree, workflow run, and package identity where applicable.
 | PS-0.11F starting branch | `ps-0.11f-bring-your-own-migration-evaluation` |
 | PS-0.11F starting main | `2d5744753309643d7451123d59bf44b338472d4b` |
 | PS-0.11F candidate / tree / push CI / PR CI | NOT YET |
-| Acceptance totals | **3 PASS, 0 FAIL, 42 NOT YET** |
+| Local focused CLI tests | `dotnet test --project tests\ProofShift.EndToEnd.Tests\ProofShift.EndToEnd.Tests.csproj --filter-class ProofShift.EndToEnd.Tests.ExternalVerificationCliTests` — 1 passed, 0 failed, 0 skipped; file target remained unchanged, source was unavailable after checkpoint, transient scratch was removable, and persisted Evidence/report remained readable. |
+| Local focused authoring tests | `dotnet test --project tests\ProofShift.EndToEnd.Tests\ProofShift.EndToEnd.Tests.csproj --filter-class ProofShift.EndToEnd.Tests.AuthoringCliTests` — 22 passed, 0 failed, 0 skipped. |
+| Local BYOM fixture contract test | `dotnet test --project tests\ProofShift.EndToEnd.Tests\ProofShift.EndToEnd.Tests.csproj --filter-class ProofShift.EndToEnd.Tests.ByomFixtureContractTests` — 1 passed, 0 failed, 0 skipped. |
+| Local solution build | `dotnet build ProofShift.sln --no-restore` — succeeded, 0 warnings, 0 errors. |
+| BYOM PowerShell syntax / whitespace | Parser checks for `scripts\run-byom-evaluation.ps1` and `scripts\smoke-evaluation-package.ps1`, plus `git diff --check` — passed. |
+| PS-0.11F candidate / tree / push CI / PR CI | NOT YET |
+| Acceptance totals | **18 PASS, 0 FAIL, 27 NOT YET** |
 | Formal status | **In Progress; not self-accepted.** |

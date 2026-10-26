@@ -65,8 +65,12 @@ internal static class Program
         string? checkpoint = null;
         string? projection = null;
         string? verificationRun = null;
+        string? verificationReportRun = null;
+        string? observation = null;
         string? beforeDryRun = null;
         string? afterDryRun = null;
+        string? beforeVerification = null;
+        string? afterVerification = null;
         for (var index = 2; index < args.Length; index++)
         {
             if (string.Equals(args[index], "--json", StringComparison.OrdinalIgnoreCase))
@@ -92,6 +96,16 @@ internal static class Program
             {
                 verificationRun = args[++index];
             }
+            else if (string.Equals(args[index], "--verification-run", StringComparison.OrdinalIgnoreCase) &&
+                index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                verificationReportRun = args[++index];
+            }
+            else if (string.Equals(args[index], "--observation", StringComparison.OrdinalIgnoreCase) &&
+                index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                observation = args[++index];
+            }
             else if (string.Equals(args[index], "--before", StringComparison.OrdinalIgnoreCase) &&
                 index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
             {
@@ -101,6 +115,16 @@ internal static class Program
                 index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
             {
                 afterDryRun = args[++index];
+            }
+            else if (string.Equals(args[index], "--before-verification", StringComparison.OrdinalIgnoreCase) &&
+                index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                beforeVerification = args[++index];
+            }
+            else if (string.Equals(args[index], "--after-verification", StringComparison.OrdinalIgnoreCase) &&
+                index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                afterVerification = args[++index];
             }
             else
             {
@@ -145,6 +169,12 @@ internal static class Program
             return await AssuranceCommands.VerifyAsync(args[1], checkpoint, projection, jsonOutput).ConfigureAwait(false);
         }
 
+        if (string.Equals(args[0], "verify-external", StringComparison.OrdinalIgnoreCase) &&
+            checkpoint is not null && observation is not null && projection is null && verificationRun is null)
+        {
+            return await ExternalVerificationCommands.VerifyAsync(args[1], checkpoint, observation, jsonOutput).ConfigureAwait(false);
+        }
+
         if (string.Equals(args[0], "evidence", StringComparison.OrdinalIgnoreCase) && verificationRun is not null)
         {
             return await AssuranceCommands.ReadEvidenceAsync(args[1], verificationRun, jsonOutput).ConfigureAwait(false);
@@ -155,13 +185,28 @@ internal static class Program
             return await AssuranceCommands.ReadRecoveryAsync(args[1], verificationRun, jsonOutput).ConfigureAwait(false);
         }
 
-        if (string.Equals(args[0], "report", StringComparison.OrdinalIgnoreCase) && verificationRun is not null)
+        if (string.Equals(args[0], "report", StringComparison.OrdinalIgnoreCase) &&
+            verificationReportRun is not null && verificationRun is null)
+        {
+            return await ExternalVerificationCommands.ReadReportAsync(args[1], verificationReportRun, jsonOutput).ConfigureAwait(false);
+        }
+
+        if (string.Equals(args[0], "report", StringComparison.OrdinalIgnoreCase) && verificationRun is not null &&
+            verificationReportRun is null)
         {
             return await AssuranceCommands.ReadAssuranceReportAsync(args[1], verificationRun, jsonOutput).ConfigureAwait(false);
         }
 
         if (string.Equals(args[0], "compare", StringComparison.OrdinalIgnoreCase) &&
-            beforeDryRun is not null && afterDryRun is not null)
+            beforeVerification is not null && afterVerification is not null &&
+            beforeDryRun is null && afterDryRun is null)
+        {
+            return await ExternalVerificationCommands.CompareAsync(args[1], beforeVerification, afterVerification, jsonOutput).ConfigureAwait(false);
+        }
+
+        if (string.Equals(args[0], "compare", StringComparison.OrdinalIgnoreCase) &&
+            beforeDryRun is not null && afterDryRun is not null &&
+            beforeVerification is null && afterVerification is null)
         {
             return await AssuranceCommands.CompareAssuranceRunsAsync(args[1], beforeDryRun, afterDryRun, jsonOutput).ConfigureAwait(false);
         }
@@ -171,6 +216,6 @@ internal static class Program
     }
 
     private static void WriteUsage() =>
-        Console.Error.WriteLine("Usage: proofshift validate <config> [--json] | proofshift plan <config> [--json] | proofshift inspect <config> [--json] | proofshift snapshot <config> [--json] | proofshift project <config> [--checkpoint <id-or-path>] [--json] | proofshift verify <config> --checkpoint <id> --projection <run-id> [--json] | proofshift evidence <config> --run <verification-run-id> [--json] | proofshift recovery <config> --run <dry-run-id> [--json] | proofshift report <config> --run <dry-run-id> [--json] | proofshift report <dry-run-id> [--json, reads current-directory stores] | proofshift compare <config> --before <dry-run-id> --after <dry-run-id> [--json] | proofshift compare <before-dry-run-id> <after-dry-run-id> [--json, reads current-directory stores] | proofshift demo list | describe <id> | preflight <id> | run <id> | reset <id> | demo generate <output-directory> [--scale fast|large] [--seed <integer>] | demo benchmark [--scale fast|large] [--seed <integer>] | proofshift dry-run <config> [--json]");
+        Console.Error.WriteLine("Usage: proofshift validate <config> [--json] | proofshift plan <config> [--json] | proofshift inspect <config> [--json] | proofshift snapshot <config> [--json] | proofshift project <config> [--checkpoint <id-or-path>] [--json] | proofshift verify <config> --checkpoint <id> --projection <run-id> [--json] | proofshift verify-external <config> --checkpoint <id-or-path> --observation <label> [--json] | proofshift evidence <config> --run <verification-run-id> [--json] | proofshift recovery <config> --run <dry-run-id> [--json] | proofshift report <config> --run <dry-run-id> [--json] | proofshift report <config> --verification-run <verification-run-id> [--json] | proofshift report <dry-run-id> [--json, reads current-directory stores] | proofshift compare <config> --before <dry-run-id> --after <dry-run-id> [--json] | proofshift compare <config> --before-verification <verification-run-id> --after-verification <verification-run-id> [--json] | proofshift compare <before-dry-run-id> <after-dry-run-id> [--json, reads current-directory stores] | proofshift demo list | describe <id> | preflight <id> | run <id> | reset <id> | demo generate <output-directory> [--scale fast|large] [--seed <integer>] | demo benchmark [--scale fast|large] [--seed <integer>] | proofshift dry-run <config> [--json]");
 
 }

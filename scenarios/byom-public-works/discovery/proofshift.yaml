@@ -1,0 +1,16 @@
+proofshift: 1
+project:
+  id: public-works-byom-discovery
+  name: Synthetic Public-Works Work Orders
+packs: []
+systems:
+  source:
+    file: systems/source.yaml
+  target:
+    file: systems/target.yaml
+migration:
+  graph: migration/graph.yaml
+verification:
+  rules: rules/rules.yaml
+recovery:
+  policy: recovery/policy.yaml

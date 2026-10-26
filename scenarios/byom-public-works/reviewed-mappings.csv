@@ -1,0 +1,15 @@
+Source Entity,Source Field,Target Entity,Target Field,Transformation,Required,Notes,Review Status
+dbo.assets,asset_id,public.assets,asset_id,copy,true,Reviewed synthetic asset identity,confirmed
+dbo.assets,asset_name,public.assets,asset_name,copy,true,Reviewed synthetic asset name,confirmed
+dbo.assets,asset_type,public.assets,asset_type,copy,true,Reviewed synthetic asset category,confirmed
+dbo.assets,active,public.assets,active,copy,true,Reviewed synthetic active state,confirmed
+dbo.work_orders,work_order_id,public.work_orders,work_order_id,copy,true,Reviewed synthetic work-order identity,confirmed
+dbo.work_orders,asset_id,public.work_orders,asset_id,copy,true,Reviewed asset relationship,confirmed
+dbo.work_orders,status,public.work_orders,status,copy,true,Reviewed work-order status,confirmed
+dbo.work_orders,created_at,public.work_orders,created_at,copy,true,Reviewed work-order creation date,confirmed
+dbo.work_orders,description,public.work_orders,description,copy,true,Reviewed synthetic description,confirmed
+dbo.work_order_history,history_id,public.work_order_history,history_id,copy,true,Reviewed history identity,confirmed
+dbo.work_order_history,work_order_id,public.work_order_history,work_order_id,copy,true,Reviewed history relationship,confirmed
+dbo.work_order_history,status,public.work_order_history,status,copy,true,Reviewed history status,confirmed
+dbo.work_order_history,changed_at,public.work_order_history,changed_at,copy,true,Reviewed history timestamp,confirmed
+dbo.work_order_history,note,public.work_order_history,note,copy,true,Reviewed synthetic history note,confirmed

@@ -115,6 +115,31 @@ internal sealed record VerificationOutput(
     int WarningRules,
     string EvidencePath);
 
+internal sealed record ExternalVerificationOutput(
+    string AssuranceScope,
+    string VerificationRunId,
+    string ObservationId,
+    string ObservationRunId,
+    string CheckpointId,
+    string ConfigurationHash,
+    string GraphHash,
+    string SourceFingerprint,
+    string TargetFingerprint,
+    string RuleSetFingerprint,
+    string VerificationOutcome,
+    int VerificationFailureCount,
+    long SourceArtifactCount,
+    long TargetArtifactCount,
+    long AccountedSourceCount,
+    long UnaccountedSourceCount,
+    long LineagedTargetCount,
+    long UnexplainedTargetCount,
+    string EvidenceFingerprint,
+    string LineageBasis,
+    bool RecoveryAssessed,
+    bool QualificationAvailable,
+    string EvidencePath);
+
 internal sealed record DryRunOutput(
     string? Project,
     string Outcome,

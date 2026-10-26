@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Npgsql;
 using ProofShift.Connectors.SqlServer;
@@ -11,6 +12,7 @@ using ProofShift.Engine;
 using ProofShift.Evidence;
 using ProofShift.Graph;
 using ProofShift.Packs.Pension;
+using ProofShift.Reporting;
 using ProofShift.Snapshots;
 using ProofShift.Verification;
 using Xunit;
@@ -237,6 +239,8 @@ public sealed class ExternalTargetVerificationTests
             var evidenceStore = new FileSystemEvidenceStore(Path.Combine(directory, "evidence"));
             await evidenceStore.SaveAsync(result.EvidenceGraph, TestContext.Current.CancellationToken);
             Assert.True(await evidenceStore.VerifyIntegrityAsync(result.Run.Id, TestContext.Current.CancellationToken));
+            var runStore = new FileSystemExternalVerificationRunStore(directory);
+            await runStore.SaveAsync(configuration.Root.Project!.Id!, result, TestContext.Current.CancellationToken);
 
             var repeatedExternalRunId = new RunId(Guid.NewGuid());
             var repeatedSchema = $"proofshift_shadow_{repeatedExternalRunId.Value:N}";
@@ -281,6 +285,37 @@ public sealed class ExternalTargetVerificationTests
             Assert.NotEqual(result.Run.EvidenceFingerprint, defectiveResult.Run.EvidenceFingerprint);
             await evidenceStore.SaveAsync(defectiveResult.EvidenceGraph, TestContext.Current.CancellationToken);
             Assert.True(await evidenceStore.VerifyIntegrityAsync(defectiveResult.Run.Id, TestContext.Current.CancellationToken));
+            await runStore.SaveAsync(configuration.Root.Project!.Id!, defectiveResult, TestContext.Current.CancellationToken);
+
+            async Task<PersistedVerificationReport> LoadPersistedReportAsync(
+                ExternalVerificationResult verificationResult, string ledgerDirectory)
+            {
+                var persistedRun = await runStore.ReadAsync(verificationResult.Run.Id, TestContext.Current.CancellationToken);
+                var evidenceManifest = await evidenceStore.ReadManifestAsync(verificationResult.Run.Id, TestContext.Current.CancellationToken);
+                await using var persistedCheckpoint = await checkpointStore.OpenCompleteAsync(
+                    checkpoint.Id.Value.ToString("N"), TestContext.Current.CancellationToken);
+                await using var persistedLedger = await SqliteVerificationLedgerStore.OpenAsync(
+                    ledgerDirectory, persistedRun.Ledger, TestContext.Current.CancellationToken);
+                return await PersistedVerificationReportBuilder.BuildAsync(configuration.Root.Project!.Id!,
+                    configuration.Root.Project!.Name!, persistedRun, evidenceManifest,
+                    evidenceStore.ReadRecordsAsync(verificationResult.Run.Id, TestContext.Current.CancellationToken),
+                    persistedCheckpoint.Manifest,
+                    await persistedLedger.ReadSummaryAsync(TestContext.Current.CancellationToken),
+                    TestContext.Current.CancellationToken);
+            }
+
+            var correctedReport = await LoadPersistedReportAsync(result, Path.Combine(directory, "working"));
+            var defectiveReport = await LoadPersistedReportAsync(defectiveResult, Path.Combine(directory, "working-defective"));
+            Assert.Equal(1, correctedReport.AccountedSourceCount);
+            Assert.Equal(1, correctedReport.LineagedTargetCount);
+            Assert.False(correctedReport.RecoveryAssessed);
+            Assert.False(correctedReport.QualificationAvailable);
+            Assert.DoesNotContain("M00000001", JsonSerializer.Serialize(defectiveReport), StringComparison.Ordinal);
+            var comparison = PersistedVerificationRunComparison.Create(defectiveReport, correctedReport);
+            Assert.Contains(comparison.FindingsResolved,
+                difference => difference.Finding.Contains("WrongMemberStatus", StringComparison.Ordinal));
+            Assert.Empty(comparison.FindingsIntroduced);
+            Assert.Equal("not applicable to verification-only comparison", comparison.RecoveryComparison);
         }
         finally
         {

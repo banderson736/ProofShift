@@ -14,6 +14,8 @@ internal static class MappingAuthoringCommands
         {
             var import = args.Length >= 2 && args[0] == "mapping" && args[1] == "import";
             string? sourcePath = null, targetPath = null, output = null, csvPath = null;
+            var targetRole = "shadow-target";
+            var genericBaseline = false;
             for (var index = import ? 2 : 1; index < args.Length; index++)
             {
                 if (index + 1 >= args.Length) return Usage();
@@ -23,6 +25,14 @@ internal static class MappingAuthoringCommands
                     case "--target-discovery": targetPath = args[++index]; break;
                     case "--output": output = args[++index]; break;
                     case "--csv": csvPath = args[++index]; break;
+                    case "--target-role":
+                        targetRole = args[++index];
+                        if (targetRole is not ("target" or "shadow-target")) return Usage();
+                        break;
+                    case "--verification-baseline":
+                        genericBaseline = args[++index] == "generic";
+                        if (!genericBaseline) return Usage();
+                        break;
                     default: return Usage();
                 }
             }
@@ -44,7 +54,8 @@ internal static class MappingAuthoringCommands
                     .Where(mapping => !importedFields.Contains((mapping.SourceEntity, mapping.SourceField)))
                     .Select(mapping => mapping with { ReviewStatus = "unmapped", TargetEntity = null, TargetField = null, Reasons = [] })).ToArray() };
             }
-            await WriteProjectAsync(Path.GetFullPath(output), source, target, review, import).ConfigureAwait(false);
+            await WriteProjectAsync(Path.GetFullPath(output), source, target, review, import, targetRole,
+                genericBaseline).ConfigureAwait(false);
             var unresolved = review.Mappings.Count(mapping => mapping.Required && mapping.ReviewStatus != "confirmed");
             Console.WriteLine($"{MappingScaffold.Format}: {review.Mappings.Count} mappings; {unresolved} required mappings await review. Output: {Path.GetFullPath(output)}");
             return 0;
@@ -58,7 +69,8 @@ internal static class MappingAuthoringCommands
     }
 
     private static async Task WriteProjectAsync(string directory, PhysicalDiscoveryArtifact source,
-        PhysicalDiscoveryArtifact target, MappingReview review, bool requireCompiled)
+        PhysicalDiscoveryArtifact target, MappingReview review, bool requireCompiled, string targetRole,
+        bool genericBaseline)
     {
         if (File.Exists(directory) || Directory.Exists(directory) && Directory.EnumerateFileSystemEntries(directory).Any())
             throw new IOException("Mapping authoring requires a new or empty output directory.");
@@ -100,7 +112,7 @@ internal static class MappingAuthoringCommands
         };
         await ProjectInitCommand.WriteAsync(directory, "proofshift.yaml", root);
         await ProjectInitCommand.WriteAsync(directory, "systems/source.yaml", SystemView(source.ConnectorId, "source", "source"));
-        await ProjectInitCommand.WriteAsync(directory, "systems/target.yaml", SystemView(target.ConnectorId, "target", "shadow-target"));
+        await ProjectInitCommand.WriteAsync(directory, "systems/target.yaml", SystemView(target.ConnectorId, "target", targetRole));
         await ProjectInitCommand.WriteAsync(directory, "migration/graph.yaml", new
         {
             version = 1, nodes, edges,
@@ -109,14 +121,18 @@ internal static class MappingAuthoringCommands
                     target = mapping.TargetEntity is null ? null : mapping.TargetEntity + "." + mapping.TargetField,
                     approval = mapping.ReviewStatus, mapping.Required, mapping.Reasons }) }
         });
-        await ProjectInitCommand.WriteAsync(directory, "rules/rules.yaml", new
+        var rules = new Dictionary<string, object>
         {
-            version = 2, rules = new Dictionary<string, object>
-            {
-                ["accounting"] = new { type = "source-artifact-accounting", version = "1", severity = "critical" },
-                ["lineage"] = new { type = "target-lineage", version = "1", severity = "critical" }
-            }
-        });
+            ["accounting"] = new { type = "source-artifact-accounting", version = "1", severity = "critical" },
+            ["lineage"] = new { type = "target-lineage", version = "1", severity = "critical" }
+        };
+        if (genericBaseline && review.Mappings.Any(mapping =>
+                mapping.ReviewStatus == "confirmed" && mapping.TargetEntity is not null && mapping.TargetField is not null))
+        {
+            rules["presence"] = new { type = "target-presence", version = "1", severity = "error" };
+            rules["attributes"] = new { type = "attribute-comparison", version = "1", severity = "error" };
+        }
+        await ProjectInitCommand.WriteAsync(directory, "rules/rules.yaml", new { version = 2, rules });
         await ProjectInitCommand.WriteAsync(directory, "recovery/policy.yaml", new
         {
             requireRecoveryForDestructiveOperations = true, allowIrreversible = new { @default = false },
@@ -193,7 +209,7 @@ internal static class MappingAuthoringCommands
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Usage: proofshift scaffold --source-discovery <dir> --target-discovery <dir> --output <new-dir>; proofshift mapping import --csv <file> --source-discovery <dir> --target-discovery <dir> --output <new-dir>");
+        Console.Error.WriteLine("Usage: proofshift scaffold --source-discovery <dir> --target-discovery <dir> --output <new-dir> [--target-role target|shadow-target] [--verification-baseline generic]; proofshift mapping import --csv <file> --source-discovery <dir> --target-discovery <dir> --output <new-dir> [--target-role target|shadow-target] [--verification-baseline generic]");
         return 2;
     }
 }

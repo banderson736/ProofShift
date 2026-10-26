@@ -576,11 +576,38 @@ public sealed class VerificationService
         VerifyExternalTargetAsync(configuration, graph, observation, ruleSet, temporaryDirectory,
             proofShiftVersion, targets, performanceRecorder: null, cancellationToken);
 
+    public Task<ExternalVerificationResult> VerifyExternalTargetAsync(
+        LoadedProjectConfiguration configuration,
+        MigrationGraph graph,
+        ExternalMigrationObservation observation,
+        VerificationRuleSet ruleSet,
+        string projectDirectory,
+        string temporaryDirectory,
+        string proofShiftVersion,
+        IEnumerable<VerificationTargetRuntime> targets,
+        CancellationToken cancellationToken) =>
+        VerifyExternalTargetAsync(configuration, graph, observation, ruleSet, projectDirectory,
+            temporaryDirectory, proofShiftVersion, targets, performanceRecorder: null, cancellationToken);
+
+    public Task<ExternalVerificationResult> VerifyExternalTargetAsync(
+        LoadedProjectConfiguration configuration,
+        MigrationGraph graph,
+        ExternalMigrationObservation observation,
+        VerificationRuleSet ruleSet,
+        string temporaryDirectory,
+        string proofShiftVersion,
+        IEnumerable<VerificationTargetRuntime> targets,
+        PerformanceRecorder? performanceRecorder,
+        CancellationToken cancellationToken) =>
+        VerifyExternalTargetAsync(configuration, graph, observation, ruleSet, temporaryDirectory,
+            temporaryDirectory, proofShiftVersion, targets, performanceRecorder, cancellationToken);
+
     public async Task<ExternalVerificationResult> VerifyExternalTargetAsync(
         LoadedProjectConfiguration configuration,
         MigrationGraph graph,
         ExternalMigrationObservation observation,
         VerificationRuleSet ruleSet,
+        string projectDirectory,
         string temporaryDirectory,
         string proofShiftVersion,
         IEnumerable<VerificationTargetRuntime> targets,
@@ -591,6 +618,8 @@ public sealed class VerificationService
         ArgumentNullException.ThrowIfNull(graph);
         ArgumentNullException.ThrowIfNull(observation);
         ArgumentNullException.ThrowIfNull(ruleSet);
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(temporaryDirectory);
         ArgumentNullException.ThrowIfNull(targets);
         using var externalVerificationStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification,
             "external target verification");
@@ -605,7 +634,7 @@ public sealed class VerificationService
         ValidateExternalCheckpoint(checkpoint.Manifest, configuration, graph, observation);
 
         var runId = new RunId(Guid.NewGuid());
-        await using var ledgerStore = await SqliteVerificationLedgerStore.CreateAsync(temporaryDirectory,
+        await using var ledgerStore = await SqliteVerificationLedgerStore.CreateAsync(projectDirectory,
             runId, cancellationToken, performanceRecorder).ConfigureAwait(false);
         foreach (var node in graph.Nodes.OrderBy(node => node.Name, StringComparer.Ordinal))
             await ledgerStore.RegisterGraphNodeAsync(node.Name, node.Id, cancellationToken).ConfigureAwait(false);
