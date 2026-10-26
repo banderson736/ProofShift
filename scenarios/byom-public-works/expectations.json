@@ -11,7 +11,7 @@
     "workOrders": 30,
     "history": 59,
     "total": 100,
-    "verificationFailedRules": 2,
+    "verificationFailedRules": 3,
     "findingRecords": 4,
     "findingCodeCounts": {
       "MissingTarget": 2,

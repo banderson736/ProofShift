@@ -34,7 +34,7 @@ public sealed class ByomFixtureContractTests
         Assert.Equal(102, corrected.GetProperty("total").GetInt32());
         Assert.Equal(2, defective.GetProperty("findingCodeCounts").GetProperty("MissingTarget").GetInt32());
         Assert.Equal(2, defective.GetProperty("findingCodeCounts").GetProperty("AttributeMismatch").GetInt32());
-        Assert.Equal(2, defective.GetProperty("verificationFailedRules").GetInt32());
+        Assert.Equal(3, defective.GetProperty("verificationFailedRules").GetInt32());
         Assert.Equal(4, defective.GetProperty("findingRecords").GetInt32());
         Assert.Equal(0, corrected.GetProperty("verificationFailedRules").GetInt32());
         Assert.False(corrected.GetProperty("recoveryAssessed").GetBoolean());
