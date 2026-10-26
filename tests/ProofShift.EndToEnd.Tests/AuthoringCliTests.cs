@@ -10,6 +10,22 @@ namespace ProofShift.EndToEnd.Tests;
 
 public sealed class AuthoringCliTests
 {
+    [Fact]
+    public async Task ExternalVerificationRequiresCheckpointAndObservationSelectors()
+    {
+        var missingCheckpoint = await RunAsync("verify-external", "missing.yaml", "--observation", "trial-001");
+        Assert.Equal(2, missingCheckpoint.ExitCode);
+        Assert.Contains("verify-external", missingCheckpoint.Error, StringComparison.Ordinal);
+
+        var missingObservation = await RunAsync("verify-external", "missing.yaml", "--checkpoint", "checkpoint-id");
+        Assert.Equal(2, missingObservation.ExitCode);
+        Assert.Contains("--observation", missingObservation.Error, StringComparison.Ordinal);
+
+        var invalidRun = await RunAsync("report", "missing.yaml", "--verification-run", "not-a-guid");
+        Assert.Equal(2, invalidRun.ExitCode);
+        Assert.Contains("GUID", invalidRun.Error, StringComparison.Ordinal);
+    }
+
     private static readonly string[] ExpectedPackIds =
         ["proofshift.fhir", "proofshift.hcm", "proofshift.justice", "proofshift.pension", "proofshift.utility"];
 
@@ -373,14 +389,23 @@ public sealed class AuthoringCliTests
             var generated = Path.Combine(root, "suggested");
             var scaffold = await RunAsync("scaffold", "--source-discovery", sourcePath, "--target-discovery", targetPath, "--output", generated);
             Assert.True(scaffold.ExitCode == 0, scaffold.Error);
+            var defaultTargetSystem = await File.ReadAllTextAsync(Path.Combine(generated, "systems", "target.yaml"), TestContext.Current.CancellationToken);
+            Assert.Contains("\"role\": \"shadow-target\"", defaultTargetSystem, StringComparison.Ordinal);
             var strict = await RunAsync("validate", Path.Combine(generated, "proofshift.yaml"), "--strict", "--json");
             Assert.Equal(1, strict.ExitCode);
             Assert.Contains("PSAUTHOR001", strict.Output, StringComparison.Ordinal);
             var csv = Path.Combine(root, "reviewed.csv");
             await File.WriteAllTextAsync(csv, "Source Entity,Source Field,Target Entity,Target Field,Transformation,Required,Notes,Review Status\npublic.records,id,public.records,id,copy,true,Reviewed,confirmed\n", TestContext.Current.CancellationToken);
             var reviewed = Path.Combine(root, "confirmed");
-            var import = await RunAsync("mapping", "import", "--csv", csv, "--source-discovery", sourcePath, "--target-discovery", targetPath, "--output", reviewed);
+            var import = await RunAsync("mapping", "import", "--csv", csv, "--source-discovery", sourcePath,
+                "--target-discovery", targetPath, "--output", reviewed, "--target-role", "target",
+                "--verification-baseline", "generic");
             Assert.True(import.ExitCode == 0, import.Error);
+            var targetSystem = await File.ReadAllTextAsync(Path.Combine(reviewed, "systems", "target.yaml"), TestContext.Current.CancellationToken);
+            Assert.Contains("\"role\": \"target\"", targetSystem, StringComparison.Ordinal);
+            var rules = await File.ReadAllTextAsync(Path.Combine(reviewed, "rules", "rules.yaml"), TestContext.Current.CancellationToken);
+            Assert.Contains("attribute-comparison", rules, StringComparison.Ordinal);
+            Assert.Contains("target-presence", rules, StringComparison.Ordinal);
             var valid = await RunAsync("validate", Path.Combine(reviewed, "proofshift.yaml"), "--strict", "--json");
             Assert.True(valid.ExitCode == 0, valid.Output + valid.Error);
             Assert.Contains("\"valid\": true", valid.Output, StringComparison.Ordinal);

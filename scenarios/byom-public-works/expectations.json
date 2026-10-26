@@ -1,0 +1,33 @@
+{
+  "format": "proofshift-byom-expectations-v1",
+  "source": {
+    "assets": 12,
+    "workOrders": 30,
+    "history": 60,
+    "total": 102
+  },
+  "defectiveTarget": {
+    "assets": 11,
+    "workOrders": 30,
+    "history": 59,
+    "total": 100,
+    "verificationFailedRules": 3,
+    "findingRecords": 6,
+    "findingCodeCounts": {
+      "MissingTarget": 2,
+      "UnaccountedArtifact": 2,
+      "AttributeMismatch": 2
+    }
+  },
+  "correctedTarget": {
+    "assets": 12,
+    "workOrders": 30,
+    "history": 60,
+    "total": 102,
+    "verificationFailedRules": 0,
+    "unaccountedSources": 0,
+    "unexplainedTargets": 0,
+    "recoveryAssessed": false,
+    "qualificationAvailable": false
+  }
+}

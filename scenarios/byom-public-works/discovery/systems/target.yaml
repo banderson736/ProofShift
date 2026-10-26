@@ -1,0 +1,8 @@
+id: target
+name: Synthetic PostgreSQL Target
+role: target
+storage:
+  records:
+    connector: postgres
+    connection:
+      secret: PROOFSHIFT_TARGET_CONNECTION

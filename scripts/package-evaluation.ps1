@@ -251,6 +251,7 @@ try {
         "docs/demo/DEMO_SCENARIO_MANIFEST.md",
         "docs/demo/CROSS_DOMAIN_DEMOS.md",
         "docs/EVALUATION.md",
+        "docs/BYOM_EVALUATION.md",
         "docs/DEMO_RUNBOOK.md",
         "scenarios"
     )) {
@@ -315,7 +316,7 @@ try {
         contentSha256 = $contentHash
         entryPoint = "dotnet app/ProofShift.Cli.dll"
         scenarioRunner = "demo/ProofShift.DemoRunner.dll (non-test runtime)"
-        allowlist = @("app/*.dll and runtime assets", "demo/*.dll/.json and runtime assets", "scenarios/**", "docs/EVALUATION.md", "docs/DEMO_RUNBOOK.md", "docs/demo/DEMO_SCENARIO_MANIFEST.md", "docs/demo/CROSS_DOMAIN_DEMOS.md", "docs/PS0_10F_SCENARIO_INDEX.json", "LICENSE", "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-LICENSES/**")
+        allowlist = @("app/*.dll and runtime assets", "demo/*.dll/.json and runtime assets", "scenarios/** including the synthetic BYOM evaluation kit", "docs/EVALUATION.md", "docs/BYOM_EVALUATION.md", "docs/DEMO_RUNBOOK.md", "docs/demo/DEMO_SCENARIO_MANIFEST.md", "docs/demo/CROSS_DOMAIN_DEMOS.md", "docs/PS0_10F_SCENARIO_INDEX.json", "LICENSE", "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-LICENSES/**")
         denylist = @("source code", "test assemblies and test-platform dependencies", "PDB/debug symbols", ".git", ".proofshift", "TestResults", "benchmark outputs", "vendor container images", "secrets", "local environment files")
     }
     $manifestJson = ConvertTo-Json -InputObject $packageManifest -Depth 20

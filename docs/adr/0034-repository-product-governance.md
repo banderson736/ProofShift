@@ -1,6 +1,6 @@
 # ADR-0034: Repository and Product Governance
 
-- Status: Proposed under PS-0.11E
+- Status: Accepted under PS-0.11E (October 25, 2026)
 - Date: 2026-10-25
 - Decision owners: ProofShift repository owner
 
@@ -51,4 +51,9 @@ the existing proprietary license does not grant open-source rights.
 - Allow mutable action tags: rejected because tags can move and do not provide
   immutable workflow dependency identity.
 
-Formal acceptance of this ADR is separate from the implementation task.
+This ADR was formally accepted under PS-0.11E after the repository ruleset,
+merge settings, and security-feature state were read back from GitHub and
+recorded in the [acceptance matrix](../PS0_11E_ACCEPTANCE_MATRIX.md).
+Governed-main commit `2d5744753309643d7451123d59bf44b338472d4b` passed all
+eleven required jobs in GitHub Actions run `40244724080`; the run reported
+359 passed, 0 failed, and 0 skipped across the test jobs.

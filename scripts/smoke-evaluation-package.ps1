@@ -133,11 +133,20 @@ foreach ($requiredPath in @(
     (Join-Path $packageRoot "THIRD-PARTY-NOTICES.md"),
     (Join-Path $packageRoot "THIRD-PARTY-LICENSES"),
     (Join-Path $packageRoot "docs/EVALUATION.md"),
+    (Join-Path $packageRoot "docs/BYOM_EVALUATION.md"),
     (Join-Path $packageRoot "docs/DEMO_RUNBOOK.md"),
     (Join-Path $packageRoot "docs/PS0_10F_SCENARIO_INDEX.json"),
     (Join-Path $packageRoot "scenarios/pension-modernization/ps09/database/sqlserver-source.sql"),
     (Join-Path $packageRoot "scenarios/pension-modernization/ps010b/proofshift.yaml"),
-    (Join-Path $packageRoot "scenarios/pension-modernization/ps010b/proofshift-false-reverse.yaml")
+    (Join-Path $packageRoot "scenarios/pension-modernization/ps010b/proofshift-false-reverse.yaml"),
+    (Join-Path $packageRoot "scenarios/byom-public-works/README.md"),
+    (Join-Path $packageRoot "scenarios/byom-public-works/expectations.json"),
+    (Join-Path $packageRoot "scenarios/byom-public-works/discovery/proofshift.yaml"),
+    (Join-Path $packageRoot "scenarios/byom-public-works/reviewed-mappings.csv"),
+    (Join-Path $packageRoot "scenarios/byom-public-works/database/sqlserver-source.sql"),
+    (Join-Path $packageRoot "scenarios/byom-public-works/database/postgres-target-schema.sql"),
+    (Join-Path $packageRoot "scenarios/byom-public-works/database/external-load-defective.sql"),
+    (Join-Path $packageRoot "scenarios/byom-public-works/database/external-load-corrected.sql")
 )) {
     if (-not (Test-Path -LiteralPath $requiredPath)) { throw "Required packaged resource is missing: $requiredPath" }
 }
@@ -199,6 +208,8 @@ $syntheticConfigurationValues = @{
     PS09_CORPUS_SOURCE_FILES_ROOT = "synthetic-placeholder"
     PS09_CORPUS_TARGET_CONNECTION = "synthetic-placeholder"
     PS09_CORPUS_TARGET_FILES_ROOT = "synthetic-placeholder"
+    PROOFSHIFT_SOURCE_CONNECTION = "synthetic-placeholder"
+    PROOFSHIFT_TARGET_CONNECTION = "synthetic-placeholder"
 }
 foreach ($entry in $syntheticConfigurationValues.GetEnumerator()) {
     $envName = $entry.Key
@@ -254,6 +265,11 @@ finally {
 $rootHelp = $rootHelpLines -join [Environment]::NewLine
 if ($rootHelpExitCode -ne 2 -or $rootHelp -notmatch "Usage: proofshift") {
     throw "Packaged root help must print usage and preserve exit code 2; found '$rootHelpExitCode'."
+}
+foreach ($requiredCommand in @("verify-external", "--verification-run", "--before-verification", "--after-verification")) {
+    if ($rootHelp -notmatch [Regex]::Escape($requiredCommand)) {
+        throw "Packaged CLI usage is missing '$requiredCommand'."
+    }
 }
 $help = Invoke-PackagedCli $cliPath @("demo", "--help")
 $legacyHelp = Invoke-PackagedCli $cliPath @("demo", "help")
@@ -352,7 +368,8 @@ $samples = @(
     "scenarios/justice-case-management/proofshift.yaml",
     "scenarios/hcm-erp-modernization/proofshift.yaml",
     "scenarios/pension-modernization/ps05/proofshift.yaml",
-    "scenarios/pension-modernization/ps010b/proofshift-false-reverse.yaml"
+    "scenarios/pension-modernization/ps010b/proofshift-false-reverse.yaml",
+    "scenarios/byom-public-works/discovery/proofshift.yaml"
 )
 foreach ($sample in $samples) {
     $samplePath = Join-Path $packageRoot $sample
@@ -632,6 +649,13 @@ if (-not $PackageOnly) {
     $pensionRepeatability = "PASS"
 }
 
+$byomEvaluation = $null
+if (-not $PackageOnly -and $ExpectedPlatform -eq "linux-x64") {
+    $byomWorkRoot = Join-Path $extractionFullPath "byom work"
+    $byomEvaluation = & (Join-Path $PSScriptRoot "run-byom-evaluation.ps1") `
+        -PackageRoot $packageRoot -WorkRoot $byomWorkRoot
+}
+
 $summaryOutput = [ordered]@{
     format = "proofshift-evaluation-package-smoke-v2"
     productVersion = $manifest.productVersion
@@ -652,6 +676,7 @@ $summaryOutput = [ordered]@{
     humanScenarioListValidated = $true
     shippedSampleConfigurationsValidated = $samples.Count
     pensionResetRepeatability = $pensionRepeatability
+    byomEvaluation = $byomEvaluation
     scenarios = @($scenarioResults)
 }
 $resultParent = Split-Path -Parent $resultFullPath

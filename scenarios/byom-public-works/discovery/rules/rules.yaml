@@ -1,0 +1,10 @@
+version: 2
+rules:
+  accounting:
+    type: source-artifact-accounting
+    version: "1"
+    severity: critical
+  lineage:
+    type: target-lineage
+    version: "1"
+    severity: critical
