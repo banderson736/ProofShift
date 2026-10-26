@@ -65,7 +65,9 @@ workflow run, and package identity where applicable.
 | PS-0.11E closure commit | `96f4c62e7d081f44e82d40f6a44f5fa6f324527a` |
 | PS-0.11F starting branch | `ps-0.11f-bring-your-own-migration-evaluation` |
 | PS-0.11F starting main | `2d5744753309643d7451123d59bf44b338472d4b` |
-| PS-0.11F candidate / tree / push CI / PR CI | NOT YET |
+| PS-0.11F implementation commit / tree | `277ca238233bdb091f68218574d0074e1c887578` / `aeb67bc9e34c13cd8d70abc737e88c3b03186a3c` |
+| PS-0.11F candidate branch push | `origin/ps-0.11f-bring-your-own-migration-evaluation` — verified |
+| PS-0.11F PR / required CI | NOT YET; no PR exists and no workflow run was returned for the pushed branch. The compare page requires GitHub sign-in to create the PR. |
 | Local focused CLI tests | `dotnet test --project tests\ProofShift.EndToEnd.Tests\ProofShift.EndToEnd.Tests.csproj --filter-class ProofShift.EndToEnd.Tests.ExternalVerificationCliTests` — 1 passed, 0 failed, 0 skipped; file target remained unchanged, source was unavailable after checkpoint, transient scratch was removable, and persisted Evidence/report remained readable. |
 | Local focused authoring tests | `dotnet test --project tests\ProofShift.EndToEnd.Tests\ProofShift.EndToEnd.Tests.csproj --filter-class ProofShift.EndToEnd.Tests.AuthoringCliTests` — 22 passed, 0 failed, 0 skipped. |
 | Local BYOM fixture contract test | `dotnet test --project tests\ProofShift.EndToEnd.Tests\ProofShift.EndToEnd.Tests.csproj --filter-class ProofShift.EndToEnd.Tests.ByomFixtureContractTests` — 1 passed, 0 failed, 0 skipped. |
