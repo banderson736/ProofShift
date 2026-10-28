@@ -272,16 +272,18 @@ Status: **Accepted (October 25, 2026).** Candidate `fc2411b2bd19e713af097e134388
 
 #### PS-0.11F Bring-Your-Own-Migration Evaluation
 
-Status: **In Progress; not self-accepted.** Starting governed-main commit
-`2d5744753309643d7451123d59bf44b338472d4b`, tree
-`d6c9e33ae8e2e4d48ebf0d278249f55ef76dce43`, branch
-`ps-0.11f-bring-your-own-migration-evaluation`. Expose the existing
-independent external-target Verification path, generic opt-in authoring,
-Verification-only persisted reporting, and a package-only synthetic
-customer-shaped evaluation. Preserve the read-only target, no-Projection,
-no-Recovery-qualification boundary. See the [PS-0.11F scope](PS0_11F_BRING_YOUR_OWN_MIGRATION_EVALUATION.md),
+Status: **Accepted (October 26, 2026), by repository-owner direction.**
+Exact source candidate `9748d22889dce85584915dfea06df037f925bf30`, tree
+`1d96d7f44133789831cb17c3951b6dc5a3187daf`, passed push CI `40269503856`
+and PR CI `40269505613` with all eleven required jobs green. PR #16 merged to
+`main` as `e811c08729609afdd3a2cfdf4cb7634012871205` with the same tree.
+All 45 acceptance gates pass. PS-0.11F exposes independent external-target
+Verification, generic opt-in authoring, persisted Verification-only
+reporting, and a package-only synthetic customer-shaped evaluation. The
+read-only target, no-Projection, and no-Recovery-qualification boundaries
+remain in force. See the [PS-0.11F scope](PS0_11F_BRING_YOUR_OWN_MIGRATION_EVALUATION.md),
 [acceptance matrix](PS0_11F_ACCEPTANCE_MATRIX.md), and [BYOM guide](BYOM_EVALUATION.md).
-Do not self-accept, merge, publish/tag/sign, or begin PS-0.11G.
+Do not publish/tag/sign or begin PS-0.11G without a new explicit assignment.
 
 Out of scope: public release/tag/package publication, signing, self-contained/AOT publishing, installers, new connectors/packs, FHIR Bulk, UI/API/auth, production migration/rollback, AI authoring, product-runtime changes, and unrelated refactoring.
 
