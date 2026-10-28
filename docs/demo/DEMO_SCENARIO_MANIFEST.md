@@ -1,6 +1,6 @@
 # Demo Scenario Manifest v1
 
-PS-0.10G uses `scenarios/demos/<id>/scenario.json` for evaluator-facing scenario metadata. This is packaging/orchestration metadata only: it is not loaded into `ConfigurationLoader`, `MigrationGraphCompiler`, Verification, Recovery, or any semantic fingerprint.
+The evaluation package uses `scenarios/demos/<id>/scenario.json` for scenario metadata. This packaging/orchestration metadata does not change the configured project, Verification rules, Recovery assessment, or semantic fingerprints.
 
 The CLI discovers manifests by ID in ordinal order. Unknown properties, unsupported versions, mismatched folder IDs, unsafe relative paths, invalid stage commands, and inconsistent expected outcomes fail closed. Manifest JSON uses camelCase and is deterministic source-controlled data.
 

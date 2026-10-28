@@ -10,6 +10,11 @@ tree `d6c9e33ae8e2e4d48ebf0d278249f55ef76dce43`. Exact source candidate
 and PR CI `40269505613` with all eleven required jobs green. PR #16 merged
 to `main` as `e811c08729609afdd3a2cfdf4cb7634012871205` with the same tree.
 All 45 acceptance gates pass; see the [acceptance matrix](PS0_11F_ACCEPTANCE_MATRIX.md).
+The acceptance-record PR #17 is merged to `main` as
+`810f2f450176bde1eee0edcc200650d633b8f04b` (tree
+`8ec082eb21683dec06ee48971f49e0d088cdea64`). The current follow-up is the
+acceptance-first PS-0.11G pilot-readiness slice; see its
+[acceptance record](PS0_11G_PILOT_READINESS_ACCEPTANCE.md).
 
 ## Objective
 
@@ -77,7 +82,8 @@ checkpoint → external migration process → target
 Production migration execution or rollback, external target mutation,
 customer-specific domain packs, new connectors, dynamic plugins, user-supplied
 code/rules, automatic semantic inference, UI/API/authentication, SaaS, release,
-publication, tag, signing, and PS-0.11G are excluded.
+publication, tag, and signing are excluded. PS-0.11G is now tracked as a
+separate, acceptance-first milestone; it does not expand the PS-0.11F scope.
 
 ## Acceptance
 

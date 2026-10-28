@@ -1,6 +1,6 @@
 # ProofShift Evaluation Kit
 
-ProofShift's first preview product identity is **ProofShift 0.1.0-preview.1**. The internal PS-0.11C milestone is not part of the product version. The evaluation package is a binary-only, framework-dependent .NET 10 kit; its physical scenarios run through the non-test DemoRunner backed by DemoScenarios. Separate Windows x64 and Linux x64 archives are built from the same source tree with `scripts/package-evaluation.ps1`. Each contains the CLI, DemoRunner and required runtime assets, selected synthetic sample projects, demo manifests, and third-party notices. The package manifest and deterministic unsigned provenance sidecar identify product version, platform, source revision and tree, locked dependency fingerprint, SDK, framework, and content/archive hashes. The package does not contain repository source, customer data, credentials, database images, EndToEnd assemblies, test-platform dependencies, or repository SDK policy.
+The evaluation product identity is **ProofShift 0.1.0-preview.1**. The package is a binary-only, framework-dependent .NET 10 kit; its physical scenarios run through the non-test DemoRunner backed by DemoScenarios. Separate Windows x64 and Linux x64 archives are built from the same source tree. Each contains the CLI, DemoRunner and required runtime assets, selected synthetic sample projects, demo manifests, and third-party notices. The package manifest and deterministic unsigned provenance sidecar identify product version, platform, source revision and tree, locked dependency fingerprint, SDK, framework, and content/archive hashes. The package does not contain repository source, customer data, credentials, database images, EndToEnd assemblies, test-platform dependencies, or repository SDK policy.
 
 ## Clean CI Acceptance
 
@@ -9,7 +9,7 @@ The acceptance workflow uses fresh independent standard GitHub-hosted jobs again
 - Two independent `windows-latest` runners build the Windows package; a comparison gate verifies archive bytes, content hashes, and deterministic provenance. A fresh Windows package-only smoke extracts outside checkout into a path with spaces, checks version/manifest/provenance/runtime assets and shipped sample configurations, and validates notices. It does not run physical demos.
 - Two independent `ubuntu-latest` runners build the Linux package and compare archive bytes, content hashes, and provenance. A runtime-only Linux environment with no SDK verifies basic version and demo-discovery commands. A separate fresh Ubuntu runner verifies Linux-container Docker and runs the full packaged Pension, Utility, Justice, HCM, and FHIR scenarios, including exact outcomes, reports, and Pension reset/repeat semantic equivalence.
 
-The Windows result proves the Windows package path only; it does not prove that the Docker-backed demo stack runs on Windows. The Ubuntu result proves the packaged Docker-backed evaluation workflow on Ubuntu; it is not a general-purpose Linux product-support claim. Both campaign jobs are pending until the split workflow passes on one exact candidate commit.
+The Windows result proves the Windows package path only; it does not prove that the Docker-backed demo stack runs on Windows. The Ubuntu result proves the packaged Docker-backed evaluation workflow on Ubuntu; it is not a general-purpose Linux product-support claim. Protected CI independently rebuilds each platform package and exercises these bounded package workflows on exact candidate revisions.
 
 The Linux package smoke also evaluates the synthetic SQL Server-to-PostgreSQL
 public-works BYOM fixture from the extracted package. Its workflow and claim
@@ -22,7 +22,7 @@ make a Recovery qualification claim.
 ## Requirements
 
 - Operators need the compatible **.NET 10 runtime**, not the SDK, to run the framework-dependent package. Basic CLI operations are proven in an isolated runtime-only environment. Package build and development use the exact .NET SDK pinned in repository `global.json` (`10.0.402`).
-- Full physical demos require the .NET 10 runtime and Linux-container Docker in the accepted Ubuntu workflow. Running full Docker-backed demos manually on Windows also requires compatible Docker setup, but that path is not part of the Windows clean-runner acceptance claim.
+- Full physical demos require the .NET 10 runtime and Linux-container Docker in the Ubuntu workflow. Running full Docker-backed demos manually on Windows also requires compatible Docker setup, but that path is not part of the Windows package-only acceptance claim.
 - Network access on the first Linux demo run may be needed to pull the synthetic SQL Server/PostgreSQL test images; no image is redistributed. The package contains the NuGet runtime dependencies for the published CLI and DemoRunner/DemoScenarios, including Testcontainers where required by fixture lifecycle code. It does not package a test runner.
 
 ## Run
@@ -143,13 +143,13 @@ Troubleshooting:
 - If a run says the workspace already exists, inspect and retain any wanted reports, then use `demo reset <id>` from that package root before retrying.
 - Windows may deny symbolic-link creation to unprivileged test processes. The three local test-suite skips for that capability are not demo failures; the evaluator demo itself does not require creating symlinks.
 
-Current DemoRunner stage results record elapsed runner-process time and a sampled peak working set. The measurement covers the runner process only, excludes Docker container and whole-system peak memory, and remains a host-specific diagnostic rather than a resource guarantee or SLA. No PS-0.11C release-package runtime measurements have been accepted yet.
+Current DemoRunner stage results record elapsed runner-process time and a sampled peak working set. The measurement covers the runner process only, excludes Docker container and whole-system peak memory, and remains a host-specific diagnostic rather than a resource guarantee or SLA.
 
-The following Windows rehearsal measurements are historical PS-0.10G evidence from the pre-PS-0.11B MTP fixture package. They describe the MTP process only, exclude Docker container and whole-system peak memory, and are not measurements of the new DemoRunner package. Treat them as host-specific diagnostics, not resource guarantees or SLAs.
+The following Windows rehearsal measurements are historical diagnostics from a legacy test-runner package. They describe the fixture process only, exclude Docker container and whole-system peak memory, and are not measurements of the current non-test DemoRunner package. Treat them as host-specific diagnostics, not resource guarantees or SLAs.
 
-### Historical Windows Package Rehearsal Measurements (PS-0.10G)
+### Historical Windows Package Rehearsal Measurements
 
-Measured from the extracted binary-only package on Windows with .NET SDK/runtime 10.0.303 and Docker Engine 29.6.1 before PS-0.11B. The sampled working set is the MTP fixture process only and excludes the SQL Server/PostgreSQL containers; sampling is every 100 ms, so brief peaks can be missed.
+Measured from an extracted binary-only package on Windows with .NET SDK/runtime 10.0.303 and Docker Engine 29.6.1. The sampled working set is the MTP fixture process only and excludes the SQL Server/PostgreSQL containers; sampling is every 100 ms, so brief peaks can be missed.
 
 | Scenario | Fixture process time | Sampled peak working set |
 |---|---:|---:|
@@ -159,7 +159,7 @@ Measured from the extracted binary-only package on Windows with .NET SDK/runtime
 | HCM | 323,922 ms | 218,202,112 bytes |
 | FHIR-style | 89,085 ms | 181,067,776 bytes |
 
-These are diagnostics from one Windows host, not fresh-hardware guarantees or container/whole-system sizing guidance. They are not fresh-machine evidence. CPU utilization, whole-run disk high-water, and Docker container memory were not measured, so no sizing claim is made for those dimensions. The split Windows/Ubuntu CI campaign remains pending; general-purpose Linux product support remains unclaimed.
+These are diagnostics from one Windows host, not fresh-hardware guarantees or container/whole-system sizing guidance. They are not fresh-machine evidence. CPU utilization, whole-run disk high-water, and Docker container memory were not measured, so no sizing claim is made for those dimensions. General-purpose Linux product support remains unclaimed.
 
 The split CI jobs record the package filename, size, SHA-256, candidate SHA, runner OS/CPU/memory/free disk, Docker engine details, and per-fixture runtime/sampled peak working set where available. Ubuntu records Docker disk usage after demo execution. These are diagnostics from the actual acceptance runners, not SLAs or production-sizing claims; Docker metrics are not reported for the Windows package-only job.
 
@@ -167,7 +167,7 @@ The split CI jobs record the package filename, size, SHA-256, candidate SHA, run
 
 All demo data is synthetic. External target observations are independently populated and read-only to Verification. A separate corrected shadow run exercises Projection and Recovery. ProofShift does not perform the external migration, and technical qualification is not regulatory, legal, actuarial, clinical, payroll, or business approval. Per-pack exclusions are shown by `demo describe <id>` and in each report.
 
-The Pension flagship asserts 8,495 source checkpoint artifacts, 8,595 corrected target artifacts, 149 defective findings, and corrected qualification. Its false-Reverse example passes Verification with zero Verification failures while Recovery rejects two unsafe Reverse declarations. Utility, Justice, HCM, and selected FHIR-style kits use the accepted PS-0.10F physical fixtures and the exact counts listed in `demo describe`.
+The Pension flagship asserts 8,495 source checkpoint artifacts, 8,595 corrected target artifacts, 149 defective findings, and corrected qualification. Its false-Reverse example passes Verification with zero Verification failures while Recovery rejects two unsafe Reverse declarations. Utility, Justice, HCM, and selected FHIR-style kits use deterministic synthetic physical fixtures and the exact counts listed in `demo describe`.
 
 ## Package Provenance
 
@@ -187,7 +187,7 @@ The package manifest records `targetPlatform: win-x64` or `linux-x64`. The platf
 
 ## Product Limits
 
-- PS-0.10G's clean acceptance design separately validates the Windows package on Windows and the Docker-backed packaged evaluation workflow on Ubuntu. This does not claim the five-domain Docker stack was validated on Windows or that ProofShift has general Linux product support.
+- Platform evidence separately validates the Windows package on Windows and the Docker-backed packaged evaluation workflow on Ubuntu. This does not claim the five-domain Docker stack was validated on Windows or that ProofShift has general Linux product support.
 - There is no web UI or hosted service, no production migration execution or rollback, no FHIR Bulk support, and no generic REST connector.
 - Demo data is deterministic and synthetic. Domain packs demonstrate representative configured assurance, not complete industry coverage or legal, regulatory, actuarial, clinical, payroll, or other certification.
 - The evaluation package is not authorization for paid trials or redistribution. The repository license is all-rights-reserved; commercial use and redistribution require separate authorization and review.

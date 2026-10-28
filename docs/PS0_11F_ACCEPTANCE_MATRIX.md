@@ -5,8 +5,14 @@
 **Accepted (October 26, 2026), by repository-owner direction.** All gates are
 `PASS` against the merged candidate and recorded implementation, package,
 regression, and live governance evidence. PS-0.11F remains limited to
-read-only external Verification; this acceptance does not authorize PS-0.11G,
-release, publication, signing, production migration, or rollback.
+read-only external Verification. The separate current PS-0.11G assignment
+does not authorize release, publication, signing, production migration, or
+rollback.
+The acceptance record was merged to `main` by PR #17 as
+`810f2f450176bde1eee0edcc200650d633b8f04b` (tree
+`8ec082eb21683dec06ee48971f49e0d088cdea64`). The current assignment is
+PS-0.11G Pilot Readiness Acceptance; its gates are tracked separately in
+[the PS-0.11G matrix](PS0_11G_ACCEPTANCE_MATRIX.md).
 
 | Gate | Required evidence | Status |
 |---|---|---|
