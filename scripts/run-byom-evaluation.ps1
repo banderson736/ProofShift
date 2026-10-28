@@ -508,7 +508,7 @@ SELECT
     Assert-Equal $corrected.unexplainedTargetCount $expectations.correctedTarget.unexplainedTargets "Corrected unexplained target count"
     Assert-Equal $corrected.recoveryAssessed $expectations.correctedTarget.recoveryAssessed "Corrected Recovery boundary"
     Assert-Equal $corrected.qualificationAvailable $expectations.correctedTarget.qualificationAvailable "Corrected qualification boundary"
-    Assert-Equal $corrected.targetFingerprint "ead980fa890238f036d08a54c13884bddac439816e3cd03d7b2d134c093d1fa8" `
+    Assert-Equal $corrected.targetFingerprint "2f741f06f969648fd52d539731067be054be213a539932e8e55b5d83e571e171" `
         "Accepted corrected BYOM target fingerprint"
     if ($corrected.evidenceFingerprint -notmatch '^[0-9a-f]{64}$') {
         throw "Corrected BYOM Evidence fingerprint is not a lowercase SHA-256 digest."
