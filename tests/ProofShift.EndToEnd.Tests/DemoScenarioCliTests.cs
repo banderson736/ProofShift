@@ -69,6 +69,76 @@ public sealed class DemoScenarioCliTests
     }
 
     [Fact]
+    public async Task RootHelpSucceedsOnStdoutAndExplainsSupportedOperatorPaths()
+    {
+        var root = CreateRoot();
+        try
+        {
+            foreach (var arguments in new[] { new[] { "--help" }, new[] { "help" } })
+            {
+                var result = await RunAsync(root, arguments);
+                Assert.Equal(0, result.ExitCode);
+                Assert.Empty(result.Error);
+                Assert.Contains("verify-external", result.Output, StringComparison.Ordinal);
+                Assert.Contains("report", result.Output, StringComparison.Ordinal);
+                Assert.Contains("compare", result.Output, StringComparison.Ordinal);
+                Assert.Contains("demo", result.Output, StringComparison.Ordinal);
+                Assert.Contains("version", result.Output, StringComparison.Ordinal);
+                Assert.Contains("init", result.Output, StringComparison.Ordinal);
+                Assert.Contains("validate", result.Output, StringComparison.Ordinal);
+                Assert.Contains("discover", result.Output, StringComparison.Ordinal);
+                Assert.Contains("scaffold", result.Output, StringComparison.Ordinal);
+                Assert.Contains("explain", result.Output, StringComparison.Ordinal);
+                Assert.Contains("snapshot", result.Output, StringComparison.Ordinal);
+                Assert.Contains("project", result.Output, StringComparison.Ordinal);
+                Assert.Contains("verify", result.Output, StringComparison.Ordinal);
+                Assert.Contains("evidence", result.Output, StringComparison.Ordinal);
+                Assert.Contains("recovery", result.Output, StringComparison.Ordinal);
+                Assert.Contains("dry-run", result.Output, StringComparison.Ordinal);
+                Assert.Contains("plan", result.Output, StringComparison.Ordinal);
+                Assert.Contains("inspect", result.Output, StringComparison.Ordinal);
+                Assert.Contains("packs", result.Output, StringComparison.Ordinal);
+                Assert.Contains("rules", result.Output, StringComparison.Ordinal);
+                Assert.Contains("capabilities", result.Output, StringComparison.Ordinal);
+                Assert.Contains("connectors", result.Output, StringComparison.Ordinal);
+                Assert.Contains("discovery", result.Output, StringComparison.Ordinal);
+                Assert.Contains("mapping", result.Output, StringComparison.Ordinal);
+                Assert.Contains("config", result.Output, StringComparison.Ordinal);
+                Assert.Contains("External Verification", result.Output, StringComparison.Ordinal);
+                Assert.Contains("does not execute", result.Output, StringComparison.Ordinal);
+                Assert.Contains("Recovery", result.Output, StringComparison.Ordinal);
+                Assert.DoesNotMatch(@"PS-\d", result.Output);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RootHelpDoesNotChangeIncompleteOrUnknownInvocationBehavior()
+    {
+        var root = CreateRoot();
+        try
+        {
+            var noArguments = await RunAsync(root);
+            Assert.Equal(2, noArguments.ExitCode);
+            Assert.Empty(noArguments.Output);
+            Assert.Contains("Usage: proofshift", noArguments.Error, StringComparison.Ordinal);
+
+            var invalidCommand = await RunAsync(root, "unknown-command", "placeholder");
+            Assert.Equal(2, invalidCommand.ExitCode);
+            Assert.Empty(invalidCommand.Output);
+            Assert.Contains("Usage: proofshift", invalidCommand.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task CliVersionReportsProductVersionAndStructuredBuildIdentity()
     {
         var root = CreateRoot();

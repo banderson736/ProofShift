@@ -213,6 +213,7 @@ jobs:
             ${{ runner.temp }}/ProofShift-Evaluation-*-linux-x64.zip.sha256
             ${{ runner.temp }}/ProofShift-Evaluation-*-linux-x64.provenance.json
             ${{ runner.temp }}/ProofShift Evaluation/linux-package-smoke-result.json
+            ${{ runner.temp }}/ProofShift Evaluation/pilot-readiness-result.json
           if-no-files-found: error
 
   windows-package-reproducibility-b:
@@ -358,10 +359,19 @@ jobs:
           printf 'version: PASS\n'
           dotnet "$cli" version --json | jq -e --arg version "$product_version" --arg revision "$(jq -r .sourceRevision "$manifest")" --arg tree "$(jq -r .sourceTree "$manifest")" --arg tfm "$(jq -r .targetFramework "$manifest")" '.productVersion == $version and .sourceRevision == $revision and .sourceTree == $tree and .targetFramework == $tfm' > /dev/null
           printf 'version-json: PASS\n'
+          root_help="$(dotnet "$cli" --help 2>"$RUNNER_TEMP/root-help.stderr")"
+          test ! -s "$RUNNER_TEMP/root-help.stderr"
+          for command in verify-external report compare demo; do
+            grep -Fq "$command" <<< "$root_help"
+          done
+          ! grep -Eq 'PS-[0-9]' <<< "$root_help"
+          grep -Fq 'does not assess or qualify Recovery' <<< "$root_help"
+          printf 'root-help: PASS\n'
           dotnet "$cli" demo list --json | jq -e 'any(.[]; .id == "pension")' > /dev/null
           printf 'demo-list: PASS\n'
           dotnet "$cli" demo describe pension --json | jq -e '.id == "pension" and (.claimBoundary | length > 0)' > /dev/null
           printf 'demo-describe-pension: PASS\n'
+          printf 'Evaluator front door: PASS\n'
           printf 'SDKs installed: none\nRuntime-only smoke: PASS\n'
 
   oracle-integration:

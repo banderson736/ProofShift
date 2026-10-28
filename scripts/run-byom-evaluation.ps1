@@ -263,6 +263,7 @@ SELECT
     $defectGroups = @($defectiveReport.failedFindingGroups.PSObject.Properties)
     $defectCount = ($defectGroups | Measure-Object -Property Value -Sum).Sum
     Assert-Equal $defectCount $expectations.defectiveTarget.findingRecords "Evidence-derived seeded defect count"
+    $findingCodeCounts = [ordered]@{}
     foreach ($expectedFinding in $expectations.defectiveTarget.findingCodeCounts.PSObject.Properties) {
         $actualCount = ($defectGroups | Where-Object { $_.Name -match [Regex]::Escape($expectedFinding.Name) } |
             Measure-Object -Property Value -Sum).Sum
@@ -270,6 +271,7 @@ SELECT
             $observedGroups = ConvertTo-Json -InputObject $defectiveReport.failedFindingGroups -Compress
             throw "Finding code '$($expectedFinding.Name)' total expected '$($expectedFinding.Value)', found '$actualCount'. Observed rule/code groups: $observedGroups"
         }
+        $findingCodeCounts[$expectedFinding.Name] = $actualCount
     }
     $reportText = ConvertTo-Json -InputObject $defectiveReport -Depth 20 -Compress
     if ($reportText -match "Synthetic Asset|Synthetic work order|Synthetic history event") {
@@ -298,6 +300,10 @@ SELECT
     Assert-Equal $corrected.unexplainedTargetCount $expectations.correctedTarget.unexplainedTargets "Corrected unexplained target count"
     Assert-Equal $corrected.recoveryAssessed $expectations.correctedTarget.recoveryAssessed "Corrected Recovery boundary"
     Assert-Equal $corrected.qualificationAvailable $expectations.correctedTarget.qualificationAvailable "Corrected qualification boundary"
+    Assert-Equal $corrected.targetFingerprint "ead980fa890238f036d08a54c13884bddac439816e3cd03d7b2d134c093d1fa8" `
+        "Accepted corrected BYOM target fingerprint"
+    Assert-Equal $corrected.evidenceFingerprint "d38c6e38af55aa171218becf12cad4344a85ff0d6666f87d43d93dc259424ccc" `
+        "Accepted corrected BYOM Evidence fingerprint"
     Assert-Equal (Invoke-ObserverQuery $targetContainer $observerPassword $permissionsQuery) "f" "Read-only target DML privileges after Verification"
     Assert-Equal (Invoke-ObserverQuery $targetContainer $observerPassword $targetStateQuery) $correctedTargetState "Target state after read-only corrected Verification"
 
@@ -346,13 +352,27 @@ SELECT
         defectiveTargetArtifacts = $defective.targetArtifactCount
         correctedTargetArtifacts = $corrected.targetArtifactCount
         seededFindingCount = $defectCount
+        seededFindingCodeCounts = $findingCodeCounts
+        defectiveVerificationFailures = $defective.verificationFailureCount
         correctedFailureCount = $corrected.verificationFailureCount
+        correctedUnaccountedSources = $corrected.unaccountedSourceCount
+        correctedUnexplainedTargets = $corrected.unexplainedTargetCount
+        correctedVerificationOutcome = $corrected.verificationOutcome
+        recoveryAssessed = $corrected.recoveryAssessed
+        qualificationAvailable = $corrected.qualificationAvailable
         correctedTargetFingerprint = $corrected.targetFingerprint
         correctedEvidenceFingerprint = $corrected.evidenceFingerprint
         repeatedTargetFingerprint = $repeated.targetFingerprint
         repeatedEvidenceFingerprint = $repeated.evidenceFingerprint
         sourceOfflineAfterCheckpoint = $true
         targetMutationPrivilegesDenied = $true
+        readOnlyTargetProven = $true
+        targetMutationDetected = $false
+        targetUnchangedByProofShift = $true
+        sourceOfflineProven = $true
+        externalMigrationFixtureUsed = $true
+        projectionArtifactsDetected = $false
+        recoveryArtifactsDetected = $false
         projectionAndRecoveryArtifactsCreated = $false
     }
 }

@@ -283,9 +283,28 @@ reporting, and a package-only synthetic customer-shaped evaluation. The
 read-only target, no-Projection, and no-Recovery-qualification boundaries
 remain in force. See the [PS-0.11F scope](PS0_11F_BRING_YOUR_OWN_MIGRATION_EVALUATION.md),
 [acceptance matrix](PS0_11F_ACCEPTANCE_MATRIX.md), and [BYOM guide](BYOM_EVALUATION.md).
-Do not publish/tag/sign or begin PS-0.11G without a new explicit assignment.
+Do not publish/tag/sign. The separately assigned PS-0.11G scope is recorded
+below.
 
-Out of scope: public release/tag/package publication, signing, self-contained/AOT publishing, installers, new connectors/packs, FHIR Bulk, UI/API/auth, production migration/rollback, AI authoring, product-runtime changes, and unrelated refactoring.
+#### PS-0.11G Pilot Readiness Acceptance
+
+Status: **In Progress. Not self-accepted.** Starting from accepted `main`
+`810f2f450176bde1eee0edcc200650d633b8f04b`, tree
+`8ec082eb21683dec06ee48971f49e0d088cdea64`, on branch
+`ps-0.11g-pilot-readiness-acceptance`. This final PS-0.11 milestone is an
+integrated product-acceptance and evaluator-handoff slice, not an assurance
+engine tranche. Treat the extracted evaluation package and shipped
+documentation as the product. Reconcile stale status surfaces, provide a
+correct root CLI help path, add a package front door and pilot guidance, and
+extend existing protected package jobs to rehearse the documented Windows,
+Linux runtime-only, five-demo, and BYOM workflows. Preserve exact accepted
+domain outcomes, read-only external Verification, package-only Windows
+acceptance, and the Ubuntu packaged-Docker evaluation boundary. See the
+[PS-0.11G acceptance record](PS0_11G_PILOT_READINESS_ACCEPTANCE.md) and
+[acceptance matrix](PS0_11G_ACCEPTANCE_MATRIX.md). Do not self-accept, merge,
+begin PS-1.0, publish/tag/sign, or perform production migration/rollback.
+
+Out of scope: public release/tag/package publication, signing, self-contained/AOT publishing, installers, new connectors/packs, FHIR Bulk, UI/API/auth, production migration/rollback, AI authoring, assurance-engine/runtime-semantics changes, and unrelated refactoring.
 
 ## Commercial validation gate after PS-0 / during PS-0
 

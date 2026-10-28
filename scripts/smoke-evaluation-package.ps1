@@ -57,6 +57,32 @@ function Invoke-PackagedJson {
     catch { throw "Packaged CLI did not return valid JSON for '$($Arguments -join ' ')'.`n$text" }
 }
 
+function Invoke-PackagedCliWithStreams {
+    param(
+        [string] $CliPath,
+        [AllowEmptyCollection()]
+        [string[]] $Arguments
+    )
+
+    $stdoutPath = Join-Path $script:ExtractionRoot "cli-stdout.txt"
+    $stderrPath = Join-Path $script:ExtractionRoot "cli-stderr.txt"
+    Push-Location $script:PackageRoot
+    try {
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        & dotnet $CliPath @Arguments 1> $stdoutPath 2> $stderrPath
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+        Pop-Location
+    }
+    $stdout = if (Test-Path -LiteralPath $stdoutPath) { [IO.File]::ReadAllText($stdoutPath) } else { "" }
+    $stderr = if (Test-Path -LiteralPath $stderrPath) { [IO.File]::ReadAllText($stderrPath) } else { "" }
+    Remove-Item -LiteralPath @($stdoutPath, $stderrPath) -Force -ErrorAction SilentlyContinue
+    return [pscustomobject]@{ ExitCode = $exitCode; Output = $stdout; Error = $stderr }
+}
+
 function Assert-Equal {
     param([object] $Actual, [object] $Expected, [string] $Description)
 
@@ -75,6 +101,44 @@ function Get-RelativePath {
     if (-not $rootUri.IsBaseOf($pathUri)) { throw "Path is outside package root: $Path" }
     return [Uri]::UnescapeDataString($rootUri.MakeRelativeUri($pathUri).ToString()).Replace(
         '/', [IO.Path]::DirectorySeparatorChar)
+}
+
+function Test-PackageMarkdownLinks {
+    param([string] $PackageRoot, [string[]] $RelativeFiles)
+
+    $packageFullPath = [IO.Path]::GetFullPath($PackageRoot).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $packagePrefix = $packageFullPath + [IO.Path]::DirectorySeparatorChar
+    $linkPattern = [regex]'(?<!!)\[[^\]]+\]\((?<target>[^)\r\n]+)\)'
+    foreach ($relativeFile in $RelativeFiles) {
+        $documentPath = Join-Path $PackageRoot $relativeFile
+        if (-not (Test-Path -LiteralPath $documentPath -PathType Leaf)) {
+            throw "Required evaluator document is missing: $relativeFile"
+        }
+        $document = [IO.File]::ReadAllText($documentPath)
+        $documentDirectory = Split-Path -Parent $documentPath
+        foreach ($match in $linkPattern.Matches($document)) {
+            $target = $match.Groups["target"].Value.Trim()
+            if ($target.StartsWith("<") -and $target.EndsWith(">")) {
+                $target = $target.Substring(1, $target.Length - 2)
+            }
+            if ($target -match '^(?i:https?://|mailto:)') { continue }
+            $targetPath = ($target -split '[?#]', 2)[0]
+            if ([string]::IsNullOrWhiteSpace($targetPath)) { continue }
+            $targetPath = [Uri]::UnescapeDataString($targetPath).Replace(
+                '/', [IO.Path]::DirectorySeparatorChar)
+            $resolvedPath = [IO.Path]::GetFullPath((Join-Path $documentDirectory $targetPath))
+            if (-not $resolvedPath.StartsWith($packagePrefix, [StringComparison]::OrdinalIgnoreCase) -and
+                -not [string]::Equals($resolvedPath, $packageFullPath, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Evaluator document link escapes the package: $relativeFile -> $target"
+            }
+            if (-not (Test-Path -LiteralPath $resolvedPath)) {
+                throw "Evaluator document link does not resolve in the package: $relativeFile -> $target"
+            }
+        }
+    }
+
+    return $true
 }
 
 $archiveFullPath = [IO.Path]::GetFullPath($ArchivePath)
@@ -132,8 +196,11 @@ foreach ($requiredPath in @(
     (Join-Path $packageRoot "LICENSE"),
     (Join-Path $packageRoot "THIRD-PARTY-NOTICES.md"),
     (Join-Path $packageRoot "THIRD-PARTY-LICENSES"),
+    (Join-Path $packageRoot "START_HERE.md"),
     (Join-Path $packageRoot "docs/EVALUATION.md"),
     (Join-Path $packageRoot "docs/BYOM_EVALUATION.md"),
+    (Join-Path $packageRoot "docs/PILOT_EVALUATOR_GUIDE.md"),
+    (Join-Path $packageRoot "docs/PILOT_INTAKE_CHECKLIST.md"),
     (Join-Path $packageRoot "docs/DEMO_RUNBOOK.md"),
     (Join-Path $packageRoot "docs/PS0_10F_SCENARIO_INDEX.json"),
     (Join-Path $packageRoot "scenarios/pension-modernization/ps09/database/sqlserver-source.sql"),
@@ -193,6 +260,62 @@ if ([IO.File]::ReadAllText($thirdPartyNotices) -match "UNSPECIFIED: manual revie
 }
 $script:PackageRoot = $packageRoot
 
+$operatorDocuments = @(
+    "START_HERE.md",
+    "docs/EVALUATION.md",
+    "docs/BYOM_EVALUATION.md",
+    "docs/PILOT_EVALUATOR_GUIDE.md",
+    "docs/PILOT_INTAKE_CHECKLIST.md"
+)
+$documentationLinksValid = Test-PackageMarkdownLinks $packageRoot $operatorDocuments
+$startHereText = [IO.File]::ReadAllText((Join-Path $packageRoot "START_HERE.md"))
+foreach ($requiredFrontDoorText in @(
+    "CLI-first migration assurance tool",
+    "Get-FileHash",
+    "sha256sum --check",
+    "demo run pension",
+    "verify-external",
+    "does not create Projection artifacts",
+    "assess or qualify Recovery",
+    "There is no web UI",
+    "redistribution"
+)) {
+    if ($startHereText.IndexOf($requiredFrontDoorText, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+        throw "The evaluator front door is missing required guidance: '$requiredFrontDoorText'."
+    }
+}
+$primaryDocumentPaths = @(
+    (Join-Path $packageRoot "START_HERE.md"),
+    (Join-Path $packageRoot "docs/PILOT_EVALUATOR_GUIDE.md"),
+    (Join-Path $packageRoot "docs/PILOT_INTAKE_CHECKLIST.md")
+)
+foreach ($primaryDocumentPath in $primaryDocumentPaths) {
+    $primaryDocument = [IO.File]::ReadAllText($primaryDocumentPath)
+    if ($primaryDocument -match '(?i)\b(?:ProofShift\.sln|src/|tests/|\.github/|PS-\d+\.\d+)') {
+        throw "Primary evaluator documentation depends on internal repository chronology or developer paths."
+    }
+}
+$documentedCommands = [IO.File]::ReadAllText((Join-Path $packageRoot "docs/PILOT_EVALUATOR_GUIDE.md")) +
+    [IO.File]::ReadAllText((Join-Path $packageRoot "docs/BYOM_EVALUATION.md"))
+foreach ($requiredExample in @(
+    "proofshift --help",
+    "proofshift demo list",
+    "proofshift demo describe <id>",
+    "proofshift demo preflight <id>",
+    "proofshift demo run <id>",
+    "proofshift demo reset <id>",
+    "proofshift validate <config> --strict",
+    "proofshift snapshot <config>",
+    "proofshift verify-external <config> --checkpoint <checkpoint-id> --observation <label>",
+    "proofshift evidence <config> --run <verification-run-id>",
+    "proofshift report <config> --verification-run <verification-run-id>",
+    "proofshift compare <config> --before-verification <defective-verification-run-id> --after-verification <corrected-verification-run-id>"
+)) {
+    if ($documentedCommands.IndexOf($requiredExample, [StringComparison]::Ordinal) -lt 0) {
+        throw "Pilot documentation is missing the required command form '$requiredExample'."
+    }
+}
+
 foreach ($name in @("PROOFSHIFT_DEMO_CLI_PATH", "PS09_INTEGRATED_RUN_DIRECTORY")) {
     Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
 }
@@ -215,6 +338,7 @@ foreach ($entry in $syntheticConfigurationValues.GetEnumerator()) {
     $envName = $entry.Key
     [Environment]::SetEnvironmentVariable($envName, $entry.Value, "Process")
 }
+$script:ExtractionRoot = $extractionFullPath
 $env:DOTNET_CLI_HOME = Join-Path $extractionFullPath "dotnet-cli-home"
 $env:NUGET_PACKAGES = Join-Path $extractionFullPath "empty-nuget-cache"
 $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = "1"
@@ -251,25 +375,37 @@ if ([IO.Path]::GetFileName($archiveFullPath) -ne
     "ProofShift-Evaluation-$($manifest.productVersion)-$ExpectedPlatform.zip") {
     throw "Package archive name does not match product version and platform."
 }
-Push-Location $script:PackageRoot
-try {
-    $previousErrorActionPreference = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    $rootHelpLines = @(& dotnet $cliPath "--help" 2>&1)
-    $rootHelpExitCode = $LASTEXITCODE
+$rootHelpResult = Invoke-PackagedCliWithStreams $cliPath @("--help")
+$rootHelpExitCode = $rootHelpResult.ExitCode
+$rootHelp = $rootHelpResult.Output
+if ($rootHelpExitCode -ne 0 -or -not [string]::IsNullOrEmpty($rootHelpResult.Error)) {
+    throw "Packaged root --help must exit 0, write help to stdout, and write nothing to stderr."
 }
-finally {
-    $ErrorActionPreference = $previousErrorActionPreference
-    Pop-Location
+$helpAlias = Invoke-PackagedCliWithStreams $cliPath @("help")
+if ($helpAlias.ExitCode -ne 0 -or -not [string]::IsNullOrEmpty($helpAlias.Error) -or $helpAlias.Output -ne $rootHelp) {
+    throw "Packaged root help alias must match --help and write nothing to stderr."
 }
-$rootHelp = $rootHelpLines -join [Environment]::NewLine
-if ($rootHelpExitCode -ne 2 -or $rootHelp -notmatch "Usage: proofshift") {
-    throw "Packaged root help must print usage and preserve exit code 2; found '$rootHelpExitCode'."
-}
-foreach ($requiredCommand in @("verify-external", "--verification-run", "--before-verification", "--after-verification")) {
+foreach ($requiredCommand in @(
+    "version", "validate", "discover", "discovery", "scaffold", "mapping", "explain", "config",
+    "snapshot", "project", "verify", "verify-external", "evidence", "recovery", "report",
+    "compare", "dry-run", "demo", "--verification-run", "--before-verification", "--after-verification"
+)) {
     if ($rootHelp -notmatch [Regex]::Escape($requiredCommand)) {
         throw "Packaged CLI usage is missing '$requiredCommand'."
     }
+}
+if ($rootHelp -match 'PS-\d' -or
+    $rootHelp -notmatch '(?s)External Verification.*does not execute.*does not assess or qualify Recovery' -or
+    $rootHelp -notmatch '(?s)shadow dry run.*Projection.*Verification.*Recovery assessment') {
+    throw "Packaged root help contains milestone knowledge or omits the external/shadow assurance boundary."
+}
+$noArguments = Invoke-PackagedCliWithStreams $cliPath @()
+if ($noArguments.ExitCode -ne 2 -or $noArguments.Output -or $noArguments.Error -notmatch "Usage: proofshift") {
+    throw "Packaged no-argument invocation must preserve invalid-usage behavior."
+}
+$invalidCommand = Invoke-PackagedCliWithStreams $cliPath @("unknown-command", "placeholder")
+if ($invalidCommand.ExitCode -ne 2 -or $invalidCommand.Output -or $invalidCommand.Error -notmatch "Usage: proofshift") {
+    throw "Packaged invalid command must preserve invalid-usage behavior."
 }
 $help = Invoke-PackagedCli $cliPath @("demo", "--help")
 $legacyHelp = Invoke-PackagedCli $cliPath @("demo", "help")
@@ -673,6 +809,10 @@ $summaryOutput = [ordered]@{
     packageOnlyValidation = [bool] $PackageOnly
     rootHelpExitCode = $rootHelpExitCode
     rootHelpUsageValidated = $true
+    rootHelpAliasValidated = $true
+    invalidUsageValidated = $true
+    documentationLinksValid = $documentationLinksValid
+    documentedCommandsValidated = $true
     humanScenarioListValidated = $true
     shippedSampleConfigurationsValidated = $samples.Count
     pensionResetRepeatability = $pensionRepeatability
@@ -682,10 +822,99 @@ $summaryOutput = [ordered]@{
 $resultParent = Split-Path -Parent $resultFullPath
 if ($resultParent) { New-Item -ItemType Directory -Path $resultParent -Force | Out-Null }
 [IO.File]::WriteAllText($resultFullPath, (ConvertTo-Json -InputObject $summaryOutput -Depth 20), [Text.UTF8Encoding]::new($false))
+$pilotResultPath = $null
+if (-not $PackageOnly -and $ExpectedPlatform -eq "linux-x64") {
+    if ($scenarioResults.Count -ne 5 -or $null -eq $byomEvaluation -or $byomEvaluation.status -ne "PASS") {
+        throw "Pilot rehearsal result requires all five packaged demos and a passed BYOM rehearsal."
+    }
+    if (-not $byomEvaluation.sourceOfflineProven -or -not $byomEvaluation.readOnlyTargetProven -or
+        $byomEvaluation.targetMutationDetected -or $byomEvaluation.projectionArtifactsDetected -or
+        $byomEvaluation.recoveryArtifactsDetected) {
+        throw "BYOM independence evidence does not satisfy the pilot rehearsal boundary."
+    }
+    $runtimeEntries = @(& dotnet --list-runtimes)
+    if ($LASTEXITCODE -ne 0) { throw "Could not read the active .NET runtime inventory." }
+    $runtimeVersions = @($runtimeEntries | ForEach-Object {
+        if ($_ -match '^Microsoft\.NETCore\.App\s+(?<version>10\.\S+)') {
+            [Version]$Matches.version
+        }
+    } | Sort-Object -Descending)
+    if ($runtimeVersions.Count -eq 0) {
+        throw "The pilot rehearsal host has no .NET 10 runtime."
+    }
+    $sdkEntries = @(& dotnet --list-sdks)
+    if ($LASTEXITCODE -ne 0) { throw "Could not read the .NET SDK inventory." }
+    $pilotResult = [ordered]@{
+        format = "proofshift-pilot-readiness-result-v1"
+        productVersion = $manifest.productVersion
+        sourceRevision = $manifest.sourceRevision
+        sourceTree = $manifest.sourceTree
+        targetPlatform = $ExpectedPlatform
+        archiveSha256 = $archiveHash
+        contentSha256 = $manifest.contentSha256
+        dependencyLockSha256 = $manifest.dependencyLockSha256
+        runtimeVersion = $runtimeVersions[0].ToString()
+        sdkPresent = ($sdkEntries.Count -gt 0)
+        frontDoorPassed = $true
+        domainDemoCount = $scenarioResults.Count
+        domainDemosPassed = ($scenarioResults.Count -eq 5)
+        byomPassed = $true
+        sourceOfflineAfterCheckpoint = $byomEvaluation.sourceOfflineAfterCheckpoint
+        sourceOfflineProven = $byomEvaluation.sourceOfflineProven
+        readOnlyTargetProven = $byomEvaluation.readOnlyTargetProven
+        targetMutationDetected = $byomEvaluation.targetMutationDetected
+        targetUnchangedByProofShift = $byomEvaluation.targetUnchangedByProofShift
+        externalMigrationFixtureUsed = $byomEvaluation.externalMigrationFixtureUsed
+        projectionArtifactsDetected = $byomEvaluation.projectionArtifactsDetected
+        recoveryArtifactsDetected = $byomEvaluation.recoveryArtifactsDetected
+        packageOnlyExecution = $true
+        documentationLinksValid = $documentationLinksValid
+        documentedCommandsValidated = $true
+        byom = [ordered]@{
+            sourceArtifacts = $byomEvaluation.sourceArtifacts
+            defectiveTargetArtifacts = $byomEvaluation.defectiveTargetArtifacts
+            correctedTargetArtifacts = $byomEvaluation.correctedTargetArtifacts
+            seededEvidenceFindings = $byomEvaluation.seededFindingCount
+            seededFindingCodeCounts = $byomEvaluation.seededFindingCodeCounts
+            defectiveVerificationFailures = $byomEvaluation.defectiveVerificationFailures
+            correctedVerificationOutcome = $byomEvaluation.correctedVerificationOutcome
+            correctedVerificationFailures = $byomEvaluation.correctedFailureCount
+            correctedUnaccountedSources = $byomEvaluation.correctedUnaccountedSources
+            correctedUnexplainedTargets = $byomEvaluation.correctedUnexplainedTargets
+            recoveryAssessed = $byomEvaluation.recoveryAssessed
+            qualificationAvailable = $byomEvaluation.qualificationAvailable
+            correctedTargetFingerprint = $byomEvaluation.correctedTargetFingerprint
+            correctedEvidenceFingerprint = $byomEvaluation.correctedEvidenceFingerprint
+            repeatedTargetFingerprint = $byomEvaluation.repeatedTargetFingerprint
+            repeatedEvidenceFingerprint = $byomEvaluation.repeatedEvidenceFingerprint
+        }
+    }
+    $pilotResultPath = Join-Path (Split-Path -Parent $resultFullPath) "pilot-readiness-result.json"
+    $pilotResultJson = ConvertTo-Json -InputObject $pilotResult -Depth 20
+    foreach ($sensitiveOrTemporaryValue in @($extractionFullPath, $resultFullPath, $byomWorkRoot)) {
+        if ($pilotResultJson.IndexOf($sensitiveOrTemporaryValue, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            throw "Pilot readiness result unexpectedly contains temporary runner paths."
+        }
+    }
+    if ($pilotResultJson -match '(?i)(?:password|connectionstring|access[_-]?token|secret\s*=|server=|host=127\.0\.0\.1)') {
+        throw "Pilot readiness result unexpectedly contains credential or connection data."
+    }
+    [IO.File]::WriteAllText($pilotResultPath, $pilotResultJson, [Text.UTF8Encoding]::new($false))
+}
 Write-Output "Package SHA-256: $archiveHash"
 Write-Output "Package content SHA-256: $($manifest.contentSha256)"
 Write-Output "Product version: $($manifest.productVersion)"
 Write-Output "Source tree: $($manifest.sourceTree)"
 Write-Output "SDK: $($manifest.buildSdkVersion)"
+Write-Output "Evaluator front door: PASS"
 Write-Output "Fresh $ExpectedPlatform package smoke: PASS ($($scenarioResults.Count) scenarios)"
+if (-not $PackageOnly -and $ExpectedPlatform -eq "linux-x64") {
+    Write-Output "Five packaged domain demos: PASS"
+    Write-Output "BYOM external migration evaluation: PASS"
+    Write-Output "Pilot rehearsal: PASS"
+}
+elseif ($PackageOnly) {
+    Write-Output "Package-only validation: PASS"
+}
 Write-Output "Result: $resultFullPath"
+if ($pilotResultPath) { Write-Output "Pilot result: $pilotResultPath" }

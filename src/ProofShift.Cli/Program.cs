@@ -6,6 +6,12 @@ internal static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        if (args is ["--help"] or ["help"])
+        {
+            WriteHelp();
+            return 0;
+        }
+
         if (args is ["--version"] or ["version"])
         {
             Console.WriteLine($"ProofShift {VersionCommands.GetProductVersion()}");
@@ -217,5 +223,49 @@ internal static class Program
 
     private static void WriteUsage() =>
         Console.Error.WriteLine("Usage: proofshift validate <config> [--json] | proofshift plan <config> [--json] | proofshift inspect <config> [--json] | proofshift snapshot <config> [--json] | proofshift project <config> [--checkpoint <id-or-path>] [--json] | proofshift verify <config> --checkpoint <id> --projection <run-id> [--json] | proofshift verify-external <config> --checkpoint <id-or-path> --observation <label> [--json] | proofshift evidence <config> --run <verification-run-id> [--json] | proofshift recovery <config> --run <dry-run-id> [--json] | proofshift report <config> --run <dry-run-id> [--json] | proofshift report <config> --verification-run <verification-run-id> [--json] | proofshift report <dry-run-id> [--json, reads current-directory stores] | proofshift compare <config> --before <dry-run-id> --after <dry-run-id> [--json] | proofshift compare <config> --before-verification <verification-run-id> --after-verification <verification-run-id> [--json] | proofshift compare <before-dry-run-id> <after-dry-run-id> [--json, reads current-directory stores] | proofshift demo list | describe <id> | preflight <id> | run <id> | reset <id> | demo generate <output-directory> [--scale fast|large] [--seed <integer>] | demo benchmark [--scale fast|large] [--seed <integer>] | proofshift dry-run <config> [--json]");
+
+    private static void WriteHelp()
+    {
+        Console.WriteLine("""
+            ProofShift — migration assurance and evidence
+
+            Usage: proofshift <command> [arguments]
+
+            Commands:
+              version                         Show product version and package identity
+              init <path>                    Create a starter project
+              validate <config> [--strict]   Validate a project configuration
+              discover <config>              Discover configured source and target systems
+              discovery diff <source> <target>
+                                              Compare discovery results
+              scaffold / mapping             Create and review project mappings
+              explain / config               Explain effective project configuration
+              packs / rules / capabilities / connectors
+                                              Inspect installed assurance and connector options
+              plan <config>                  Compile the configured migration plan
+              inspect <config>               Inspect configured source endpoints
+              snapshot <config>              Capture a source checkpoint
+              project <config>               Project checkpoint data to an isolated shadow
+              verify <config>                Verify a shadow projection
+              verify-external <config>       Verify an externally migrated target read-only
+              evidence <config> --run <id>   Read persisted verification Evidence
+              recovery <config>               Assess Recovery for a shadow dry run
+              report <config> --verification-run <id>
+                                              Read a persisted external-verification report
+              compare <config> --before <id> --after <id>
+                                              Compare shadow dry runs
+              compare <config> --before-verification <id> --after-verification <id>
+                                              Compare persisted external-verification runs
+              dry-run <config>                Run shadow Projection, Verification, and Recovery
+              demo                           Discover and run packaged demonstrations
+
+            External Verification observes a target without writing to it. It does not execute
+            the migration and does not assess or qualify Recovery. A shadow dry run is separate:
+            it performs Projection to an isolated target, Verification, and Recovery assessment.
+
+            Start with START_HERE.md in the evaluation package. See docs/EVALUATION.md for
+            package prerequisites and the documented product workflows.
+            """);
+    }
 
 }

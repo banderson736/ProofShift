@@ -1,6 +1,6 @@
 # Compact Cross-Domain Demos
 
-These kits reuse the accepted PS-0.10F physical assurance fixtures. They are compact operator entry points, not reduced datasets or performance claims. Each run creates an isolated `.proofshift/demos/<id>` workspace and captures the test transcript, a machine-readable assurance report, and a human-readable report. The physical fixtures provision deterministic synthetic source/target data and assert their domain-specific findings and corrected Recovery results.
+The Utility, Justice, HCM, and FHIR-style kits are compact operator entry points, not reduced datasets or performance claims. Each run creates an isolated `.proofshift/demos/<id>` workspace and captures machine-readable and human-readable assurance reports. The physical fixtures provision deterministic synthetic source/target data and assert their domain-specific findings and corrected Recovery results.
 
 | Demo | Pack | Source / target artifacts | Seeded defects / findings | Corrected result | Claim boundary |
 |---|---|---:|---:|---|---|
