@@ -307,21 +307,27 @@ try {
         "budget-attributes" = "attribute-comparison"
         "budget-total" = "aggregate-total-comparison"
     }
-    $failedRuleEvidence = @($defectiveShadowEvidence.records | Where-Object {
-        $_.result -eq "Fail" -and $ruleTypes.ContainsKey([string]$_.ruleId)
-    })
+    $failedRuleEvidence = @($defectiveShadowEvidence.records | Where-Object { $_.result -eq "Fail" })
     $exceptionEvidence = @($defectiveShadowEvidence.records | Where-Object {
         $_.code -in @("ExpectedExceptionAnnotated", "ExpectedExceptionNotMatched")
     })
     $failedFindingDetails = @($failedRuleEvidence | ForEach-Object {
         $finding = $_
+        $findingRuleId = [string]$finding.ruleId
+        $findingRuleType = if ($ruleTypes.ContainsKey($findingRuleId)) {
+            $ruleTypes[$findingRuleId]
+        }
+        else {
+            "unmapped"
+        }
         $annotation = @($exceptionEvidence | Where-Object {
             @($_.inputs | Where-Object { $_.evidenceId -eq $finding.id }).Count -gt 0
         })
         [ordered]@{
             findingId = $finding.id
-            ruleId = $finding.ruleId
-            ruleType = $ruleTypes[[string]$finding.ruleId]
+            ruleId = $findingRuleId
+            ruleType = $findingRuleType
+            evidenceType = $finding.type
             findingCode = $finding.code
             expected = $finding.expected
             actual = $finding.actual

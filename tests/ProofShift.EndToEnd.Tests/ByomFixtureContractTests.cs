@@ -79,7 +79,8 @@ public sealed class ByomFixtureContractTests
 
         Assert.True(failedRuleAssertion > diagnosticOutput);
         Assert.Contains("findingId = $finding.id", runner, StringComparison.Ordinal);
-        Assert.Contains("ruleType = $ruleTypes[[string]$finding.ruleId]", runner, StringComparison.Ordinal);
+        Assert.Contains("ruleType = $findingRuleType", runner, StringComparison.Ordinal);
+        Assert.Contains("$_.result -eq \"Fail\"", runner, StringComparison.Ordinal);
         Assert.Contains("inputReferences =", runner, StringComparison.Ordinal);
         Assert.Contains("exceptionAnnotation =", runner, StringComparison.Ordinal);
         Assert.Contains("Write-Host (\"Defective shadow failed findings: \"", runner, StringComparison.Ordinal);
