@@ -24,12 +24,6 @@ CREATE TABLE IF NOT EXISTS public.work_order_history
     note varchar(120) NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS public.asset_budgets
-(
-    budget_id varchar(8) PRIMARY KEY,
-    budget_amount numeric(12,2) NOT NULL
-);
-
 CREATE ROLE proofshift_observer LOGIN PASSWORD '__BYOM_OBSERVER_PASSWORD__';
 GRANT CONNECT ON DATABASE byom TO proofshift_observer;
 GRANT USAGE ON SCHEMA public TO proofshift_observer;

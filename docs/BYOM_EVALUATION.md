@@ -32,6 +32,9 @@ checks generic row-level attributes and an exact aggregate total. A second
 run seeds one target defect and demonstrates that a matching expected
 exception is an auditable annotation only: the attribute and aggregate
 failures remain active.
+The packaged fixture isolates this workflow in separate `byom_shadow`
+databases so its budget table does not alter external-observation discovery or
+the original 102-artifact read-only Verification scenario.
 
 ## Evaluator sequence
 
@@ -40,6 +43,11 @@ SQL Server source and PostgreSQL target using the sample's setup assets and
 separate credentials. Give ProofShift the source connection only for discovery
 and checkpoint capture, and the read-only target connection for observation.
 Keep the external fixture's migration credential separate.
+For a manually invoked shadow project, set
+`PROOFSHIFT_SHADOW_SOURCE_CONNECTION` and
+`PROOFSHIFT_SHADOW_TARGET_CONNECTION` to the corresponding `byom_shadow`
+database connections; the packaged runner provisions these isolated databases
+and sets the references automatically.
 
 The package smoke runner executes both workflows. The shadow project's
 configuration and graph live under `scenarios/byom-public-works/shadow/`;

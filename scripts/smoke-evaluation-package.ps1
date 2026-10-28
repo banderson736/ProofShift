@@ -216,6 +216,7 @@ foreach ($requiredPath in @(
     (Join-Path $packageRoot "scenarios/byom-public-works/reviewed-mappings.csv"),
     (Join-Path $packageRoot "scenarios/byom-public-works/database/sqlserver-source.sql"),
     (Join-Path $packageRoot "scenarios/byom-public-works/database/postgres-target-schema.sql"),
+    (Join-Path $packageRoot "scenarios/byom-public-works/database/postgres-shadow-target-schema.sql"),
     (Join-Path $packageRoot "scenarios/byom-public-works/database/external-load-defective.sql"),
     (Join-Path $packageRoot "scenarios/byom-public-works/database/external-load-corrected.sql"),
     (Join-Path $packageRoot "scenarios/byom-public-works/shadow/proofshift.yaml"),

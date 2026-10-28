@@ -33,6 +33,12 @@ isolated PostgreSQL shadow schema, and verifies source accounting, target
 lineage and presence, mapped budget values, and the exact aggregate budget
 total of 12,780.00. Its qualified projection is expected to pass.
 
+The external-observation fixture remains in the `byom` databases and retains
+its original three-table, 102-artifact mapping surface. The runner provisions
+separate `byom_shadow` databases on both test containers for the four-table
+shadow source and target; this keeps the added budget table out of external
+discovery and preserves the external Verification fixture.
+
 The packaged `scripts/run-byom-evaluation.ps1` runner then replays the same
 checkpoint into a second isolated shadow schema and changes budget `B001`
 through the fixture's PostgreSQL administrator connection. This controlled

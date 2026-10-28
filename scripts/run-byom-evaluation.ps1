@@ -101,10 +101,10 @@ function Invoke-ObserverQuery {
 }
 
 function Invoke-SourceQuery {
-    param([string] $ContainerName, [string] $Password, [string] $SqlCmdPath, [string] $Query)
+    param([string] $ContainerName, [string] $Password, [string] $SqlCmdPath, [string] $Database, [string] $Query)
 
     return (Invoke-Docker @("exec", "--env", "SQLCMDPASSWORD=$Password", $ContainerName,
-        $SqlCmdPath, "-S", "localhost", "-U", "sa", "-d", "byom", "-C", "-b", "-h", "-1", "-W", "-Q", $Query)).Trim()
+        $SqlCmdPath, "-S", "localhost", "-U", "sa", "-d", $Database, "-C", "-b", "-h", "-1", "-W", "-Q", $Query)).Trim()
 }
 
 function Assert-ObserverWriteDenied {
@@ -138,6 +138,7 @@ foreach ($requiredPath in @(
     (Join-Path $shadowScenario "recovery/policy.yaml"),
     (Join-Path $scenarioRoot "database/sqlserver-source.sql"),
     (Join-Path $scenarioRoot "database/postgres-target-schema.sql"),
+    (Join-Path $scenarioRoot "database/postgres-shadow-target-schema.sql"),
     (Join-Path $scenarioRoot "database/external-load-defective.sql"),
     (Join-Path $scenarioRoot "database/external-load-corrected.sql"),
     (Join-Path $scenarioRoot "reviewed-mappings.csv"),
@@ -161,6 +162,8 @@ $adminPassword = "Aa1!" + [Guid]::NewGuid().ToString("N") + "Yy"
 $observerPassword = "Aa1!" + [Guid]::NewGuid().ToString("N") + "Xx"
 $sourceConnectionName = "PROOFSHIFT_SOURCE_CONNECTION"
 $targetConnectionName = "PROOFSHIFT_TARGET_CONNECTION"
+$shadowSourceConnectionName = "PROOFSHIFT_SHADOW_SOURCE_CONNECTION"
+$shadowTargetConnectionName = "PROOFSHIFT_SHADOW_TARGET_CONNECTION"
 $sourceDiscovery = Join-Path $script:WorkRoot "source-discovery"
 $targetDiscovery = Join-Path $script:WorkRoot "target-discovery"
 $scaffoldRoot = Join-Path $script:WorkRoot "scaffold"
@@ -187,23 +190,37 @@ try {
 
     $sourceSql = Join-Path $scenarioRoot "database/sqlserver-source.sql"
     $targetSql = Join-Path $script:WorkRoot "postgres-target-schema.sql"
+    $shadowTargetSql = Join-Path $script:WorkRoot "postgres-shadow-target-schema.sql"
     $schemaTemplate = [IO.File]::ReadAllText((Join-Path $scenarioRoot "database/postgres-target-schema.sql"))
     [IO.File]::WriteAllText($targetSql, $schemaTemplate.Replace("__BYOM_OBSERVER_PASSWORD__", $observerPassword),
         [Text.UTF8Encoding]::new($false))
+    Copy-Item -LiteralPath (Join-Path $scenarioRoot "database/postgres-shadow-target-schema.sql") `
+        -Destination $shadowTargetSql
     $null = Invoke-Docker @("cp", $sourceSql, "${sourceContainer}:/tmp/byom-source.sql")
     $null = Invoke-Docker @("cp", $targetSql, "${targetContainer}:/tmp/byom-target-schema.sql")
+    $null = Invoke-Docker @("cp", $shadowTargetSql, "${targetContainer}:/tmp/byom-shadow-target-schema.sql")
     $null = Invoke-Docker @("exec", "--env", "SQLCMDPASSWORD=$sourcePassword", $sourceContainer, $sqlcmd,
         "-S", "localhost", "-U", "sa", "-C", "-b", "-i", "/tmp/byom-source.sql")
     $null = Invoke-Docker @("exec", "--env", "PGPASSWORD=$adminPassword", $targetContainer,
         "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "byom", "-f", "/tmp/byom-target-schema.sql")
-    $sourceStateQuery = "SELECT CONCAT((SELECT COUNT(*) FROM dbo.assets), ':', (SELECT COUNT(*) FROM dbo.work_orders), ':', (SELECT COUNT(*) FROM dbo.work_order_history), ':', (SELECT COUNT(*) FROM dbo.asset_budgets))"
-    $sourceStateBeforeProofShift = Invoke-SourceQuery $sourceContainer $sourcePassword $sqlcmd $sourceStateQuery
+    $null = Invoke-Docker @("exec", "--env", "PGPASSWORD=$adminPassword", $targetContainer,
+        "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "postgres", "-c", "CREATE DATABASE byom_shadow")
+    $null = Invoke-Docker @("exec", "--env", "PGPASSWORD=$adminPassword", $targetContainer,
+        "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "byom_shadow", "-f", "/tmp/byom-shadow-target-schema.sql")
+    $sourceStateQuery = "SELECT CONCAT((SELECT COUNT(*) FROM dbo.assets), ':', (SELECT COUNT(*) FROM dbo.work_orders), ':', (SELECT COUNT(*) FROM dbo.work_order_history))"
+    $shadowSourceStateQuery = "SELECT CONCAT((SELECT COUNT(*) FROM dbo.assets), ':', (SELECT COUNT(*) FROM dbo.work_orders), ':', (SELECT COUNT(*) FROM dbo.work_order_history), ':', (SELECT COUNT(*) FROM dbo.asset_budgets))"
+    $sourceStateBeforeProofShift = Invoke-SourceQuery $sourceContainer $sourcePassword $sqlcmd "byom" $sourceStateQuery
+    $shadowSourceStateBeforeProofShift = Invoke-SourceQuery $sourceContainer $sourcePassword $sqlcmd "byom_shadow" $shadowSourceStateQuery
 
     $sourceConnection = "Server=127.0.0.1,$sourcePort;Database=byom;User Id=sa;Password=$sourcePassword;Encrypt=False;TrustServerCertificate=True;"
     $adminConnection = "Host=127.0.0.1;Port=$targetPort;Database=byom;Username=postgres;Password=$adminPassword;SSL Mode=Disable;"
     $observerConnection = "Host=127.0.0.1;Port=$targetPort;Database=byom;Username=proofshift_observer;Password=$observerPassword;SSL Mode=Disable;"
+    $shadowSourceConnection = $sourceConnection.Replace("Database=byom;", "Database=byom_shadow;")
+    $shadowTargetConnection = $adminConnection.Replace("Database=byom;", "Database=byom_shadow;")
     [Environment]::SetEnvironmentVariable($sourceConnectionName, $sourceConnection, "Process")
     [Environment]::SetEnvironmentVariable($targetConnectionName, $adminConnection, "Process")
+    [Environment]::SetEnvironmentVariable($shadowSourceConnectionName, $shadowSourceConnection, "Process")
+    [Environment]::SetEnvironmentVariable($shadowTargetConnectionName, $shadowTargetConnection, "Process")
 
     $null = Invoke-Product @("discover", $discoveryConfig, "--system", "source", "--endpoint", "records",
         "--output", $sourceDiscovery)
@@ -244,7 +261,7 @@ try {
     $qualifiedSchema = "proofshift_shadow_$($qualifiedProjectionId.Replace('-', ''))"
     $budgetTotalQuery = "SELECT count(*)::text || ':' || sum(budget_amount)::numeric(12,2)::text FROM `"$qualifiedSchema`".`"asset_budgets`""
     $qualifiedBudgetTotal = (Invoke-Docker @("exec", "--env", "PGPASSWORD=$adminPassword", $targetContainer,
-        "psql", "-At", "-U", "postgres", "-d", "byom", "-c", $budgetTotalQuery)).Trim()
+        "psql", "-At", "-U", "postgres", "-d", "byom_shadow", "-c", $budgetTotalQuery)).Trim()
     Assert-Equal $qualifiedBudgetTotal "$($expectations.shadow.budgetRows):$($expectations.shadow.budgetTotal)" `
         "Qualified shadow budget row count and exact total"
     $qualifiedEvidence = Invoke-ProductJson @("evidence", $shadowConfig, "--run",
@@ -272,9 +289,9 @@ try {
     $budgetTotalQuery = "SELECT count(*)::text || ':' || sum(budget_amount)::numeric(12,2)::text FROM `"$shadowSchema`".`"asset_budgets`""
     $defectSql = "UPDATE `"$shadowSchema`".`"asset_budgets`" SET `"budget_amount`" = `"budget_amount`" + 1 WHERE `"budget_id`" = 'B001'"
     $null = Invoke-Docker @("exec", "--env", "PGPASSWORD=$adminPassword", $targetContainer,
-        "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "byom", "-c", $defectSql)
+        "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "byom_shadow", "-c", $defectSql)
     $defectiveBudgetTotal = (Invoke-Docker @("exec", "--env", "PGPASSWORD=$adminPassword", $targetContainer,
-        "psql", "-At", "-U", "postgres", "-d", "byom", "-c", $budgetTotalQuery)).Trim()
+        "psql", "-At", "-U", "postgres", "-d", "byom_shadow", "-c", $budgetTotalQuery)).Trim()
     Assert-Equal $defectiveBudgetTotal "$($expectations.shadow.budgetRows):$($expectations.shadow.defectiveBudgetTotal)" `
         "Defective shadow budget row count and exact total"
     $defectiveShadowVerification = Invoke-ProductJson @("verify", $shadowConfig, "--checkpoint",
@@ -312,12 +329,18 @@ try {
     }
     Assert-Equal $defectiveShadowVerification.ruleSetFingerprint $qualifiedDryRun.ruleSetFingerprint `
         "Defective shadow run rule-set fingerprint stability"
-    Assert-Equal (Invoke-SourceQuery $sourceContainer $sourcePassword $sqlcmd $sourceStateQuery) `
+    Assert-Equal (Invoke-SourceQuery $sourceContainer $sourcePassword $sqlcmd "byom" $sourceStateQuery) `
         $sourceStateBeforeProofShift "Source state after checkpoint, shadow projection, and Verification"
-    $publicTargetCountsQuery = "SELECT (SELECT count(*) FROM public.assets)::text || ':' || (SELECT count(*) FROM public.work_orders)::text || ':' || (SELECT count(*) FROM public.work_order_history)::text || ':' || (SELECT count(*) FROM public.asset_budgets)::text"
+    Assert-Equal (Invoke-SourceQuery $sourceContainer $sourcePassword $sqlcmd "byom_shadow" $shadowSourceStateQuery) `
+        $shadowSourceStateBeforeProofShift "Shadow source state after checkpoint, projection, and Verification"
+    $publicTargetCountsQuery = "SELECT (SELECT count(*) FROM public.assets)::text || ':' || (SELECT count(*) FROM public.work_orders)::text || ':' || (SELECT count(*) FROM public.work_order_history)::text"
     $publicTargetCounts = (Invoke-Docker @("exec", "--env", "PGPASSWORD=$adminPassword", $targetContainer,
         "psql", "-At", "-U", "postgres", "-d", "byom", "-c", $publicTargetCountsQuery)).Trim()
-    Assert-Equal $publicTargetCounts "0:0:0:0" "Public target state after isolated shadow projection"
+    Assert-Equal $publicTargetCounts "0:0:0" "External public target state after isolated shadow projection"
+    $shadowPublicTargetCountsQuery = "$publicTargetCountsQuery || ':' || (SELECT count(*) FROM public.asset_budgets)::text"
+    $shadowPublicTargetCounts = (Invoke-Docker @("exec", "--env", "PGPASSWORD=$adminPassword", $targetContainer,
+        "psql", "-At", "-U", "postgres", "-d", "byom_shadow", "-c", $shadowPublicTargetCountsQuery)).Trim()
+    Assert-Equal $shadowPublicTargetCounts "0:0:0:0" "Shadow public target state after isolated shadow projection"
 
     $null = Invoke-Docker @("stop", $sourceContainer)
     $sourceState = Invoke-Docker @("inspect", "--format", "{{.State.Running}}", $sourceContainer)
@@ -484,7 +507,9 @@ SELECT
         shadowCheckpointSourceFingerprint = $shadowCheckpoint.sourceFingerprint
         shadowCheckpointManifestHash = $shadowCheckpoint.checkpointManifestHash
         sourceStateUnchanged = $true
+        shadowSourceStateUnchanged = $true
         publicTargetStateAfterShadow = $publicTargetCounts
+        shadowPublicTargetStateAfterShadow = $shadowPublicTargetCounts
         qualifiedShadowProjection = $qualifiedProjectionId
         qualifiedShadowVerification = $qualifiedDryRun.verificationOutcome
         qualifiedDryRunId = $qualifiedDryRun.dryRunId
@@ -536,6 +561,8 @@ SELECT
 finally {
     [Environment]::SetEnvironmentVariable($sourceConnectionName, $null, "Process")
     [Environment]::SetEnvironmentVariable($targetConnectionName, $null, "Process")
+    [Environment]::SetEnvironmentVariable($shadowSourceConnectionName, $null, "Process")
+    [Environment]::SetEnvironmentVariable($shadowTargetConnectionName, $null, "Process")
     foreach ($containerName in @($sourceContainer, $targetContainer)) {
         if ($containerName) {
             $null = & docker rm --force --volumes $containerName 2>$null

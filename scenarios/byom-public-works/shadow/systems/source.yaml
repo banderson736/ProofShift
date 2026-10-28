@@ -5,4 +5,4 @@ storage:
   records:
     connector: sqlserver
     connection:
-      secret: PROOFSHIFT_SOURCE_CONNECTION
+      secret: PROOFSHIFT_SHADOW_SOURCE_CONNECTION
