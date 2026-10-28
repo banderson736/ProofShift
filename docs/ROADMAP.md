@@ -246,12 +246,11 @@ Status: Accepted October 24, 2026. Exact candidate `d3529ccabe04eb1e7b8b3cf2ab64
 
 ### PS-0.11 — Pilot Readiness
 
-PS-0.11 improves ordinary operator workflows while preserving the accepted assurance engine. Each slice must retain persisted Evidence and Recovery as authoritative, keep reports presentation-only, and preserve all five accepted domain scenarios and their exact findings/qualification outcomes. Do not begin PS-1.0 or out-of-scope production/product work.
+PS-0.11 improved ordinary operator workflows while preserving the accepted assurance engine. Its slices retain persisted Evidence and Recovery as authoritative, keep reports presentation-only, and preserve all five accepted domain scenarios and their exact findings/qualification outcomes.
 
 **PS-0.11 Pilot Readiness is complete.** The program closed with PS-0.11G
 accepted on October 28, 2026. The controlled technical pilot/evaluation
-decision is GO within the documented support boundaries. PS-1.0
-implementation has not started.
+decision is GO within the documented support boundaries.
 
 #### PS-0.11A Generic Operator Reporting & Comparison
 
@@ -312,10 +311,12 @@ record](PS0_11G_PILOT_READINESS_ACCEPTANCE.md) and
 
 Out of scope: public release/tag/package publication, signing, self-contained/AOT publishing, installers, new connectors/packs, FHIR Bulk, UI/API/auth, production migration/rollback, AI authoring, assurance-engine/runtime-semantics changes, and unrelated refactoring.
 
-PS-0.11 is complete and there is no active implementation assignment.
-PS-1.0 implementation has not started and requires a new explicit
-repository-owner assignment. The provisional post-PS-0 roadmap remains
-provisional; this acceptance does not select or authorize its next area.
+PS-0.11 is complete. PS-1.0A Customer Data Evaluation & Generalized Mapping
+Foundation is explicitly assigned and In Progress on branch
+`ps-1.0a-customer-data-evaluation`. It must not be self-accepted or merged,
+and PS-1.0B requires a new explicit repository-owner assignment. The
+provisional post-PS-0 roadmap remains provisional outside the assigned 1.0A
+scope.
 
 ## Commercial validation gate after PS-0 / during PS-0
 
@@ -337,6 +338,20 @@ Primary interview questions should focus on the last migration they actually per
 ## Post-PS-0 provisional roadmap
 
 The exact sequence is market-driven.
+
+### PS-1.0A Customer Data Evaluation & Generalized Mapping Foundation
+
+Status: **In Progress**, explicitly assigned on branch
+`ps-1.0a-customer-data-evaluation` from accepted PS-0.11G baseline
+`a095c21588cbd1608b8a543cdfaab71312b596d8`. This slice adds bounded,
+read-only evaluation of customer-prepared data with deterministic scope
+binding; generalized identity/mapping authoring, supported topology and
+transformations; expected exceptions; generic reconciliation; and a synthetic
+packaged customer-shaped scenario. Every completeness claim must remain within
+the declared scope. Preserve PS-0.11 behavior and external Verification
+boundaries. See the [scope](PS1_0A_CUSTOMER_DATA_EVALUATION.md) and
+[acceptance matrix](PS1_0A_ACCEPTANCE_MATRIX.md). Do not self-accept or merge,
+or begin PS-1.0B before a new explicit assignment.
 
 Likely areas:
 

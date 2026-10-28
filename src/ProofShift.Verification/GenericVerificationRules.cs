@@ -55,7 +55,15 @@ public sealed class GenericVerificationRuleProvider : IVerificationRuleProvider
                 [new("targetNode", RuleOptionKind.Text, "Target graph node."), new("semanticType", RuleOptionKind.SemanticTypeReference, "Semantic type scope.")],
                 partitionExecution: VerificationPartitionExecution.PartitionLocal,
                 partitionKey: new VerificationPartitionKeyDefinition(VerificationPartitionBasis.ArtifactIdentity,
-                    VerificationArtifactRole.ActualTarget)))
+                    VerificationArtifactRole.ActualTarget))),
+        new("aggregate-total-comparison", definition => new AggregateTotalComparisonRule(definition),
+            new("aggregate-total-comparison", "1", "Compare exact configured numeric totals between graph-derived expected and observed target records.", VerificationScope.Aggregate,
+                [new("targetNode", RuleOptionKind.Text, "Target graph node containing the measure.", Required: true),
+                 new("semanticType", RuleOptionKind.SemanticTypeReference, "Semantic type scope.", Required: true),
+                 new("measureField", RuleOptionKind.FieldReference, "Numeric field whose exact total is compared.", Required: true)],
+                fieldRequirements: [new RuleFieldRequirement("measureField", VerificationFieldSide.Target,
+                    targetNodeOption: "targetNode")],
+                partitionExecution: VerificationPartitionExecution.Global))
     ];
 }
 
@@ -442,6 +450,93 @@ public sealed class EntityUniquenessRule(VerificationRuleDefinition definition) 
     }
 }
 
+public sealed class AggregateTotalComparisonRule(VerificationRuleDefinition definition) : VerificationRuleBase(definition)
+{
+    public override VerificationScope Scope => VerificationScope.Aggregate;
+
+    public override async IAsyncEnumerable<VerificationFinding> EvaluateAsync(VerificationExecutionContext context,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var targetNode = Option("targetNode");
+        var semanticType = Option("semanticType");
+        var measureField = Option("measureField");
+        var expected = await SumAsync(context, VerificationArtifactRole.ExpectedTarget, targetNode,
+            semanticType, measureField, cancellationToken).ConfigureAwait(false);
+        var actual = await SumAsync(context, VerificationArtifactRole.ActualTarget, targetNode,
+            semanticType, measureField, cancellationToken).ConfigureAwait(false);
+        var valid = expected.InvalidCount == 0 && actual.InvalidCount == 0 &&
+            !expected.Overflowed && !actual.Overflowed && expected.Total == actual.Total;
+        var result = valid ? EvidenceResult.Pass : EvidenceResult.Fail;
+        var explanation = valid
+            ? $"Expected and observed exact totals match for '{measureField}' in target node '{targetNode}'."
+            : $"Expected and observed exact totals do not reconcile for '{measureField}' in target node '{targetNode}'.";
+        yield return Finding(context, EvidenceType.Comparison, result, "AggregateTotalComparison",
+            $"{Id.Value}:{targetNode}:{semanticType}:{measureField}", explanation,
+            context.BindingReferences,
+            new EvidenceValue(expected.Overflowed ? new NullValue() : new DecimalValue(expected.Total)),
+            new EvidenceValue(actual.Overflowed ? new NullValue() : new DecimalValue(actual.Total)));
+
+        if (expected.InvalidCount > 0 || actual.InvalidCount > 0 || expected.Overflowed || actual.Overflowed)
+        {
+            var invalid = checked(expected.InvalidCount + actual.InvalidCount);
+            var invalidInputs = new List<EvidenceReference>();
+            if (expected.FirstInvalid is { } expectedArtifact)
+                invalidInputs.Add(ArtifactInput(context, targetNode, expectedArtifact));
+            if (actual.FirstInvalid is { } actualArtifact)
+                invalidInputs.Add(ArtifactInput(context, targetNode, actualArtifact));
+            yield return Finding(context, EvidenceType.Comparison, EvidenceResult.Fail, "AggregateInputInvalid",
+                $"{Id.Value}:{targetNode}:{semanticType}:{measureField}:invalid-input",
+                $"Aggregate comparison encountered {invalid.ToString(CultureInfo.InvariantCulture)} non-numeric or null measure values or an exact-total overflow.",
+                invalidInputs,
+                new EvidenceValue(new IntegerValue(expected.InvalidCount)),
+                new EvidenceValue(new IntegerValue(actual.InvalidCount)));
+        }
+    }
+
+    private static async Task<AggregateTotal> SumAsync(VerificationExecutionContext context,
+        VerificationArtifactRole role, string nodeKey, string semanticType, string field,
+        CancellationToken cancellationToken)
+    {
+        decimal total = 0;
+        long invalid = 0;
+        ArtifactReference? firstInvalid = null;
+        var overflowed = false;
+        await foreach (var record in context.Workspace.ReadArtifactRecordsAsync(role, nodeKey, semanticType,
+            cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            record.RequireDeclaredField(field);
+            if (!record.Values.TryGetValue(field, out var value) || value is not (IntegerValue or DecimalValue))
+            {
+                invalid++;
+                firstInvalid ??= record.Artifact;
+                continue;
+            }
+
+            var amount = value switch
+            {
+                IntegerValue integer => (decimal)integer.Value,
+                DecimalValue number => number.Value,
+                _ => throw new InvalidOperationException("Numeric value guard became inconsistent.")
+            };
+            if (overflowed) continue;
+            try
+            {
+                total = checked(total + amount);
+            }
+            catch (OverflowException)
+            {
+                overflowed = true;
+                firstInvalid ??= record.Artifact;
+            }
+        }
+
+        return new AggregateTotal(total, invalid, overflowed, firstInvalid);
+    }
+
+    private sealed record AggregateTotal(decimal Total, long InvalidCount, bool Overflowed, ArtifactReference? FirstInvalid);
+}
+
 public sealed class AttributeComparisonRule(VerificationRuleDefinition definition) : VerificationRuleBase(definition), IVerificationPartitionFindingMerger
 {
     public override VerificationScope Scope => VerificationScope.Attribute;
@@ -523,7 +618,8 @@ internal static class GenericRuleFactories
         new("target-presence", definition => new TargetPresenceRule(definition)),
         new("unexpected-target", definition => new UnexpectedTargetRule(definition)),
         new("attribute-comparison", definition => new AttributeComparisonRule(definition)),
-        new("entity-uniqueness", definition => new EntityUniquenessRule(definition))
+        new("entity-uniqueness", definition => new EntityUniquenessRule(definition)),
+        new("aggregate-total-comparison", definition => new AggregateTotalComparisonRule(definition))
     ];
 }
 

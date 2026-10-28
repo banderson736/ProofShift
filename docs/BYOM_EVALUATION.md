@@ -1,13 +1,15 @@
 # Bring-Your-Own-Migration Evaluation
 
-The packaged BYOM evaluation is an ordinary, synthetic project authored with
-ProofShift's normal configuration and discovery tools. It is not a canned
-domain demo, domain pack, migration executor, or source-code example that must
-be built from the repository.
+The packaged BYOM evaluation contains two deliberately separate workflows:
+a synthetic customer-data shadow projection and generic reconciliation, plus
+read-only Verification of a separately populated external target. Both are
+ordinary projects using ProofShift's normal configuration and CLI; neither is
+a canned domain demo, domain pack, migration executor, or source-code example
+that must be built from the repository.
 
 ## Assurance boundary
 
-The workflow separates five activities:
+The external-target workflow separates five activities:
 
 1. **ProofShift source checkpoint** — captures immutable source artifacts and
    binds them to the project configuration, graph, selectors, and source
@@ -24,6 +26,13 @@ The workflow separates five activities:
 
 > External Verification does not mutate the target and does not qualify Recovery.
 
+The independent shadow workflow uses `snapshot`, `project`, `verify`, and
+`evidence` against a synthetic PostgreSQL shadow target. Its qualified run
+checks generic row-level attributes and an exact aggregate total. A second
+run seeds one target defect and demonstrates that a matching expected
+exception is an auditable annotation only: the attribute and aggregate
+failures remain active.
+
 ## Evaluator sequence
 
 Run the sample from an extracted evaluation package. Provision the synthetic
@@ -31,6 +40,12 @@ SQL Server source and PostgreSQL target using the sample's setup assets and
 separate credentials. Give ProofShift the source connection only for discovery
 and checkpoint capture, and the read-only target connection for observation.
 Keep the external fixture's migration credential separate.
+
+The package smoke runner executes both workflows. The shadow project's
+configuration and graph live under `scenarios/byom-public-works/shadow/`;
+the target connector creates a run-isolated schema, and the fixture then
+changes only the disposable defective run. That synthetic shadow-write path
+is not the external observer path.
 
 Use ordinary product commands to discover both endpoints, scaffold a review
 draft, inspect the suggestions, import reviewed mappings, and choose the
@@ -49,6 +64,14 @@ proofshift snapshot <reviewed-project>/proofshift.yaml --json
 
 Review is mandatory. Suggestions are not approvals; strict validation must
 reject unresolved required mappings.
+
+For a customer-prepared input subset, the mapping command may additionally
+receive `--evaluation-scope-id <stable-id> --evaluation-scope-type
+customer-prepared-subset`. Use `full-declared-source` when the declared
+selector itself is the intended evaluation boundary. These classifications
+are recorded in checkpoint/report metadata; they do not prove completeness
+outside the declared boundary. Relational predicate scopes are authored
+directly in the source selector configuration.
 
 After checkpoint capture, stop or isolate the source. Run the sample's
 defective external load separately, then use the printed checkpoint ID and a

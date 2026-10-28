@@ -100,6 +100,13 @@ function Invoke-ObserverQuery {
         "psql", "-At", "-U", "proofshift_observer", "-d", "byom", "-c", $Query)).Trim()
 }
 
+function Invoke-SourceQuery {
+    param([string] $ContainerName, [string] $Password, [string] $SqlCmdPath, [string] $Query)
+
+    return (Invoke-Docker @("exec", "--env", "SQLCMDPASSWORD=$Password", $ContainerName,
+        $SqlCmdPath, "-S", "localhost", "-U", "sa", "-C", "-b", "-h", "-1", "-W", "-Q", $Query)).Trim()
+}
+
 function Assert-ObserverWriteDenied {
     param([string] $ContainerName, [string] $Password, [string] $Operation, [string] $Statement)
 
@@ -118,9 +125,17 @@ if (Test-Path -LiteralPath $script:WorkRoot) {
 }
 $scenarioRoot = Join-Path $script:PackageRoot "scenarios/byom-public-works"
 $discoveryConfig = Join-Path $scenarioRoot "discovery/proofshift.yaml"
+$shadowScenario = Join-Path $scenarioRoot "shadow"
+$shadowPackageConfig = Join-Path $shadowScenario "proofshift.yaml"
 $script:CliPath = Join-Path $script:PackageRoot "app/ProofShift.Cli.dll"
 foreach ($requiredPath in @(
     $discoveryConfig,
+    $shadowPackageConfig,
+    (Join-Path $shadowScenario "migration/graph.yaml"),
+    (Join-Path $shadowScenario "rules/rules.yaml"),
+    (Join-Path $shadowScenario "systems/source.yaml"),
+    (Join-Path $shadowScenario "systems/shadow.yaml"),
+    (Join-Path $shadowScenario "recovery/policy.yaml"),
     (Join-Path $scenarioRoot "database/sqlserver-source.sql"),
     (Join-Path $scenarioRoot "database/postgres-target-schema.sql"),
     (Join-Path $scenarioRoot "database/external-load-defective.sql"),
@@ -135,6 +150,9 @@ foreach ($requiredPath in @(
 }
 
 New-Item -ItemType Directory -Path $script:WorkRoot | Out-Null
+$shadowProject = Join-Path $script:WorkRoot "shadow-project"
+Copy-Item -LiteralPath $shadowScenario -Destination $shadowProject -Recurse
+$shadowConfig = Join-Path $shadowProject "proofshift.yaml"
 $suffix = [Guid]::NewGuid().ToString("N").Substring(0, 10)
 $sourceContainer = "proofshift-byom-source-$suffix"
 $targetContainer = "proofshift-byom-target-$suffix"
@@ -178,6 +196,8 @@ try {
         "-S", "localhost", "-U", "sa", "-C", "-b", "-i", "/tmp/byom-source.sql")
     $null = Invoke-Docker @("exec", "--env", "PGPASSWORD=$adminPassword", $targetContainer,
         "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "byom", "-f", "/tmp/byom-target-schema.sql")
+    $sourceStateQuery = "SELECT CONCAT((SELECT COUNT(*) FROM dbo.assets), ':', (SELECT COUNT(*) FROM dbo.work_orders), ':', (SELECT COUNT(*) FROM dbo.work_order_history), ':', (SELECT COUNT(*) FROM dbo.asset_budgets))"
+    $sourceStateBeforeProofShift = Invoke-SourceQuery $sourceContainer $sourcePassword $sqlcmd $sourceStateQuery
 
     $sourceConnection = "Server=127.0.0.1,$sourcePort;Database=byom;User Id=sa;Password=$sourcePassword;Encrypt=False;TrustServerCertificate=True;"
     $adminConnection = "Host=127.0.0.1;Port=$targetPort;Database=byom;Username=postgres;Password=$adminPassword;SSL Mode=Disable;"
@@ -197,7 +217,8 @@ try {
     }
     $null = Invoke-Product @("mapping", "import", "--source-discovery", $sourceDiscovery,
         "--target-discovery", $targetDiscovery, "--csv", (Join-Path $scenarioRoot "reviewed-mappings.csv"),
-        "--output", $project, "--target-role", "target", "--verification-baseline", "generic")
+        "--output", $project, "--target-role", "target", "--verification-baseline", "generic",
+        "--evaluation-scope-id", "customer-public-works", "--evaluation-scope-type", "full-declared-source")
     $configurationPath = Join-Path $project "proofshift.yaml"
     $validation = Invoke-ProductJson @("validate", $configurationPath, "--strict", "--json")
     Assert-Equal $validation.valid $true "Strict reviewed-mapping validation"
@@ -206,6 +227,97 @@ try {
     $checkpoint = Invoke-ProductJson @("snapshot", $configurationPath, "--json")
     Assert-Equal $checkpoint.status "complete" "BYOM source checkpoint status"
     Assert-Equal $checkpoint.capturedArtifacts $expectations.source.total "BYOM source checkpoint artifact count"
+
+    $shadowCheckpoint = Invoke-ProductJson @("snapshot", $shadowConfig, "--json")
+    Assert-Equal $shadowCheckpoint.status "complete" "BYOM shadow source checkpoint status"
+    Assert-Equal $shadowCheckpoint.capturedArtifacts $expectations.shadow.sourceArtifacts "BYOM shadow source checkpoint artifact count"
+    $qualifiedDryRun = Invoke-ProductJson @("dry-run", $shadowConfig, "--json")
+    Assert-Equal $qualifiedDryRun.outcome "qualified" "Qualified customer-data shadow evaluation outcome"
+    Assert-Equal $qualifiedDryRun.checkpointStatus "complete" "Qualified shadow checkpoint status"
+    Assert-Equal $qualifiedDryRun.sourceFingerprint $shadowCheckpoint.sourceFingerprint `
+        "Qualified dry-run source fingerprint against exact fixture checkpoint"
+    Assert-Equal $qualifiedDryRun.projectionStatus "succeeded" "Qualified shadow projection status"
+    Assert-Equal $qualifiedDryRun.verificationOutcome "passed" "Qualified customer-data Verification outcome"
+    Assert-Equal $qualifiedDryRun.verificationFailures 0 "Qualified customer-data Verification failures"
+    $shadowCheckpointId = $shadowCheckpoint.checkpointId
+    $qualifiedProjectionId = $qualifiedDryRun.projectionRunId
+    $qualifiedSchema = "proofshift_shadow_$($qualifiedProjectionId.Replace('-', ''))"
+    $budgetTotalQuery = "SELECT count(*)::text || ':' || sum(budget_amount)::numeric(12,2)::text FROM `"$qualifiedSchema`".`"asset_budgets`""
+    $qualifiedBudgetTotal = (Invoke-Docker @("exec", "--env", "PGPASSWORD=$adminPassword", $targetContainer,
+        "psql", "-At", "-U", "postgres", "-d", "byom", "-c", $budgetTotalQuery)).Trim()
+    Assert-Equal $qualifiedBudgetTotal "$($expectations.shadow.budgetRows):$($expectations.shadow.budgetTotal)" `
+        "Qualified shadow budget row count and exact total"
+    $qualifiedEvidence = Invoke-ProductJson @("evidence", $shadowConfig, "--run",
+        $qualifiedDryRun.verificationRunId, "--json")
+    $qualifiedEvidenceText = ConvertTo-Json -InputObject $qualifiedEvidence.records -Depth 20 -Compress
+    foreach ($requiredCode in @("SourceDisposition", "TargetLineage", "AttributeComparison", "AggregateTotalComparison")) {
+        if ($qualifiedEvidenceText -notmatch [Regex]::Escape($requiredCode)) {
+            throw "Qualified customer-data Evidence did not contain '$requiredCode'."
+        }
+    }
+    $qualifiedAggregateFinding = @($qualifiedEvidence.records | Where-Object {
+        $_.code -eq "AggregateTotalComparison" -and $_.result -eq "Pass"
+    })
+    if ($qualifiedAggregateFinding.Count -ne 1 -or
+        $qualifiedAggregateFinding[0].expected.value -ne "12780" -or
+        $qualifiedAggregateFinding[0].actual.value -ne "12780") {
+        throw "Qualified Evidence did not preserve the exact matching aggregate values."
+    }
+
+    $defectiveProjection = Invoke-ProductJson @("project", $shadowConfig, "--checkpoint",
+        $shadowCheckpointId, "--json")
+    Assert-Equal $defectiveProjection.status "succeeded" "Defective fixture shadow projection status"
+    Assert-Equal $defectiveProjection.targetArtifactCount $expectations.shadow.sourceArtifacts "Defective fixture projected target count"
+    $shadowSchema = "proofshift_shadow_$($defectiveProjection.runId.Replace('-', ''))"
+    $budgetTotalQuery = "SELECT count(*)::text || ':' || sum(budget_amount)::numeric(12,2)::text FROM `"$shadowSchema`".`"asset_budgets`""
+    $defectSql = "UPDATE `"$shadowSchema`".`"asset_budgets`" SET `"budget_amount`" = `"budget_amount`" + 1 WHERE `"budget_id`" = 'B001'"
+    $null = Invoke-Docker @("exec", "--env", "PGPASSWORD=$adminPassword", $targetContainer,
+        "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "byom", "-c", $defectSql)
+    $defectiveBudgetTotal = (Invoke-Docker @("exec", "--env", "PGPASSWORD=$adminPassword", $targetContainer,
+        "psql", "-At", "-U", "postgres", "-d", "byom", "-c", $budgetTotalQuery)).Trim()
+    Assert-Equal $defectiveBudgetTotal "$($expectations.shadow.budgetRows):$($expectations.shadow.defectiveBudgetTotal)" `
+        "Defective shadow budget row count and exact total"
+    $defectiveShadowVerification = Invoke-ProductJson @("verify", $shadowConfig, "--checkpoint",
+        $shadowCheckpointId, "--projection", $defectiveProjection.runId, "--json") 1
+    Assert-Equal $defectiveShadowVerification.outcome "failed" "Defective customer-data Verification outcome"
+    Assert-Equal $defectiveShadowVerification.failedRules $expectations.shadow.defectiveFailedRules `
+        "Defective customer-data failed rule count"
+    $defectiveShadowEvidence = Invoke-ProductJson @("evidence", $shadowConfig, "--run",
+        $defectiveShadowVerification.runId, "--json")
+    $defectiveShadowEvidenceText = ConvertTo-Json -InputObject $defectiveShadowEvidence.records -Depth 20 -Compress
+    foreach ($requiredCode in @("AttributeMismatch", "AggregateTotalComparison", "ExpectedExceptionAnnotated")) {
+        if ($defectiveShadowEvidenceText -notmatch [Regex]::Escape($requiredCode)) {
+            throw "Defective customer-data Evidence did not contain '$requiredCode'."
+        }
+    }
+    $attributeFailure = @($defectiveShadowEvidence.records | Where-Object {
+        $_.code -eq "AttributeMismatch" -and $_.result -eq "Fail"
+    })
+    $aggregateFailure = @($defectiveShadowEvidence.records | Where-Object {
+        $_.code -eq "AggregateTotalComparison" -and $_.result -eq "Fail"
+    })
+    $exceptionAnnotation = @($defectiveShadowEvidence.records | Where-Object {
+        $_.code -eq "ExpectedExceptionAnnotated" -and $_.result -eq "Warning"
+    })
+    if ($attributeFailure.Count -ne 1 -or $aggregateFailure.Count -ne 1 -or
+        $exceptionAnnotation.Count -ne 1 -or
+        $aggregateFailure[0].expected.value -ne "12780" -or
+        $aggregateFailure[0].actual.value -ne "12781") {
+        throw "Defective Evidence did not retain the exact attribute failure, aggregate mismatch, and exception annotation."
+    }
+    if (@($attributeFailure[0].inputs | Where-Object { $_.artifactId -and $_.graphNodeId }).Count -lt 3 -or
+        @($attributeFailure[0].inputs | Where-Object { $_.migrationEdgeId }).Count -lt 1 -or
+        @($exceptionAnnotation[0].inputs | Where-Object { $_.evidenceId -eq $attributeFailure[0].id }).Count -ne 1) {
+        throw "Defective finding Evidence is missing source/target/edge lineage or the annotation-to-finding reference."
+    }
+    Assert-Equal $defectiveShadowVerification.ruleSetFingerprint $qualifiedDryRun.ruleSetFingerprint `
+        "Defective shadow run rule-set fingerprint stability"
+    Assert-Equal (Invoke-SourceQuery $sourceContainer $sourcePassword $sqlcmd $sourceStateQuery) `
+        $sourceStateBeforeProofShift "Source state after checkpoint, shadow projection, and Verification"
+    $publicTargetCountsQuery = "SELECT (SELECT count(*) FROM public.assets)::text || ':' || (SELECT count(*) FROM public.work_orders)::text || ':' || (SELECT count(*) FROM public.work_order_history)::text || ':' || (SELECT count(*) FROM public.asset_budgets)::text"
+    $publicTargetCounts = (Invoke-Docker @("exec", "--env", "PGPASSWORD=$adminPassword", $targetContainer,
+        "psql", "-At", "-U", "postgres", "-d", "byom", "-c", $publicTargetCountsQuery)).Trim()
+    Assert-Equal $publicTargetCounts "0:0:0:0" "Public target state after isolated shadow projection"
 
     $null = Invoke-Docker @("stop", $sourceContainer)
     $sourceState = Invoke-Docker @("inspect", "--format", "{{.State.Running}}", $sourceContainer)
@@ -251,6 +363,17 @@ SELECT
     Assert-Equal $defective.sourceArtifactCount $expectations.source.total "Defective run source artifact count"
     Assert-Equal $defective.targetArtifactCount $expectations.defectiveTarget.total "Defective run target artifact count"
     Assert-Equal $defective.verificationFailureCount $expectations.defectiveTarget.verificationFailedRules "Defective run failed rule count"
+    Assert-Equal (@($defective.evaluationScopes).Count) 3 "Declared source evaluation scope count"
+    Assert-Equal (($defective.evaluationScopes | Measure-Object -Property artifactCount -Sum).Sum) `
+        $expectations.source.total "Declared evaluation scope artifact count"
+    if (@($defective.evaluationScopes | Where-Object {
+        $_.id -ne "customer-public-works" -or $_.type -ne "full-declared-source"
+    }).Count -gt 0) {
+        throw "External Verification did not preserve the declared full-source evaluation scope."
+    }
+    if ($defective.evaluationScopeClaimBoundary -notmatch "no result proves completeness outside them") {
+        throw "External Verification did not state the declared-scope claim boundary."
+    }
     $stateAfterDefective = Invoke-ObserverQuery $targetContainer $observerPassword $targetStateQuery
     Assert-Equal $stateAfterDefective $defectiveTargetState "Target state after read-only defective Verification"
 
@@ -279,6 +402,12 @@ SELECT
     }
     Assert-Equal $defectiveReport.recoveryAssessed $false "External report Recovery boundary"
     Assert-Equal $defectiveReport.qualificationAvailable $false "External report qualification boundary"
+    Assert-Equal (@($defectiveReport.evaluationScopes).Count) 3 "Persisted report evaluation scope count"
+    Assert-Equal (($defectiveReport.evaluationScopes | Measure-Object -Property artifactCount -Sum).Sum) `
+        $expectations.source.total "Persisted report scoped artifact count"
+    if ($defectiveReport.evaluationScopeClaimBoundary -notmatch "no result proves completeness outside them") {
+        throw "Persisted report did not state the declared-scope claim boundary."
+    }
 
     $null = Invoke-Docker @("cp", (Join-Path $scenarioRoot "database/external-load-corrected.sql"),
         "${targetContainer}:/tmp/byom-external-load-corrected.sql")
@@ -350,6 +479,33 @@ SELECT
         status = "PASS"
         projectId = "authored-project"
         sourceArtifacts = $checkpoint.capturedArtifacts
+        shadowSourceArtifacts = $shadowCheckpoint.capturedArtifacts
+        shadowCheckpointId = $shadowCheckpointId
+        shadowCheckpointSourceFingerprint = $shadowCheckpoint.sourceFingerprint
+        shadowCheckpointManifestHash = $shadowCheckpoint.checkpointManifestHash
+        sourceStateUnchanged = $true
+        publicTargetStateAfterShadow = $publicTargetCounts
+        qualifiedShadowProjection = $qualifiedProjectionId
+        qualifiedShadowVerification = $qualifiedDryRun.verificationOutcome
+        qualifiedDryRunId = $qualifiedDryRun.dryRunId
+        qualifiedOutcome = "QUALIFIED"
+        qualifiedDryRunOutcome = $qualifiedDryRun.outcome
+        qualifiedVerificationRunId = $qualifiedDryRun.verificationRunId
+        qualifiedRuleSetFingerprint = $qualifiedDryRun.ruleSetFingerprint
+        qualifiedEvidenceFingerprint = $qualifiedDryRun.verificationEvidenceFingerprint
+        qualifiedRecoveryAssessmentFingerprint = $qualifiedDryRun.recoveryAssessmentFingerprint
+        qualifiedShadowBudgetTotal = $qualifiedBudgetTotal
+        defectiveShadowProjection = $defectiveProjection.runId
+        defectiveShadowVerification = $defectiveShadowVerification.outcome
+        defectiveShadowVerificationRunId = $defectiveShadowVerification.runId
+        defectiveRuleSetFingerprint = $defectiveShadowVerification.ruleSetFingerprint
+        defectiveEvidenceFingerprint = $defectiveShadowVerification.evidenceFingerprint
+        defectiveShadowBudgetTotal = $defectiveBudgetTotal
+        expectedExceptionRemainedFailed = $defectiveShadowVerification.failedRules -eq $expectations.shadow.defectiveFailedRules
+        defectiveEvaluationOutcome = "NOT QUALIFIED"
+        defectiveRecoveryAssessment = "NOT ASSESSED"
+        qualifiedEvidenceRecords = $qualifiedEvidence.records
+        defectiveEvidenceRecords = $defectiveShadowEvidence.records
         defectiveTargetArtifacts = $defective.targetArtifactCount
         correctedTargetArtifacts = $corrected.targetArtifactCount
         seededFindingCount = $defectCount

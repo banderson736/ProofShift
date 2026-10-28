@@ -1,15 +1,16 @@
 # Public-Works Work-Order Evaluation
 
 This is a deterministic, synthetic SQL Server-to-PostgreSQL evaluation fixture
-for ProofShift's ordinary authoring and read-only external Verification
-workflow. It is not a built-in demo, domain pack, migration executor, or
-customer dataset.
+for ProofShift's ordinary authoring, shadow-projection, reconciliation, and
+read-only external Verification workflows. It is not a built-in demo, domain
+pack, migration executor, or customer dataset.
 
 ## Fixture
 
-The source contains 12 assets, 30 work orders, and 60 work-order history rows:
-102 source artifacts total. The defective external load seeds four
-independently reviewable defects:
+The external-observation graph contains 12 assets, 30 work orders, and 60
+work-order history rows: 102 source artifacts total. The separate shadow graph
+also includes 12 synthetic asset-budget rows, for 114 source artifacts. The
+defective external load seeds four independently reviewable defects:
 
 1. asset `A010` is absent;
 2. work order `W0007` has the wrong status;
@@ -23,6 +24,37 @@ attribute mismatches. The corrected target contains 102 artifacts, has no
 accounting or lineage gaps, and should pass with zero Verification failures.
 Loading the corrected fixture again should preserve target and Evidence
 fingerprints while creating new run identifiers.
+
+## Packaged shadow projection and reconciliation
+
+The `shadow/` project is independent of the external-observation project. It
+captures a source checkpoint, projects all 114 synthetic records into an
+isolated PostgreSQL shadow schema, and verifies source accounting, target
+lineage and presence, mapped budget values, and the exact aggregate budget
+total of 12,780.00. Its qualified projection is expected to pass.
+
+The packaged `scripts/run-byom-evaluation.ps1` runner then replays the same
+checkpoint into a second isolated shadow schema and changes budget `B001`
+through the fixture's PostgreSQL administrator connection. This controlled
+defect must produce both an attribute mismatch and an aggregate-total failure.
+The exact aggregate total must change to 12,781.00.
+The exact finding receives a scope-bound expected-exception annotation, but
+the Verification outcome remains failed; an annotation never waives a
+finding. The fixture owner is `synthetic-fixture-owner`, not a customer.
+
+The runner is invoked by package smoke validation and can be run directly
+against an extracted package:
+
+```powershell
+pwsh -File .\scripts\run-byom-evaluation.ps1 `
+  -PackageRoot <extracted-package-root> `
+  -WorkRoot <new-work-directory>
+```
+
+It provisions disposable local SQL Server and PostgreSQL containers, uses
+normal `snapshot`, `project`, `verify`, and `evidence` CLI commands for the
+shadow branch, and keeps those artifacts separate from the external
+read-only Verification branch below.
 
 ## Evaluator sequence
 

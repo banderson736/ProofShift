@@ -4,6 +4,8 @@ This file is a quick index. Detailed decisions may be added as ADRs under `docs/
 
 PS-0.10B authoring contracts: see [ADR-0018](adr/0018-structured-rule-authoring-contract.md). Rule-document v2 preserves typed nested values; legacy documents retain their interpretation/fingerprints. Provider-owned descriptors validate exact rule versions and configured types. This is an explicitly assigned authoring slice, not PS-0.10B acceptance.
 
+PS-1.0A evaluation-scope architecture is recorded in [ADR-0036](adr/0036-deterministic-evaluation-scopes.md). The ADR preserves legacy graph canonicalization for unscoped projects and binds scoped evaluations to deterministic graph/checkpoint/report evidence.
+
 ## Accepted decisions
 
 PS-0.10C's assigned implementation boundary is recorded in [ADR-0019](adr/0019-target-observation-and-connector-capabilities.md): independent read-only target observation, distinct shadow mutation/Recovery authority and connector capability reporting. The milestone remains In Progress; provider and format acceptance gates are not satisfied by compilation.

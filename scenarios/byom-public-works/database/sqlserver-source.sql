@@ -6,6 +6,7 @@ USE byom;
 GO
 
 DROP TABLE IF EXISTS dbo.work_order_history;
+DROP TABLE IF EXISTS dbo.asset_budgets;
 DROP TABLE IF EXISTS dbo.work_orders;
 DROP TABLE IF EXISTS dbo.assets;
 
@@ -35,6 +36,12 @@ CREATE TABLE dbo.work_order_history
     note varchar(120) NOT NULL
 );
 
+CREATE TABLE dbo.asset_budgets
+(
+    budget_id varchar(8) NOT NULL PRIMARY KEY,
+    budget_amount decimal(12,2) NOT NULL
+);
+
 DECLARE @i int = 1;
 WHILE @i <= 12
 BEGIN
@@ -46,6 +53,14 @@ BEGIN
         CASE WHEN @i % 2 = 0 THEN 'VEHICLE' ELSE 'FACILITY' END,
         CASE WHEN @i % 5 = 0 THEN 0 ELSE 1 END
     );
+    SET @i += 1;
+END;
+
+SET @i = 1;
+WHILE @i <= 12
+BEGIN
+    INSERT dbo.asset_budgets(budget_id, budget_amount)
+    VALUES (CONCAT('B', RIGHT(CONCAT('000', @i), 3)), 1000 + (@i * 10));
     SET @i += 1;
 END;
 

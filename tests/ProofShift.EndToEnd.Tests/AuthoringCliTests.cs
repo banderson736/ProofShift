@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.Text.Json;
+using ProofShift.Configuration;
 using ProofShift.Connectors.Abstractions;
 using ProofShift.Domain;
 using ProofShift.Engine;
+using ProofShift.Graph;
 using YamlDotNet.RepresentationModel;
 using Xunit;
 
@@ -399,8 +401,13 @@ public sealed class AuthoringCliTests
             var reviewed = Path.Combine(root, "confirmed");
             var import = await RunAsync("mapping", "import", "--csv", csv, "--source-discovery", sourcePath,
                 "--target-discovery", targetPath, "--output", reviewed, "--target-role", "target",
-                "--verification-baseline", "generic");
+                "--verification-baseline", "generic", "--evaluation-scope-id", "customer-scope",
+                "--evaluation-scope-type", "full-declared-source");
             Assert.True(import.ExitCode == 0, import.Error);
+            var graph = await File.ReadAllTextAsync(Path.Combine(reviewed, "migration", "graph.yaml"), TestContext.Current.CancellationToken);
+            Assert.Contains("\"evaluationScope\"", graph, StringComparison.Ordinal);
+            Assert.Contains("\"id\": \"customer-scope\"", graph, StringComparison.Ordinal);
+            Assert.Contains("\"type\": \"full-declared-source\"", graph, StringComparison.Ordinal);
             var targetSystem = await File.ReadAllTextAsync(Path.Combine(reviewed, "systems", "target.yaml"), TestContext.Current.CancellationToken);
             Assert.Contains("\"role\": \"target\"", targetSystem, StringComparison.Ordinal);
             var rules = await File.ReadAllTextAsync(Path.Combine(reviewed, "rules", "rules.yaml"), TestContext.Current.CancellationToken);
@@ -409,6 +416,129 @@ public sealed class AuthoringCliTests
             var valid = await RunAsync("validate", Path.Combine(reviewed, "proofshift.yaml"), "--strict", "--json");
             Assert.True(valid.ExitCode == 0, valid.Output + valid.Error);
             Assert.Contains("\"valid\": true", valid.Output, StringComparison.Ordinal);
+            var incompleteScope = await RunAsync("scaffold", "--source-discovery", sourcePath,
+                "--target-discovery", targetPath, "--output", Path.Combine(root, "incomplete-scope"),
+                "--evaluation-scope-id", "missing-type");
+            Assert.Equal(2, incompleteScope.ExitCode);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public async Task MappingImportEmitsExplicitFieldFanOutEdgesWithoutImplicitMerge()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-fanout-cli-{Guid.NewGuid():N}");
+        try
+        {
+            var context = new ConnectorContext("logical", "records", new ConnectorId("postgres"),
+                "discovery", "Physical.Uninterpreted", new RuntimeConfiguration([]));
+            var source = PhysicalDiscovery.Create(context, "postgres", "0.1.0",
+                [new("dbo", "records", "table",
+                    [new("id", "integer", false, 1), new("display_name", "text", false, 2)],
+                    [new("pk", true, ["id"])], [])]);
+            var target = PhysicalDiscovery.Create(context, "postgres", "0.1.0",
+                [
+                    new("public", "records", "table",
+                        [new("id", "integer", false, 1), new("display_name", "text", false, 2)],
+                        [new("pk", true, ["id"])], []),
+                    new("public", "search", "table",
+                        [new("id", "integer", false, 1), new("search_label", "text", false, 2)],
+                        [new("pk", true, ["id"])], [])
+                ]);
+            var sourcePath = Path.Combine(root, "source-discovery");
+            var targetPath = Path.Combine(root, "target-discovery");
+            await PhysicalDiscoveryStore.SaveAsync(sourcePath, source, TestContext.Current.CancellationToken);
+            await PhysicalDiscoveryStore.SaveAsync(targetPath, target, TestContext.Current.CancellationToken);
+            var csv = Path.Combine(root, "fanout.csv");
+            await File.WriteAllTextAsync(csv, """
+                Source Entity,Source Field,Target Entity,Target Field,Transformation,Required,Notes,Review Status,Role
+                dbo.records,id,public.records,id,copy,true,,confirmed,identity
+                dbo.records,display_name,public.records,display_name,copy,true,,confirmed,attribute
+                dbo.records,id,public.search,id,copy,true,,confirmed,identity
+                dbo.records,display_name,public.search,search_label,copy,true,,confirmed,attribute
+                """, TestContext.Current.CancellationToken);
+            var project = Path.Combine(root, "project");
+            var import = await RunAsync("mapping", "import", "--csv", csv,
+                "--source-discovery", sourcePath, "--target-discovery", targetPath,
+                "--output", project, "--target-role", "target", "--verification-baseline", "generic",
+                "--evaluation-scope-id", "customer-cohort",
+                "--evaluation-scope-type", "full-declared-source");
+            Assert.True(import.ExitCode == 0, import.Output + import.Error);
+
+            var graphText = await File.ReadAllTextAsync(
+                Path.Combine(project, "migration", "graph.yaml"), TestContext.Current.CancellationToken);
+            using var reader = new StringReader(graphText);
+            var yaml = new YamlStream();
+            yaml.Load(reader);
+            var graph = Assert.IsType<YamlMappingNode>(yaml.Documents.Single().RootNode);
+            var nodes = Assert.IsType<YamlMappingNode>(graph.Children[new YamlScalarNode("nodes")]);
+            var edges = Assert.IsType<YamlMappingNode>(graph.Children[new YamlScalarNode("edges")]);
+            Assert.Equal(2, edges.Children.Count);
+            Assert.Equal(2, nodes.Children.Keys.Count(node =>
+                node is YamlScalarNode scalar && scalar.Value?.StartsWith("target-", StringComparison.Ordinal) == true));
+            var emittedTargets = new SortedSet<string>(StringComparer.Ordinal);
+            foreach (var edgeNode in edges.Children.Values)
+            {
+                var edge = Assert.IsType<YamlMappingNode>(edgeNode);
+                var sources = Assert.IsType<YamlSequenceNode>(edge.Children[new YamlScalarNode("from")]);
+                var targets = Assert.IsType<YamlSequenceNode>(edge.Children[new YamlScalarNode("to")]);
+                Assert.Single(sources.Children);
+                Assert.Single(targets.Children);
+                Assert.Equal("source-0", Assert.IsType<YamlScalarNode>(sources.Children.Single()).Value);
+                var targetNode = Assert.IsType<YamlScalarNode>(targets.Children.Single()).Value;
+                Assert.NotNull(targetNode);
+                emittedTargets.Add(targetNode);
+                var operation = Assert.IsType<YamlMappingNode>(edge.Children[new YamlScalarNode("operation")]);
+                Assert.Equal("transform", Assert.IsType<YamlScalarNode>(
+                    operation.Children[new YamlScalarNode("type")]).Value);
+            }
+            Assert.Equal(2, emittedTargets.Count);
+            Assert.Contains("target-0", emittedTargets);
+            Assert.Contains("target-1", emittedTargets);
+            var validation = await RunAsync("validate", Path.Combine(project, "proofshift.yaml"), "--strict", "--json");
+            Assert.True(validation.ExitCode == 0, validation.Output + validation.Error);
+
+            var loaded = await new ConfigurationLoader(requireEnvironmentValues: false)
+                .LoadAsync(Path.Combine(project, "proofshift.yaml"), TestContext.Current.CancellationToken);
+            Assert.NotNull(loaded.Configuration);
+            var compiled = MigrationGraphCompiler.Compile(loaded.Configuration);
+            Assert.True(compiled.IsValid, string.Join(Environment.NewLine, compiled.Issues.Select(issue => issue.Message)));
+            var compiledGraph = compiled.Graph!;
+            var sourceNode = compiledGraph.Nodes.Single(node => node.Name == "source-0");
+            var sourceRecord = new RecordEnvelope(
+                new ArtifactReference(new ArtifactId("source-record-1"), sourceNode.SystemId,
+                    sourceNode.EndpointId, "record", "id:7"),
+                sourceNode.SemanticType,
+                [
+                    new KeyValuePair<string, ValueNode>("id", new IntegerValue(7)),
+                    new KeyValuePair<string, ValueNode>("display_name", new StringValue("Fanout Example"))
+                ],
+                new ProvenanceMetadata(new ConnectorId("postgres"), sourceNode.EndpointId,
+                    "source-record-1", DateTimeOffset.UtcNow));
+            var outputs = compiledGraph.Edges.SelectMany(edge => edge.Targets.Select(targetId =>
+                GraphTransformationRuntime.Transform(sourceRecord, edge,
+                    compiledGraph.Nodes.Single(node => node.Id == targetId)))).ToArray();
+            Assert.Equal(2, outputs.Length);
+            foreach (var output in outputs)
+            {
+                Assert.Equal(new IntegerValue(7), output.Values["id"]);
+                Assert.Equal("source-record-1", output.Provenance.Metadata["projectionSource"]);
+                var edge = compiledGraph.Edges.Single(edge =>
+                    edge.Name == output.Provenance.Metadata["projectionEdge"]);
+                Assert.Equal(sourceNode.Id, Assert.Single(edge.Sources));
+                var targetNode = compiledGraph.Nodes.Single(node => node.Id == Assert.Single(edge.Targets));
+                if (targetNode.Name == "target-0")
+                {
+                    Assert.Equal("Fanout Example", Assert.IsType<StringValue>(output.Values["display_name"]).Value);
+                    Assert.False(output.Values.ContainsKey("search_label"));
+                }
+                else
+                {
+                    Assert.Equal("target-1", targetNode.Name);
+                    Assert.Equal("Fanout Example", Assert.IsType<StringValue>(output.Values["search_label"]).Value);
+                    Assert.False(output.Values.ContainsKey("display_name"));
+                }
+            }
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
     }

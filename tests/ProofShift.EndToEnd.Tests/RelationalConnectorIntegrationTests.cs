@@ -264,6 +264,15 @@ public sealed class RelationalConnectorIntegrationTests
             Assert.IsType<LocalDateTimeValue>(rows[0].Values["local_at"]).Value);
         Assert.All(rows, row => Assert.Equal("pg-source", row.Artifact.SystemId.Value));
 
+        var scopedSelector = new ArtifactSelector("table",
+            [new KeyValuePair<string, string>("name", "assurance.member_rows")], CompositePostgresKey,
+            new EvaluationScope("inactive-members", EvaluationScopeType.BoundedEvaluation,
+                [new EvaluationPredicate("active", EvaluationPredicateOperator.Equals, ["false"])]));
+        var scopedRows = await ReadAllAsync(connector.ReadAsync(context, scopedSelector, new ReadOptions(),
+            TestContext.Current.CancellationToken));
+        Assert.Equal(50, scopedRows.Count);
+        Assert.All(scopedRows, row => Assert.Equal(new BooleanValue(false), row.Values["active"]));
+
         var postgresResolver = Assert.IsAssignableFrom<ISourceBinaryContentResolver>(connector);
         await using (var binaryStream = await postgresResolver.OpenBinaryReadAsync(
             context, selector, rows[0].Artifact, postgresBinary, TestContext.Current.CancellationToken))

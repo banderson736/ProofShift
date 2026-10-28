@@ -6,6 +6,13 @@
     "history": 60,
     "total": 102
   },
+  "shadow": {
+    "sourceArtifacts": 114,
+    "budgetRows": 12,
+    "budgetTotal": "12780.00",
+    "defectiveBudgetTotal": "12781.00",
+    "defectiveFailedRules": 2
+  },
   "defectiveTarget": {
     "assets": 11,
     "workOrders": 30,

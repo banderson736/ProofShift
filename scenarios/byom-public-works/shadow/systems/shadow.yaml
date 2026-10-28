@@ -1,0 +1,8 @@
+id: shadow
+name: Synthetic PostgreSQL Shadow
+role: shadow-target
+storage:
+  records:
+    connector: postgres
+    connection:
+      secret: PROOFSHIFT_TARGET_CONNECTION

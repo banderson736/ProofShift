@@ -66,6 +66,9 @@ business, regulatory, production, or rollback approval. For external
 Verification, qualification is unavailable.
 
 Read [the evaluation guide](docs/EVALUATION.md), [the BYOM guide](docs/BYOM_EVALUATION.md),
+[the customer evaluation runbook](docs/CUSTOMER_EVALUATION_RUNBOOK.md),
+[the customer data preparation guide](docs/CUSTOMER_DATA_PREPARATION.md),
+[the generalized mapping guide](docs/GENERALIZED_MAPPING_GUIDE.md), [the reconciliation rule guide](docs/RECONCILIATION_RULE_GUIDE.md),
 [the pilot evaluator guide](docs/PILOT_EVALUATOR_GUIDE.md), and
 [the pilot intake checklist](docs/PILOT_INTAKE_CHECKLIST.md) before arranging
 a controlled evaluation. Also review the [license](LICENSE) and

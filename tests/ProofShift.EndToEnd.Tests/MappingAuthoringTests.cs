@@ -49,6 +49,8 @@ public sealed class MappingAuthoringTests
         Assert.Equal("suggested", matched.ReviewStatus);
         Assert.Contains("normalized-name-match", matched.Reasons);
         Assert.Contains("source-primary-key", matched.Reasons);
+        Assert.Equal("identity", matched.Role);
+        Assert.Empty(matched.Pipeline);
         Assert.Equal("unmapped", first.Mappings.Single(mapping => mapping.SourceField == "Unmapped_Status").ReviewStatus);
         Assert.True(first.Mappings.All(mapping => mapping.Required));
         var ambiguousTarget = Artifact("target", target.Objects.Concat([target.Objects[0] with { Schema = "other" }]).ToArray());
@@ -67,13 +69,61 @@ public sealed class MappingAuthoringTests
         Assert.Equal("confirmed", Assert.Single(valid.Mappings).ReviewStatus);
         using var invalidReader = new StringReader(header +
             "dbo.records,id,public.records,id,copy,true,,suggested\n" +
+            "dbo.records,id,public.records,id,script,maybe,,approved\n" +
             "dbo.records,id,public.records,unknown,script,maybe,,approved\n");
         var invalid = await new CsvMappingImporter().ImportAsync(invalidReader, source, target, TestContext.Current.CancellationToken);
         Assert.Contains(invalid.Issues, issue => issue.Code == "PSIMPORT002" && issue.Row == 3);
-        Assert.Contains(invalid.Issues, issue => issue.Code == "PSIMPORT004" && issue.Row == 3);
+        Assert.Contains(invalid.Issues, issue => issue.Code == "PSIMPORT004" && issue.Row == 4);
         Assert.Contains(invalid.Issues, issue => issue.Code == "PSIMPORT005");
         Assert.Contains(invalid.Issues, issue => issue.Code == "PSIMPORT006");
         Assert.Contains(invalid.Issues, issue => issue.Code == "PSIMPORT007");
+    }
+
+    [Fact]
+    public async Task CsvImportSupportsIdentityRolesPipelinesAndSplitFieldMappings()
+    {
+        var source = Artifact("source", [new("dbo", "records", "table",
+            [new("id", "int", false, 1), new("display_name", "text", true, 2)],
+            [new("pk", true, ["id"])], [])]);
+        var target = Artifact("target", [
+            new("public", "records", "table", [new("id", "integer", false, 1)], [new("pk", true, ["id"])], []),
+            new("public", "names", "table", [new("label", "text", true, 1)], [], []),
+            new("public", "search", "table", [new("display_name", "text", true, 1)], [], [])
+        ]);
+        const string header = "Source Entity,Source Field,Target Entity,Target Field,Transformation,Required,Notes,Review Status,Role,Pipeline\n";
+        const string rows = """
+            dbo.records,id,public.records,id,copy,true,,confirmed,identity,[]
+            dbo.records,display_name,public.names,label,copy,true,,confirmed,attribute,"[{""type"":""trim"",""version"":""1""},{""type"":""normalize-string"",""version"":""1""}]"
+            dbo.records,display_name,public.search,display_name,copy,true,,confirmed,attribute,"[{""type"":""trim"",""version"":""1""}]"
+            """;
+        using var reader = new StringReader(header + rows + "\n");
+        var imported = await new CsvMappingImporter().ImportAsync(reader, source, target,
+            TestContext.Current.CancellationToken);
+
+        Assert.Empty(imported.Issues);
+        var identity = imported.Mappings.Single(mapping => mapping.Role == "identity");
+        Assert.Empty(identity.Pipeline);
+        var splitFields = imported.Mappings.Where(mapping => mapping.SourceField == "display_name").ToArray();
+        Assert.Equal(2, splitFields.Length);
+        Assert.Equal(["trim", "normalize-string"], splitFields.Single(mapping =>
+            mapping.TargetEntity == "public.names").Pipeline.Select(step => step.Type));
+        Assert.Equal(["trim"], splitFields.Single(mapping =>
+            mapping.TargetEntity == "public.search").Pipeline.Select(step => step.Type));
+    }
+
+    [Fact]
+    public async Task CsvImportRejectsValueChangingIdentityPipelines()
+    {
+        var source = Artifact("source", [new("dbo", "records", "table", [new("id", "int", false, 1)], [], [])]);
+        var target = Artifact("target", [new("public", "records", "table", [new("id", "int", false, 1)], [], [])]);
+        const string csv = """
+            Source Entity,Source Field,Target Entity,Target Field,Transformation,Required,Notes,Review Status,Role,Pipeline
+            dbo.records,id,public.records,id,copy,true,,confirmed,identity,"[{""type"":""trim""}]"
+            """;
+        using var reader = new StringReader(csv);
+        var imported = await new CsvMappingImporter().ImportAsync(reader, source, target,
+            TestContext.Current.CancellationToken);
+        Assert.Contains(imported.Issues, issue => issue.Code == "PSIMPORT010");
     }
 
     private static PhysicalDiscoveryArtifact Artifact(string endpoint, IReadOnlyList<PhysicalObject> objects) =>

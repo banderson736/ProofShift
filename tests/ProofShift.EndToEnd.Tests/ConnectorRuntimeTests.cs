@@ -15,6 +15,24 @@ namespace ProofShift.EndToEnd.Tests;
 public sealed class ConnectorRuntimeTests
 {
     [Fact]
+    public async Task CsvConnectorFailsClosedForUnsupportedEvaluationPredicates()
+    {
+        var connector = new CsvSourceConnector();
+        var selector = new ArtifactSelector("csv",
+            [new KeyValuePair<string, string>("path", "members.csv")], ["member_id"],
+            new EvaluationScope("active-members", EvaluationScopeType.BoundedEvaluation,
+                [new EvaluationPredicate("status", EvaluationPredicateOperator.Equals, ["ACTIVE"])]));
+        var context = Context("csv",
+            [new KeyValuePair<string, string>("root", Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")))]);
+
+        var exception = await Assert.ThrowsAsync<ConnectorReadException>(() =>
+            ReadAllAsync(connector.ReadAsync(context, selector, new ReadOptions(),
+                TestContext.Current.CancellationToken)));
+
+        Assert.Equal(ConnectorIssueCodes.EvaluationScopeUnsupported, exception.Code);
+    }
+
+    [Fact]
     public async Task FilesystemConnectorInspectsAndStreamsRelativeFileArtifactsWithSha256()
     {
         var root = CreateTemporaryDirectory();

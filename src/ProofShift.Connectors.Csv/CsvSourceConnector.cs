@@ -170,6 +170,7 @@ public sealed class CsvSourceConnector : ICheckpointSourceConnector, IPhysicalDi
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(selector);
         ArgumentNullException.ThrowIfNull(options);
+        EvaluationScopeCapability.Validate(this, selector);
         if (options.Partition.Count > 0)
         {
             throw new ConnectorReadException(ConnectorIssueCodes.PartitioningUnsupported,

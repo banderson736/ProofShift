@@ -18,6 +18,7 @@ proofshift discover my-project/proofshift.yaml --system source --endpoint record
 proofshift discovery diff discovery/source discovery/source-later --json
 proofshift scaffold --source-discovery discovery/source --target-discovery discovery/target --output suggested-project
 proofshift mapping import --csv reviewed.csv --source-discovery discovery/source --target-discovery discovery/target --output reviewed-project
+proofshift mapping import --csv reviewed.csv --source-discovery discovery/source --target-discovery discovery/target --output reviewed-project --evaluation-scope-id customer-cohort --evaluation-scope-type customer-prepared-subset
 proofshift explain reviewed-project/proofshift.yaml project --json
 proofshift explain reviewed-project/proofshift.yaml rule accounting --json
 proofshift explain reviewed-project/proofshift.yaml mapping mapping-0 --json
@@ -109,6 +110,15 @@ Discovery artifacts contain connector/version, logical endpoint identity, observ
 Diff detects objects/fields added/removed, type/nullability changes, and primary/unique/foreign-key changes. Scaffolds expose exact/normalized-name matches, compatible type families and key-role reasons as suggestions only. Ambiguous/unmapped required fields remain visible. Drafts with keyless/unsupported shapes include normal compiler diagnostics; no validation/execution bypass exists. Strict validation rejects unconfirmed required suggestions. Physical similarity never asserts Pension/business semantics.
 
 CSV import uses `IMappingImporter`, documented stable headers, and located `PSIMPORT001`-`PSIMPORT007` failures for unknown fields/objects, duplicate/ambiguous source or target mappings, unsupported transforms and invalid required/review values. Omitted source fields stay unresolved. Executable imports use normal loader/compiler/rule checks. Initial transforms are copy, trim and normalize-string; artifact exclusion remains an authored graph operation. XLSX is deferred without spreadsheet dependencies.
+
+For an explicitly scoped customer evaluation, authoring commands accept the
+paired `--evaluation-scope-id` and `--evaluation-scope-type` options. These
+authoring options support `full-declared-source` and
+`customer-prepared-subset`; relational `bounded-evaluation` predicates must
+currently be authored in the graph configuration. The scope is applied to
+source selectors only and is included in checkpoint and Verification binding.
+It limits the result claim; it does not establish completeness beyond the
+declared source selector or customer-prepared input.
 
 ## Reusable Maps And Effective Meaning
 

@@ -1,6 +1,8 @@
 using ProofShift.Configuration;
 using ProofShift.Domain;
 using ProofShift.Verification;
+using System.Security.Cryptography;
+using System.Text;
 using Xunit;
 
 namespace ProofShift.Verification.Tests;
@@ -63,6 +65,161 @@ public sealed class VerificationRuleConfigurationTests
 
         Assert.Equal(registry.Resolve([first]).Fingerprint, registry.Resolve([same]).Fingerprint);
         Assert.NotEqual(registry.Resolve([first]).Fingerprint, registry.Resolve([changed]).Fingerprint);
+    }
+
+    [Fact]
+    public void ExpectedExceptionAnnotationsAreScopeBoundAuditedAndNeverWaiveFindings()
+    {
+        ConfigurationScalarNode Text(string value) => new(ConfigurationScalarKind.Text, value);
+        ConfigurationMappingNode Map(params (string Key, ConfigurationDocumentNode Value)[] pairs) =>
+            new(pairs.Select(pair => new KeyValuePair<string, ConfigurationDocumentNode>(pair.Key, pair.Value)));
+        var exception = Map(
+            ("id", Text("known-difference")),
+            ("ruleId", Text("attributes")),
+            ("findingCode", Text("AttributeMismatch")),
+            ("targetNode", Text("target-records")),
+            ("artifactIdSha256", Text(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("T-42"))).ToLowerInvariant())),
+            ("evaluationScopeId", Text("cohort-2026")),
+            ("reason", Text("Approved source-system legacy code discrepancy.")),
+            ("owner", Text("data-owner")));
+        var ruleFile = Map(
+            ("version", Text("2")),
+            ("rules", Map(("attributes", Map(
+                ("type", Text("attribute-comparison")),
+                ("version", Text("1")),
+                ("severity", Text("error")),
+                ("attribute", Text("status")))))),
+            ("expectedExceptions", new ConfigurationSequenceNode([exception])));
+        var loaded = new LoadedProjectConfiguration(
+            new RootConfigurationDto(1, new ProjectConfigurationDto("test", "Synthetic"), null, [], null, "rules.yaml", null),
+            [], [], [new ReferencedConfigurationFile(ConfigurationFileKind.VerificationRules, "rules.yaml", "synthetic", ruleFile)],
+            "canonical", new string('a', 64));
+        var configuredRules = VerificationRuleConfigurationLoader.Load(loaded);
+        var registry = new VerificationRuleRegistry([new GenericVerificationRuleProvider()]);
+        var ruleSet = registry.Resolve(configuredRules);
+        var withoutAnnotation = registry.Resolve(configuredRules.Take(configuredRules.Count));
+        Assert.Single(ruleSet.ExpectedExceptions);
+        Assert.False(ruleSet.ExpectedExceptions is ExpectedExceptionAnnotation[]);
+        Assert.NotEqual(withoutAnnotation.Fingerprint, ruleSet.Fingerprint);
+
+        var sourceId = new MigrationNodeId(Guid.NewGuid());
+        var otherSourceId = new MigrationNodeId(Guid.NewGuid());
+        var targetId = new MigrationNodeId(Guid.NewGuid());
+        var source = new MigrationNode(sourceId, "source-records", MigrationNodeType.Source, "Generic.Record",
+            new SystemId("source"), new StorageEndpointId("records"),
+            new ArtifactSelector("table", identityFields: ["id"],
+                evaluationScope: new EvaluationScope("cohort-2026", EvaluationScopeType.FullDeclaredSource)));
+        var otherSource = new MigrationNode(otherSourceId, "other-source-records", MigrationNodeType.Source,
+            "Generic.Record", new SystemId("other-source"), new StorageEndpointId("records"),
+            new ArtifactSelector("table", identityFields: ["id"],
+                evaluationScope: new EvaluationScope("other-cohort", EvaluationScopeType.FullDeclaredSource)));
+        var target = new MigrationNode(targetId, "target-records", MigrationNodeType.Target, "Generic.Record",
+            new SystemId("target"), new StorageEndpointId("records"),
+            new ArtifactSelector("table", identityFields: ["id"]));
+        var graph = new MigrationGraph(new MigrationGraphId(Guid.NewGuid()), [source, otherSource, target], [],
+            new string('b', 64), "test");
+        var started = DateTimeOffset.UtcNow;
+        var endpoint = new CheckpointEndpoint("source-records", source.SystemId, source.EndpointId,
+            new ConnectorId("postgres"), "1", new string('c', 64), ["id"], started, started,
+            SourceConsistencyGuarantee.Observed, CheckpointGuarantee.Materialized, true, 1, 1,
+            new string('d', 64), "segment", new string('e', 64), 1,
+            evaluationScopeId: "cohort-2026", evaluationScopeType: "full-declared-source",
+            evaluationScopeFingerprint: source.Selector.EvaluationScope!.Fingerprint);
+        var otherEndpoint = new CheckpointEndpoint("other-source-records", otherSource.SystemId,
+            otherSource.EndpointId, new ConnectorId("postgres"), "1", new string('c', 64), ["id"],
+            started, started, SourceConsistencyGuarantee.Observed, CheckpointGuarantee.Materialized,
+            true, 0, 0, new string('d', 64), "other-segment", new string('e', 64), 1,
+            evaluationScopeId: "other-cohort", evaluationScopeType: "full-declared-source",
+            evaluationScopeFingerprint: otherSource.Selector.EvaluationScope!.Fingerprint);
+        var checkpoint = new SourceCheckpoint(new CheckpointId(Guid.NewGuid()), CheckpointStatus.Complete,
+            "test", new string('a', 64), graph.GraphHash, started, started, TimeSpan.Zero, false,
+            true, CheckpointGuarantee.Materialized, [endpoint, otherEndpoint], 1, 1, new string('f', 64), new string('1', 64));
+        var finding = new VerificationFinding(EvidenceType.Comparison, EvidenceResult.Fail, EvidenceSeverity.Error,
+            "AttributeMismatch", "A target attribute differs.", "finding-42",
+            [
+                new EvidenceReference(artifactId: new ArtifactId("S-42"), graphNodeId: sourceId),
+                new EvidenceReference(artifactId: new ArtifactId("T-42"), graphNodeId: targetId)
+            ],
+            ruleId: new RuleId("attributes"));
+
+        var records = VerificationService.CreateExpectedExceptionEvidenceRecords(new RunId(Guid.NewGuid()),
+            [finding], ruleSet, graph, checkpoint);
+
+        var annotation = Assert.Single(records);
+        Assert.Equal(EvidenceResult.Warning, annotation.Result);
+        Assert.Equal("ExpectedExceptionAnnotated", annotation.Code);
+        Assert.Contains("not waived", annotation.Explanation, StringComparison.Ordinal);
+        Assert.Contains("Approved source-system legacy code discrepancy.", annotation.Explanation, StringComparison.Ordinal);
+        Assert.Contains(annotation.Inputs, input => input.EvidenceId is not null);
+        Assert.Equal(EvidenceResult.Fail, finding.Result);
+
+        var otherScopeFinding = new VerificationFinding(EvidenceType.Comparison, EvidenceResult.Fail,
+            EvidenceSeverity.Error, "AttributeMismatch", "A target attribute differs.", "finding-42",
+            [
+                new EvidenceReference(artifactId: new ArtifactId("S-99"), graphNodeId: otherSourceId),
+                new EvidenceReference(artifactId: new ArtifactId("T-42"), graphNodeId: targetId)
+            ],
+            ruleId: new RuleId("attributes"));
+        var unmatched = Assert.Single(VerificationService.CreateExpectedExceptionEvidenceRecords(
+            new RunId(Guid.NewGuid()), [otherScopeFinding], ruleSet, graph, checkpoint));
+        Assert.Equal(EvidenceResult.NotApplicable, unmatched.Result);
+        Assert.Equal("ExpectedExceptionNotMatched", unmatched.Code);
+    }
+
+    [Fact]
+    public void ExpectedExceptionConfigurationRejectsMalformedHashesDuplicatesAndUnknownProperties()
+    {
+        ConfigurationScalarNode Text(string value) => new(ConfigurationScalarKind.Text, value);
+        ConfigurationMappingNode Map(params (string Key, ConfigurationDocumentNode Value)[] pairs) =>
+            new(pairs.Select(pair => new KeyValuePair<string, ConfigurationDocumentNode>(pair.Key, pair.Value)));
+        ConfigurationMappingNode Exception(string id, string artifactHash, string scopeId,
+            bool includeUnknownProperty = false)
+        {
+            var properties = new List<(string Key, ConfigurationDocumentNode Value)>
+            {
+                ("id", Text(id)),
+                ("ruleId", Text("attributes")),
+                ("findingCode", Text("AttributeMismatch")),
+                ("targetNode", Text("target-records")),
+                ("artifactIdSha256", Text(artifactHash)),
+                ("evaluationScopeId", Text(scopeId)),
+                ("reason", Text("Approved synthetic evaluation difference.")),
+                ("owner", Text("data-owner"))
+            };
+            if (includeUnknownProperty) properties.Add(("futureField", Text("unsupported")));
+            return Map(properties.ToArray());
+        }
+
+        LoadedProjectConfiguration Project(params ConfigurationMappingNode[] exceptions)
+        {
+            var ruleDocument = Map(
+                ("version", Text("2")),
+                ("rules", Map(("attributes", Map(
+                    ("type", Text("attribute-comparison")),
+                    ("version", Text("1")),
+                    ("severity", Text("error")),
+                    ("attribute", Text("status")))))),
+                ("expectedExceptions", new ConfigurationSequenceNode(exceptions)));
+            return new LoadedProjectConfiguration(
+                new RootConfigurationDto(1, new ProjectConfigurationDto("test", "Synthetic"), null, [], null, "rules.yaml", null),
+                [], [], [new ReferencedConfigurationFile(ConfigurationFileKind.VerificationRules,
+                    "rules.yaml", "synthetic", ruleDocument)], "canonical", new string('a', 64));
+        }
+
+        VerificationRuleException Invalid(params ConfigurationMappingNode[] exceptions) =>
+            Assert.Throws<VerificationRuleException>(() =>
+                VerificationRuleConfigurationLoader.Load(Project(exceptions)));
+
+        const string firstHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const string secondHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        Assert.Equal("PSRULE013", Invalid(Exception("bad-hash", "not-a-hash", "cohort")).Code);
+        Assert.Equal("PSRULE013", Invalid(Exception("unknown-property", firstHash, "cohort", true)).Code);
+        Assert.Equal("PSRULE013", Invalid(
+            Exception("duplicate-id", firstHash, "cohort"),
+            Exception("duplicate-id", secondHash, "cohort")).Code);
+        Assert.Equal("PSRULE013", Invalid(
+            Exception("first-match", firstHash, "cohort"),
+            Exception("second-match", firstHash, "cohort")).Code);
     }
 
     [Fact]

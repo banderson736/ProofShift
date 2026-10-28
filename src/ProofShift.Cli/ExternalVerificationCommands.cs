@@ -101,6 +101,7 @@ internal static class ExternalVerificationCommands
             var runStore = new FileSystemExternalVerificationRunStore(projectDirectory);
             await runStore.SaveAsync(configuration.Root.Project.Id, result, cancellation.Token).ConfigureAwait(false);
             var output = await CreateOutputAsync(projectDirectory, result, evidenceReceipt.RelativePath,
+                checkpoint.Manifest,
                 cancellation.Token).ConfigureAwait(false);
             WriteResult(output, jsonOutput);
             return result.Run.Outcome is VerificationOutcome.Passed or VerificationOutcome.PassedWithWarnings ? 0 : 1;
@@ -200,7 +201,8 @@ internal static class ExternalVerificationCommands
     }
 
     private static async Task<ExternalVerificationOutput> CreateOutputAsync(string projectDirectory,
-        ExternalVerificationResult result, string evidencePath, CancellationToken cancellationToken)
+        ExternalVerificationResult result, string evidencePath, SourceCheckpoint checkpoint,
+        CancellationToken cancellationToken)
     {
         var ledgerStore = await SqliteVerificationLedgerStore.OpenAsync(projectDirectory, result.Ledger,
             cancellationToken).ConfigureAwait(false);
@@ -233,8 +235,29 @@ internal static class ExternalVerificationCommands
                 "graph-derived expected lineage",
                 RecoveryAssessed: false,
                 QualificationAvailable: false,
-                evidencePath);
+                evidencePath,
+                checkpoint.Endpoints
+                    .Where(endpoint => endpoint.EvaluationScopeId is not null &&
+                        endpoint.EvaluationScopeType is not null &&
+                        endpoint.EvaluationScopeFingerprint is not null)
+                    .OrderBy(endpoint => endpoint.SourceNodeKey, StringComparer.Ordinal)
+                    .Select(endpoint => new EvaluationScopeOutput(endpoint.SourceNodeKey,
+                        endpoint.EvaluationScopeId!, endpoint.EvaluationScopeType!,
+                        endpoint.EvaluationScopeFingerprint!, endpoint.ArtifactCount))
+                    .ToArray(),
+                ScopeClaimBoundary(checkpoint.Endpoints));
         }
+    }
+
+    private static string ScopeClaimBoundary(DomainList<CheckpointEndpoint> endpoints)
+    {
+        var scoped = endpoints.Count(endpoint => endpoint.EvaluationScopeId is not null &&
+            endpoint.EvaluationScopeType is not null && endpoint.EvaluationScopeFingerprint is not null);
+        if (scoped == 0)
+            return "Results are limited to configured source selectors; no claim is made about artifacts outside them.";
+        if (scoped == endpoints.Count)
+            return "Results are limited to the declared evaluation scopes; no result proves completeness outside them.";
+        return "Results are limited to each source's configured selector; only listed sources have explicit evaluation scopes, and no result proves completeness outside those selectors.";
     }
 
     private static void ValidateCheckpointBinding(LoadedProjectConfiguration configuration,
@@ -255,7 +278,18 @@ internal static class ExternalVerificationCommands
             var node = sourceNodes[endpoint.SourceNodeKey];
             if (endpoint.SystemId != node.SystemId || endpoint.EndpointId != node.EndpointId ||
                 endpoint.SelectorHash != SnapshotFingerprints.SelectorHash(node.Selector) ||
-                !endpoint.IdentityFields.SequenceEqual(node.Selector.IdentityFields, StringComparer.Ordinal))
+                !endpoint.IdentityFields.SequenceEqual(node.Selector.IdentityFields, StringComparer.Ordinal) ||
+                endpoint.EvaluationScopeId != node.Selector.EvaluationScope?.Id ||
+                endpoint.EvaluationScopeType != (node.Selector.EvaluationScope is { } scope
+                    ? scope.Type switch
+                    {
+                        EvaluationScopeType.FullDeclaredSource => "full-declared-source",
+                        EvaluationScopeType.BoundedEvaluation => "bounded-evaluation",
+                        EvaluationScopeType.CustomerPreparedSubset => "customer-prepared-subset",
+                        _ => throw new InvalidDataException("Configured evaluation scope type is unsupported.")
+                    }
+                    : null) ||
+                endpoint.EvaluationScopeFingerprint != node.Selector.EvaluationScope?.Fingerprint)
                 throw new InvalidDataException("Checkpoint source selector binding does not match the configured graph.");
         }
     }
@@ -276,6 +310,9 @@ internal static class ExternalVerificationCommands
         Console.WriteLine($"Outcome: {output.VerificationOutcome.ToUpperInvariant()}");
         Console.WriteLine($"Failures: {output.VerificationFailureCount}");
         Console.WriteLine($"Source Accounting: {output.AccountedSourceCount}/{output.SourceArtifactCount} accounted; {output.UnaccountedSourceCount} gaps");
+        foreach (var scope in output.EvaluationScopes)
+            Console.WriteLine($"Evaluation Scope: {scope.SourceNodeKey} / {scope.Id} ({scope.Type}); {scope.ArtifactCount} artifacts; sha256:{scope.Fingerprint}");
+        Console.WriteLine($"Scope claim boundary: {output.EvaluationScopeClaimBoundary}");
         Console.WriteLine($"Target Lineage: {output.LineagedTargetCount}/{output.TargetArtifactCount} lineaged; {output.UnexplainedTargetCount} gaps");
         Console.WriteLine($"Target Fingerprint: {output.TargetFingerprint}");
         Console.WriteLine($"Evidence Fingerprint: {output.EvidenceFingerprint}");
@@ -300,6 +337,9 @@ internal static class ExternalVerificationCommands
         Console.WriteLine($"Observation: {report.ObservationId} ({report.ObservationRunId})");
         Console.WriteLine($"Outcome / Failures: {report.VerificationOutcome} / {report.VerificationFailureCount}");
         Console.WriteLine($"Source Accounting: {report.AccountedSourceCount}/{report.SourceArtifactCount} ({report.SourceAccountingStatus})");
+        foreach (var scope in report.EvaluationScopes)
+            Console.WriteLine($"Evaluation Scope: {scope.SourceNodeKey} / {scope.Id} ({scope.Type}); {scope.ArtifactCount} artifacts; sha256:{scope.Fingerprint}");
+        Console.WriteLine($"Scope claim boundary: {report.EvaluationScopeClaimBoundary}");
         Console.WriteLine($"Target Lineage: {report.LineagedTargetCount}/{report.TargetArtifactCount} ({report.TargetLineageStatus})");
         Console.WriteLine($"Evidence Fingerprint: {report.EvidenceFingerprint}");
         Console.WriteLine($"Lineage basis: {report.LineageBasis}");

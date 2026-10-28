@@ -151,6 +151,7 @@ public sealed class FilesystemSourceConnector : ICheckpointSourceConnector, ISou
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(selector);
         ArgumentNullException.ThrowIfNull(options);
+        EvaluationScopeCapability.Validate(this, selector);
         if (options.Partition.Count > 0)
         {
             throw new ConnectorReadException(ConnectorIssueCodes.PartitioningUnsupported,

@@ -160,6 +160,86 @@ public sealed class MigrationGraphCompilerTests
     }
 
     [Fact]
+    public async Task EvaluationScopesAreCanonicalAndChangeTheGraphIdentity()
+    {
+        var first = await CompileFixtureAsync("valid-simple.yaml", directory =>
+            ReplaceGraph(directory, "        - MEMBER_ID", """
+                        - MEMBER_ID
+                      evaluationScope:
+                        id: active-members
+                        type: bounded-evaluation
+                        predicates:
+                          - field: MEMBER_STATUS
+                            operator: equals
+                            value: ACTIVE
+                          - field: PERIOD
+                            operator: range
+                            from: "2020"
+                            to: "2025"
+                """));
+        var reordered = await CompileFixtureAsync("valid-simple.yaml", directory =>
+            ReplaceGraph(directory, "        - MEMBER_ID", """
+                        - MEMBER_ID
+                      evaluationScope:
+                        id: active-members
+                        type: bounded-evaluation
+                        predicates:
+                          - field: PERIOD
+                            operator: range
+                            from: "2020"
+                            to: "2025"
+                          - field: MEMBER_STATUS
+                            operator: equals
+                            value: ACTIVE
+                """));
+        var legacy = await CompileFixtureAsync("valid-simple.yaml");
+
+        Assert.True(first.IsValid, FormatIssues(first));
+        Assert.True(reordered.IsValid, FormatIssues(reordered));
+        Assert.Equal(GraphCanonicalizer.EvaluationScopeFormatVersion, first.GraphCanonicalizationVersion);
+        Assert.Equal(first.GraphHash, reordered.GraphHash);
+        Assert.NotEqual(legacy.GraphHash, first.GraphHash);
+        var scope = first.Graph!.Nodes.Single(node => node.Name == "legacy-member").Selector.EvaluationScope;
+        Assert.NotNull(scope);
+        Assert.Equal("active-members", scope.Id);
+        Assert.Equal(2, scope.Predicates.Count);
+    }
+
+    [Fact]
+    public async Task EvaluationScopesRejectUnknownPropertiesAndMalformedValueForms()
+    {
+        var unknownScopeProperty = await CompileFixtureAsync("valid-simple.yaml", directory =>
+            ReplaceGraph(directory, "        - MEMBER_ID", """
+                        - MEMBER_ID
+                      evaluationScope:
+                        id: active-members
+                        type: full-declared-source
+                        unexpected: ignored-value
+                """));
+        var malformedValues = await CompileFixtureAsync("valid-simple.yaml", directory =>
+            ReplaceGraph(directory, "        - MEMBER_ID", """
+                        - MEMBER_ID
+                      evaluationScope:
+                        id: active-members
+                        type: bounded-evaluation
+                        predicates:
+                          - field: MEMBER_STATUS
+                            operator: equals
+                            values: ACTIVE
+                            value: INCONSISTENT
+                """));
+
+        Assert.False(unknownScopeProperty.IsValid);
+        Assert.Contains(unknownScopeProperty.Issues, issue =>
+            issue.Code == GraphIssueCodes.InvalidSelector &&
+            issue.Path?.EndsWith(".unexpected", StringComparison.Ordinal) == true);
+        Assert.False(malformedValues.IsValid);
+        Assert.Contains(malformedValues.Issues, issue =>
+            issue.Code == GraphIssueCodes.InvalidSelector &&
+            issue.Path?.Contains(".predicates[0].values", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
     public async Task CanonicalizerSortsNodeEdgeAndEndpointSetsIndependentlyOfInputOrder()
     {
         var result = await CompileFixtureAsync("valid-all-operations.yaml");

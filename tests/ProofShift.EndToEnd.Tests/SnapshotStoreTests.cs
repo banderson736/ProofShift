@@ -15,6 +15,34 @@ namespace ProofShift.EndToEnd.Tests;
 public sealed class SnapshotStoreTests
 {
     [Fact]
+    public async Task CompleteCheckpointManifestPersistsEvaluationScopeIdentity()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var scope = new EvaluationScope("active-members", EvaluationScopeType.BoundedEvaluation,
+                [new EvaluationPredicate("status", EvaluationPredicateOperator.Equals, ["ACTIVE"])]);
+            var selector = new ArtifactSelector("table",
+                [new KeyValuePair<string, string>("name", "member")], ["member_id"], scope);
+            var record = CreateRecord(Convert.ToHexString(SHA256.HashData([])).ToLowerInvariant(), 0);
+            var (store, checkpointId, _) = await CreateCheckpointAsync(directory, record, selector,
+                (_, _) => ValueTask.FromResult<Stream>(new MemoryStream()));
+
+            var manifest = await store.ReadManifestAsync(checkpointId.Value.ToString("N"),
+                TestContext.Current.CancellationToken);
+            var endpoint = Assert.Single(manifest.Endpoints);
+            Assert.Equal(scope.Id, endpoint.EvaluationScopeId);
+            Assert.Equal("bounded-evaluation", endpoint.EvaluationScopeType);
+            Assert.Equal(scope.Fingerprint, endpoint.EvaluationScopeFingerprint);
+            Assert.Equal(1, endpoint.ArtifactCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task MaterializedCheckpointPreservesSourceIdentityAndBinaryContent()
     {
         var directory = CreateTemporaryDirectory();
@@ -275,7 +303,16 @@ public sealed class SnapshotStoreTests
             SnapshotFingerprints.SelectorHash(selector), ["member_id"], start, end,
             sourceConsistency, CheckpointGuarantee.Materialized, true, 1, byteCount,
             SnapshotFingerprints.EndpointFingerprint("members", 1, sum), segment.Reference, segment.Sha256, segment.Length,
-            requestedConsistencyStrategy, effectiveConsistencyStrategy, consistencyDowngrade);
+            requestedConsistencyStrategy, effectiveConsistencyStrategy, consistencyDowngrade,
+            selector.EvaluationScope?.Id,
+            selector.EvaluationScope is { } scope ? scope.Type switch
+            {
+                EvaluationScopeType.FullDeclaredSource => "full-declared-source",
+                EvaluationScopeType.BoundedEvaluation => "bounded-evaluation",
+                EvaluationScopeType.CustomerPreparedSubset => "customer-prepared-subset",
+                _ => throw new ArgumentOutOfRangeException(nameof(selector))
+            } : null,
+            selector.EvaluationScope?.Fingerprint);
         var graphHash = new string('b', 64);
         var sourceFingerprint = SnapshotFingerprints.AggregateSourceFingerprint(graphHash, [endpoint]);
         var draft = new SourceCheckpoint(id, CheckpointStatus.Complete, "test-project", new string('c', 64), graphHash,

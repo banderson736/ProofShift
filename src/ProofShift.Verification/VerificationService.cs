@@ -531,6 +531,8 @@ public sealed class VerificationService
         using (var evidenceStage = performanceRecorder?.StartStage(PerformanceStageKind.Verification, "evidence graph construction"))
         {
             var records = findings.Select(finding => ToEvidenceRecord(verificationRunId, finding)).ToList();
+            records.AddRange(CreateExpectedExceptionEvidenceRecords(verificationRunId, findings, ruleSet,
+                graph, checkpoint.Manifest));
             var summaryRule = new RuleId(SystemRuleId);
             var summaryId = StableEvidenceId(verificationRunId, summaryRule, "verification-summary");
             var summaryInputs = context.BindingReferences
@@ -859,6 +861,7 @@ public sealed class VerificationService
                 throw new VerificationRuleException("PSEVIDENCE001",
                     $"External findings contain duplicate rule/stable keys: {string.Join(", ", duplicateFindingKeys)}.");
             var records = findings.Select(finding => ToEvidenceRecord(runId, finding)).ToList();
+            records.AddRange(CreateExpectedExceptionEvidenceRecords(runId, findings, ruleSet, graph, checkpoint.Manifest));
             var summaryRule = new RuleId(SystemRuleId);
             var summaryInputs = context.BindingReferences
                 .Append(new EvidenceReference(ruleId: summaryRule))
@@ -1155,6 +1158,76 @@ public sealed class VerificationService
         if (operations.Any(operation => operation is MigrationOperationType.Transform or MigrationOperationType.Map or MigrationOperationType.Split)) return ArtifactDisposition.Transformed;
         return ArtifactDisposition.Migrated;
     }
+
+    internal static List<EvidenceRecord> CreateExpectedExceptionEvidenceRecords(RunId runId,
+        IReadOnlyCollection<VerificationFinding> findings, VerificationRuleSet ruleSet, MigrationGraph graph,
+        SourceCheckpoint checkpoint)
+    {
+        if (ruleSet.ExpectedExceptions.Count == 0) return [];
+        var annotationRule = new RuleId("proofshift.verification.expected-exception-annotation");
+        var records = new List<EvidenceRecord>();
+        foreach (var annotation in ruleSet.ExpectedExceptions)
+        {
+            var targetNode = graph.Nodes.SingleOrDefault(node => node.Name == annotation.TargetNode);
+            if (targetNode is null || targetNode.Type is not (MigrationNodeType.Target or MigrationNodeType.Archive))
+                throw new VerificationRuleException("PSRULE013",
+                    $"Expected exception '{annotation.Id}' references an unknown or non-target graph node.");
+            if (!ruleSet.Rules.Any(rule => rule.Id == annotation.RuleId))
+                throw new VerificationRuleException("PSRULE013",
+                    $"Expected exception '{annotation.Id}' references a rule that is not configured.");
+            var scopedSourceNodeIds = graph.Nodes
+                .Where(node => node.Type == MigrationNodeType.Source &&
+                    checkpoint.Endpoints.Any(endpoint =>
+                        endpoint.SourceNodeKey == node.Name &&
+                        endpoint.EvaluationScopeId == annotation.EvaluationScopeId))
+                .Select(node => node.Id)
+                .ToHashSet();
+            if (scopedSourceNodeIds.Count == 0)
+                throw new VerificationRuleException("PSRULE013",
+                    $"Expected exception '{annotation.Id}' references a scope absent from the source graph checkpoint.");
+
+            var matches = findings.Where(finding => finding.Result == EvidenceResult.Fail &&
+                finding.RuleId == annotation.RuleId && finding.Code == annotation.FindingCode &&
+                finding.Inputs.Any(input => input.ArtifactId is { } artifactId &&
+                    input.GraphNodeId == targetNode.Id &&
+                    Sha256(artifactId.Value) == annotation.ArtifactIdSha256) &&
+                finding.Inputs.Any(input =>
+                    input.ArtifactId is not null &&
+                    input.GraphNodeId is { } sourceNodeId &&
+                    scopedSourceNodeIds.Contains(sourceNodeId)))
+                .OrderBy(finding => finding.StableKey, StringComparer.Ordinal).ToArray();
+            if (matches.Length == 0)
+            {
+                records.Add(new EvidenceRecord(StableEvidenceId(runId, annotationRule, annotation.Id), runId,
+                    EvidenceType.Decision, annotationRule, "1", EvidenceResult.NotApplicable,
+                    [new EvidenceReference(ruleId: annotation.RuleId)],
+                    $"Expected exception '{annotation.Id}' did not match a finding in scope '{annotation.EvaluationScopeId}'; no finding was waived. Owner: {annotation.Owner}. Reason: {annotation.Reason}",
+                    DateTimeOffset.UtcNow, new EvidenceValue(new StringValue("exact configured finding")),
+                    new EvidenceValue(new StringValue("no match")), EvidenceSeverity.Info, "ExpectedExceptionNotMatched"));
+                continue;
+            }
+
+            foreach (var finding in matches)
+            {
+                var findingEvidenceId = StableEvidenceId(runId, finding.RuleId, finding.StableKey);
+                var artifactReference = finding.Inputs.First(input => input.ArtifactId is not null &&
+                    input.GraphNodeId == targetNode.Id &&
+                    Sha256(input.ArtifactId.Value.Value) == annotation.ArtifactIdSha256);
+                var stableKey = $"{annotation.Id}:{finding.StableKey}";
+                records.Add(new EvidenceRecord(StableEvidenceId(runId, annotationRule, stableKey), runId,
+                    EvidenceType.Decision, annotationRule, "1", EvidenceResult.Warning,
+                    [new EvidenceReference(evidenceId: findingEvidenceId), artifactReference,
+                        new EvidenceReference(ruleId: annotation.RuleId)],
+                    $"Expected exception '{annotation.Id}' annotates finding '{annotation.FindingCode}' in scope '{annotation.EvaluationScopeId}'. The original failure remains active and is not waived. Owner: {annotation.Owner}. Reason: {annotation.Reason}",
+                    DateTimeOffset.UtcNow, new EvidenceValue(new StringValue("finding remains failed")),
+                    new EvidenceValue(new StringValue("annotated")), EvidenceSeverity.Info, "ExpectedExceptionAnnotated"));
+            }
+        }
+        return records;
+    }
+
+    private static string Sha256(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
     private static EvidenceRecord ToEvidenceRecord(RunId runId, VerificationFinding finding)
     {
