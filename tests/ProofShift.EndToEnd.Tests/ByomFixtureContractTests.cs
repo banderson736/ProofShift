@@ -5,6 +5,13 @@ namespace ProofShift.EndToEnd.Tests;
 
 public sealed class ByomFixtureContractTests
 {
+    private static readonly string[] ExpectedDefectiveShadowRuleIds =
+    [
+        "budget-attributes",
+        "budget-total",
+        "proofshift.verification.materialized-state"
+    ];
+
     [Fact]
     public void PublicWorksFixtureIsSyntheticDeterministicCredentialFreeAndOutsideDemoRegistry()
     {
@@ -40,6 +47,10 @@ public sealed class ByomFixtureContractTests
         Assert.Equal(0, corrected.GetProperty("verificationFailedRules").GetInt32());
         Assert.False(corrected.GetProperty("recoveryAssessed").GetBoolean());
         Assert.False(corrected.GetProperty("qualificationAvailable").GetBoolean());
+        Assert.Equal(
+            ExpectedDefectiveShadowRuleIds,
+            expected.GetProperty("shadow").GetProperty("defectiveFailedRuleIds").EnumerateArray()
+                .Select(ruleId => ruleId.GetString()).ToArray());
 
         var configuration = File.ReadAllText(Path.Combine(fixtureRoot, "discovery", "proofshift.yaml"));
         Assert.Contains("packs: []", configuration, StringComparison.Ordinal);
@@ -74,7 +85,7 @@ public sealed class ByomFixtureContractTests
         var diagnosticOutput = runner.IndexOf("Defective shadow failed findings:", evidenceRead,
             StringComparison.Ordinal);
         Assert.True(diagnosticOutput > evidenceRead);
-        var failedRuleAssertion = runner.IndexOf("Defective customer-data failed rule count", diagnosticOutput,
+        var failedRuleAssertion = runner.IndexOf("Defective customer-data failed rule IDs", diagnosticOutput,
             StringComparison.Ordinal);
 
         Assert.True(failedRuleAssertion > diagnosticOutput);

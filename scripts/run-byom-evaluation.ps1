@@ -306,6 +306,7 @@ try {
         unexplained = "unexpected-target"
         "budget-attributes" = "attribute-comparison"
         "budget-total" = "aggregate-total-comparison"
+        "proofshift.verification.materialized-state" = "materialized-target-integrity"
     }
     $failedRuleEvidence = @($defectiveShadowEvidence.records | Where-Object { $_.result -eq "Fail" })
     $exceptionEvidence = @($defectiveShadowEvidence.records | Where-Object {
@@ -347,8 +348,15 @@ try {
         (ConvertTo-Json -InputObject $failedFindingDetails -Depth 20 -Compress))
     Write-Host ("Defective shadow exception evidence: " +
         (ConvertTo-Json -InputObject $exceptionEvidence -Depth 20 -Compress))
-    Assert-Equal $defectiveShadowVerification.failedRules $expectations.shadow.defectiveFailedRules `
-        "Defective customer-data failed rule count"
+    $observedFailedRuleIds = @($failedRuleEvidence | ForEach-Object { [string]$_.ruleId } | Sort-Object -Unique)
+    $expectedFailedRuleIds = @($expectations.shadow.defectiveFailedRuleIds |
+        ForEach-Object { [string]$_ } | Sort-Object -Unique)
+    $observedFailedRuleIdsJson = ConvertTo-Json -InputObject $observedFailedRuleIds -Compress
+    $expectedFailedRuleIdsJson = ConvertTo-Json -InputObject $expectedFailedRuleIds -Compress
+    Assert-Equal $observedFailedRuleIdsJson $expectedFailedRuleIdsJson `
+        "Defective customer-data failed rule IDs"
+    Assert-Equal $defectiveShadowVerification.failedRules $expectedFailedRuleIds.Count `
+        "Defective customer-data failed rule count for exact rule IDs"
     $defectiveShadowEvidenceText = ConvertTo-Json -InputObject $defectiveShadowEvidence.records -Depth 20 -Compress
     foreach ($requiredCode in @("AttributeMismatch", "AggregateTotalComparison", "ExpectedExceptionAnnotated")) {
         if ($defectiveShadowEvidenceText -notmatch [Regex]::Escape($requiredCode)) {
@@ -574,7 +582,8 @@ SELECT
         defectiveRuleSetFingerprint = $defectiveShadowVerification.ruleSetFingerprint
         defectiveEvidenceFingerprint = $defectiveShadowVerification.evidenceFingerprint
         defectiveShadowBudgetTotal = $defectiveBudgetTotal
-        expectedExceptionRemainedFailed = $defectiveShadowVerification.failedRules -eq $expectations.shadow.defectiveFailedRules
+        expectedExceptionRemainedFailed = @($observedFailedRuleIds |
+            Where-Object { $_ -eq "budget-attributes" }).Count -eq 1
         defectiveEvaluationOutcome = "NOT QUALIFIED"
         defectiveRecoveryAssessment = "NOT ASSESSED"
         qualifiedEvidenceRecords = $qualifiedEvidence.records

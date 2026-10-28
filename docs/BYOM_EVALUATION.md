@@ -31,7 +31,8 @@ The independent shadow workflow uses `snapshot`, `project`, `verify`, and
 checks generic row-level attributes and an exact aggregate total. A second
 run seeds one target defect and demonstrates that a matching expected
 exception is an auditable annotation only: the attribute and aggregate
-failures remain active.
+failures remain active. Since the defect is injected after projection, the
+materialized-target fingerprint check also reports the out-of-band change.
 The packaged fixture isolates this workflow in separate `byom_shadow`
 databases so its budget table does not alter external-observation discovery or
 the original 102-artifact read-only Verification scenario.

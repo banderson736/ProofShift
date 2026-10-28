@@ -43,7 +43,11 @@ The packaged `scripts/run-byom-evaluation.ps1` runner then replays the same
 checkpoint into a second isolated shadow schema and changes budget `B001`
 through the fixture's PostgreSQL administrator connection. This controlled
 defect must produce both an attribute mismatch and an aggregate-total failure.
-The exact aggregate total must change to 12,781.00.
+The exact aggregate total must change to 12,781.00. Because the fixture
+deliberately changes the physical target after projection, the materialized-
+target fingerprint check also reports that the observed target no longer
+matches the projection receipt. This is an independent integrity finding, not
+a duplicate of either business comparison.
 The exact finding receives a scope-bound expected-exception annotation, but
 the Verification outcome remains failed; an annotation never waives a
 finding. The fixture owner is `synthetic-fixture-owner`, not a customer.
