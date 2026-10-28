@@ -55,8 +55,9 @@ any output you want to retain.
 Use the Bring Your Own Migration workflow to discover and checkpoint a
 synthetic/non-production source, review mappings, run your migration with a
 separate external tool, then observe the target using read-only credentials.
-ProofShift does not perform that migration. Its external Verification reads
-the target, persists Evidence, and can report or compare persisted attempts.
+ProofShift does not perform that migration. Use `verify-external` to observe
+the target read-only; it persists Evidence that you can report or compare.
+Follow the [BYOM workflow](docs/BYOM_EVALUATION.md) for the complete sequence.
 It does not create Projection artifacts or assess or qualify Recovery.
 
 `QUALIFIED` is an outcome of the separate shadow dry-run workflow: configured
