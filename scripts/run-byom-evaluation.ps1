@@ -104,7 +104,7 @@ function Invoke-SourceQuery {
     param([string] $ContainerName, [string] $Password, [string] $SqlCmdPath, [string] $Query)
 
     return (Invoke-Docker @("exec", "--env", "SQLCMDPASSWORD=$Password", $ContainerName,
-        $SqlCmdPath, "-S", "localhost", "-U", "sa", "-C", "-b", "-h", "-1", "-W", "-Q", $Query)).Trim()
+        $SqlCmdPath, "-S", "localhost", "-U", "sa", "-d", "byom", "-C", "-b", "-h", "-1", "-W", "-Q", $Query)).Trim()
 }
 
 function Assert-ObserverWriteDenied {
