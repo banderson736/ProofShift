@@ -57,12 +57,31 @@ public sealed class ByomFixtureContractTests
 
         var packagingScript = File.ReadAllText(Path.Combine(repositoryRoot, "scripts", "package-evaluation.ps1"));
         var smokeScript = File.ReadAllText(Path.Combine(repositoryRoot, "scripts", "smoke-evaluation-package.ps1"));
+        var runner = File.ReadAllText(Path.Combine(repositoryRoot, "scripts", "run-byom-evaluation.ps1"));
         Assert.Contains("scenarios/** including the synthetic BYOM evaluation kit", packagingScript,
             StringComparison.Ordinal);
         Assert.Contains("scenarios/byom-public-works/expectations.json", smokeScript, StringComparison.Ordinal);
         Assert.Contains("scenarios/byom-public-works/database/postgres-shadow-target-schema.sql", smokeScript,
             StringComparison.Ordinal);
         Assert.Contains("run-byom-evaluation.ps1", smokeScript, StringComparison.Ordinal);
+
+        var defectiveVerification = runner.IndexOf("$defectiveShadowVerification = Invoke-ProductJson",
+            StringComparison.Ordinal);
+        Assert.True(defectiveVerification >= 0);
+        var evidenceRead = runner.IndexOf("$defectiveShadowEvidence = Invoke-ProductJson",
+            defectiveVerification, StringComparison.Ordinal);
+        Assert.True(evidenceRead > defectiveVerification);
+        var diagnosticOutput = runner.IndexOf("Defective shadow failed findings:", evidenceRead,
+            StringComparison.Ordinal);
+        Assert.True(diagnosticOutput > evidenceRead);
+        var failedRuleAssertion = runner.IndexOf("Defective customer-data failed rule count", diagnosticOutput,
+            StringComparison.Ordinal);
+
+        Assert.True(failedRuleAssertion > diagnosticOutput);
+        Assert.Contains("findingId = $finding.id", runner, StringComparison.Ordinal);
+        Assert.Contains("ruleType = $ruleTypes[[string]$finding.ruleId]", runner, StringComparison.Ordinal);
+        Assert.Contains("inputReferences =", runner, StringComparison.Ordinal);
+        Assert.Contains("exceptionAnnotation =", runner, StringComparison.Ordinal);
     }
 
     [Fact]

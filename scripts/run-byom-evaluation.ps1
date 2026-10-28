@@ -297,10 +297,52 @@ try {
     $defectiveShadowVerification = Invoke-ProductJson @("verify", $shadowConfig, "--checkpoint",
         $shadowCheckpointId, "--projection", $defectiveProjection.runId, "--json") 1
     Assert-Equal $defectiveShadowVerification.outcome "failed" "Defective customer-data Verification outcome"
-    Assert-Equal $defectiveShadowVerification.failedRules $expectations.shadow.defectiveFailedRules `
-        "Defective customer-data failed rule count"
     $defectiveShadowEvidence = Invoke-ProductJson @("evidence", $shadowConfig, "--run",
         $defectiveShadowVerification.runId, "--json")
+    $ruleTypes = @{
+        accounting = "source-artifact-accounting"
+        lineage = "target-lineage"
+        presence = "target-presence"
+        unexplained = "unexpected-target"
+        "budget-attributes" = "attribute-comparison"
+        "budget-total" = "aggregate-total-comparison"
+    }
+    $failedRuleEvidence = @($defectiveShadowEvidence.records | Where-Object {
+        $_.result -eq "Fail" -and $ruleTypes.ContainsKey([string]$_.ruleId)
+    })
+    $exceptionEvidence = @($defectiveShadowEvidence.records | Where-Object {
+        $_.code -in @("ExpectedExceptionAnnotated", "ExpectedExceptionNotMatched")
+    })
+    $failedFindingDetails = @($failedRuleEvidence | ForEach-Object {
+        $finding = $_
+        $annotation = @($exceptionEvidence | Where-Object {
+            @($_.inputs | Where-Object { $_.evidenceId -eq $finding.id }).Count -gt 0
+        })
+        [ordered]@{
+            findingId = $finding.id
+            ruleId = $finding.ruleId
+            ruleType = $ruleTypes[[string]$finding.ruleId]
+            findingCode = $finding.code
+            expected = $finding.expected
+            actual = $finding.actual
+            inputReferences = @($finding.inputs | ForEach-Object {
+                [ordered]@{
+                    artifactId = $_.artifactId
+                    graphNodeId = $_.graphNodeId
+                    migrationEdgeId = $_.migrationEdgeId
+                    checkpointId = $_.checkpointId
+                    projectionRunId = $_.projectionRunId
+                }
+            })
+            exceptionAnnotation = if ($annotation.Count -gt 0) { "matched" } else { "not matched" }
+        }
+    })
+    Write-Output ("Defective shadow failed findings: " +
+        (ConvertTo-Json -InputObject $failedFindingDetails -Depth 20 -Compress))
+    Write-Output ("Defective shadow exception evidence: " +
+        (ConvertTo-Json -InputObject $exceptionEvidence -Depth 20 -Compress))
+    Assert-Equal $defectiveShadowVerification.failedRules $expectations.shadow.defectiveFailedRules `
+        "Defective customer-data failed rule count"
     $defectiveShadowEvidenceText = ConvertTo-Json -InputObject $defectiveShadowEvidence.records -Depth 20 -Compress
     foreach ($requiredCode in @("AttributeMismatch", "AggregateTotalComparison", "ExpectedExceptionAnnotated")) {
         if ($defectiveShadowEvidenceText -notmatch [Regex]::Escape($requiredCode)) {
