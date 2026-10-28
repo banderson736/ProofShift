@@ -337,9 +337,9 @@ try {
             exceptionAnnotation = if ($annotation.Count -gt 0) { "matched" } else { "not matched" }
         }
     })
-    Write-Output ("Defective shadow failed findings: " +
+    Write-Host ("Defective shadow failed findings: " +
         (ConvertTo-Json -InputObject $failedFindingDetails -Depth 20 -Compress))
-    Write-Output ("Defective shadow exception evidence: " +
+    Write-Host ("Defective shadow exception evidence: " +
         (ConvertTo-Json -InputObject $exceptionEvidence -Depth 20 -Compress))
     Assert-Equal $defectiveShadowVerification.failedRules $expectations.shadow.defectiveFailedRules `
         "Defective customer-data failed rule count"

@@ -82,6 +82,8 @@ public sealed class ByomFixtureContractTests
         Assert.Contains("ruleType = $ruleTypes[[string]$finding.ruleId]", runner, StringComparison.Ordinal);
         Assert.Contains("inputReferences =", runner, StringComparison.Ordinal);
         Assert.Contains("exceptionAnnotation =", runner, StringComparison.Ordinal);
+        Assert.Contains("Write-Host (\"Defective shadow failed findings: \"", runner, StringComparison.Ordinal);
+        Assert.Contains("Write-Host (\"Defective shadow exception evidence: \"", runner, StringComparison.Ordinal);
     }
 
     [Fact]
