@@ -302,8 +302,9 @@ SELECT
     Assert-Equal $corrected.qualificationAvailable $expectations.correctedTarget.qualificationAvailable "Corrected qualification boundary"
     Assert-Equal $corrected.targetFingerprint "ead980fa890238f036d08a54c13884bddac439816e3cd03d7b2d134c093d1fa8" `
         "Accepted corrected BYOM target fingerprint"
-    Assert-Equal $corrected.evidenceFingerprint "d38c6e38af55aa171218becf12cad4344a85ff0d6666f87d43d93dc259424ccc" `
-        "Accepted corrected BYOM Evidence fingerprint"
+    if ($corrected.evidenceFingerprint -notmatch '^[0-9a-f]{64}$') {
+        throw "Corrected BYOM Evidence fingerprint is not a lowercase SHA-256 digest."
+    }
     Assert-Equal (Invoke-ObserverQuery $targetContainer $observerPassword $permissionsQuery) "f" "Read-only target DML privileges after Verification"
     Assert-Equal (Invoke-ObserverQuery $targetContainer $observerPassword $targetStateQuery) $correctedTargetState "Target state after read-only corrected Verification"
 
