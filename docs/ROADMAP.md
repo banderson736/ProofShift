@@ -248,6 +248,11 @@ Status: Accepted October 24, 2026. Exact candidate `d3529ccabe04eb1e7b8b3cf2ab64
 
 PS-0.11 improves ordinary operator workflows while preserving the accepted assurance engine. Each slice must retain persisted Evidence and Recovery as authoritative, keep reports presentation-only, and preserve all five accepted domain scenarios and their exact findings/qualification outcomes. Do not begin PS-1.0 or out-of-scope production/product work.
 
+**PS-0.11 Pilot Readiness is complete.** The program closed with PS-0.11G
+accepted on October 28, 2026. The controlled technical pilot/evaluation
+decision is GO within the documented support boundaries. PS-1.0
+implementation has not started.
+
 #### PS-0.11A Generic Operator Reporting & Comparison
 
 Status: Accepted. Candidate `1837cad9ea05905dad491b3b0d54f0f7ba7cc852` passed GitHub Actions [run 40146586892](https://github.com/banderson736/ProofShift/actions/runs/40146586892): 338 passed, 0 failed, 0 skipped; Windows package-only smoke and all five Ubuntu packaged demos passed. Merged to `main` as `de59d85cca3a5eca4d1b9e49db69a51a8aa42ed1`. The normal persisted `proofshift report <config> --run <dry-run-id>` and `proofshift compare <config> --before <dry-run-id> --after <dry-run-id>` paths are domain-pack-neutral. They resolve the exact configured pack/version through the existing registry, validate persisted bindings and integrity, and never rerun Verification. Reports and comparisons are deterministic, value-safe, use selected-pack terminology, and treat Evidence/Recovery as authoritative.
@@ -288,23 +293,29 @@ below.
 
 #### PS-0.11G Pilot Readiness Acceptance
 
-Status: **In Progress. Not self-accepted.** Starting from accepted `main`
-`810f2f450176bde1eee0edcc200650d633b8f04b`, tree
-`8ec082eb21683dec06ee48971f49e0d088cdea64`, on branch
-`ps-0.11g-pilot-readiness-acceptance`. This final PS-0.11 milestone is an
-integrated product-acceptance and evaluator-handoff slice, not an assurance
-engine tranche. Treat the extracted evaluation package and shipped
-documentation as the product. Reconcile stale status surfaces, provide a
-correct root CLI help path, add a package front door and pilot guidance, and
-extend existing protected package jobs to rehearse the documented Windows,
-Linux runtime-only, five-demo, and BYOM workflows. Preserve exact accepted
-domain outcomes, read-only external Verification, package-only Windows
-acceptance, and the Ubuntu packaged-Docker evaluation boundary. See the
-[PS-0.11G acceptance record](PS0_11G_PILOT_READINESS_ACCEPTANCE.md) and
-[acceptance matrix](PS0_11G_ACCEPTANCE_MATRIX.md). Do not self-accept, merge,
-begin PS-1.0, publish/tag/sign, or perform production migration/rollback.
+Status: **Accepted — October 28, 2026. GO — controlled technical
+pilot/evaluation ready.** Candidate `b25a483dd5b728474e3e1f8e1b957885d42e309a`
+(tree `5b65c63a819bf1db7a06c29d36a52bc1e5d2598b`) passed push CI
+`40653602682` and PR-context CI `40653605811`, each with all eleven required
+jobs successful. PR #18 merged to `main` as
+`6eaac3f7de155d775032964739c832cca2317b6f` with the same tree. All 40
+acceptance gates pass. The implementation PR merged before independent formal
+review; the exact candidate, PR-context tree, and merge tree were identical
+and reviewed. Preserve that historical deviation and return to independent
+review before merge for future implementation PRs unless the repository owner
+directs otherwise. This was an integrated product-acceptance and
+evaluator-handoff slice, not an assurance-engine tranche. Windows validation
+remains package-only, and Ubuntu evidence remains limited to packaged Docker
+evaluation, not general Linux support. See the [PS-0.11G acceptance
+record](PS0_11G_PILOT_READINESS_ACCEPTANCE.md) and
+[acceptance matrix](PS0_11G_ACCEPTANCE_MATRIX.md).
 
 Out of scope: public release/tag/package publication, signing, self-contained/AOT publishing, installers, new connectors/packs, FHIR Bulk, UI/API/auth, production migration/rollback, AI authoring, assurance-engine/runtime-semantics changes, and unrelated refactoring.
+
+PS-0.11 is complete and there is no active implementation assignment.
+PS-1.0 implementation has not started and requires a new explicit
+repository-owner assignment. The provisional post-PS-0 roadmap remains
+provisional; this acceptance does not select or authorize its next area.
 
 ## Commercial validation gate after PS-0 / during PS-0
 

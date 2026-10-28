@@ -2,14 +2,29 @@
 
 ## Status
 
-**In Progress. Not self-accepted.** This is the final PS-0.11 milestone and
-starts from accepted `main` `810f2f450176bde1eee0edcc200650d633b8f04b`,
-tree `8ec082eb21683dec06ee48971f49e0d088cdea64`, on branch
-`ps-0.11g-pilot-readiness-acceptance`.
+**Accepted — October 28, 2026. GO — controlled technical pilot/evaluation
+ready.** The exact accepted implementation candidate is
+`b25a483dd5b728474e3e1f8e1b957885d42e309a`, tree
+`5b65c63a819bf1db7a06c29d36a52bc1e5d2598b`. It passed push CI run
+`40653602682` and PR-context CI run `40653605811`, each with all eleven
+required jobs green. PR #18 merged as
+`6eaac3f7de155d775032964739c832cca2317b6f`; its tree is identical to the
+accepted candidate. The [acceptance matrix](PS0_11G_ACCEPTANCE_MATRIX.md)
+records 40 PASS, 0 FAIL, 0 NOT YET.
+
+The implementation PR merged before the independent PS-0.11G GO/NO-GO review
+was issued. This historical sequence deviation is retained: exact-candidate
+push CI passed, the PR-context tree was identical to the candidate tree, the
+final merge tree was identical, and the independent review evaluated that
+tree. Future implementation PRs should return to candidate → exact CI →
+independent formal review → acceptance decision → merge unless the repository
+owner explicitly directs otherwise.
 
 PS-0.11F remains accepted (October 26, 2026), with 45 PASS, 0 FAIL, and 0 NOT
 YET. See the [PS-0.11F acceptance matrix](PS0_11F_ACCEPTANCE_MATRIX.md).
 ADR-0035 remains Proposed under PS-0.11F; this milestone does not change it.
+PS-0.11 is complete. There is no active implementation assignment. PS-1.0
+has not started and requires a new explicit repository-owner assignment.
 
 ## Objective
 
@@ -31,14 +46,14 @@ external Verification and shadow Projection/Recovery qualification.
 
 ## Acceptance evidence
 
-The evidence-driven gates are in the [PS-0.11G acceptance matrix](PS0_11G_ACCEPTANCE_MATRIX.md);
-all gates begin `NOT YET`. Protected GitHub Actions must provide exact
-candidate push and PR-context evidence for all eleven required checks.
-Windows remains package-only; physical demo/BYOM evidence remains limited to
-the extracted Linux package in the protected Ubuntu Docker workflow. The
-runtime-only job must prove the front door without an SDK. Independent
-Windows/Linux A/B package builds must retain exact archive/content/provenance
-equality for each platform.
+The [PS-0.11G acceptance matrix](PS0_11G_ACCEPTANCE_MATRIX.md) records all
+40 gates as `PASS`, with 0 `FAIL` and 0 `NOT YET`. Exact-candidate push and
+PR-context GitHub Actions runs passed all eleven required checks. Windows
+remains package-only; physical demo/BYOM evidence is limited to the extracted
+Linux package in the protected Ubuntu Docker workflow. The dedicated
+runtime-only job proved the front door without an SDK. Independent
+Windows/Linux A/B package builds matched archive/content hashes and
+deterministic provenance for each platform.
 
 The physical package rehearsal should emit `pilot-readiness-result.json`.
 It is a CI/review artifact, not a ProofShift persistence format. It must
@@ -48,16 +63,19 @@ target mutation was detected, and Projection/Recovery artifacts were absent.
 It must not contain credentials, raw migration values, connection strings,
 or temporary runner paths.
 
-## Decision boundary
+## Formal decision and boundary
 
-The implementation agent does not accept this milestone. Evidence should
-allow an independent reviewer to choose `GO — controlled technical
-pilot/evaluation ready` or `NO-GO — blocking issue remains`.
+The independent formal decision is **GO — controlled technical
+pilot/evaluation ready**. ProofShift may be used for a controlled,
+owner-authorized technical pilot/evaluation within the documented support
+boundaries.
 
-A GO decision would not mean production readiness, production migration or
-rollback authority, public/commercial release, paid trial, redistribution,
-security/compliance or domain certification, or an SLA. The package remains
-proprietary and its identity remains `ProofShift 0.1.0-preview.1`.
+GO does not mean production readiness, GA, public release, commercial
+distribution authorization, paid-trial authorization, production migration
+execution readiness, production rollback readiness, SLA-backed service,
+regulatory certification, security/compliance certification, or domain
+certification. The package remains proprietary and its identity remains
+`ProofShift 0.1.0-preview.1`.
 
 ## Pilot-facing limitations
 
@@ -68,5 +86,5 @@ There is no production migration execution, external-target rollback, web UI,
 hosted service, authentication/RBAC, FHIR Bulk, generic REST connector,
 automatic semantic inference, regulatory/domain certification, or SLA.
 
-Do not merge before formal review. Do not begin PS-1.0. Production migration
-execution and rollback remain out of scope.
+Production migration execution and rollback remain out of scope. Do not begin
+PS-1.0 without a new explicit repository-owner assignment.
