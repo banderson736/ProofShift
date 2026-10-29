@@ -426,10 +426,10 @@ public sealed class ShadowProjectionService
             failureCode = exception.Code;
             failureCount = Math.Max(1, failureCount);
         }
-        catch
+        catch (Exception exception)
         {
             status = ProjectionStatus.Failed;
-            failureCode = "PSPROJ_FAILED";
+            failureCode = $"PSPROJ_FAILED_{exception.GetType().Name.ToUpperInvariant()}";
             failureCount = Math.Max(1, failureCount);
         }
         finally

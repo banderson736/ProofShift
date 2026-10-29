@@ -108,6 +108,34 @@ public sealed class ProjectionRuntimeTests
     }
 
     [Fact]
+    public async Task ProjectionUnexpectedFailureCodeIdentifiesExceptionTypeWithoutMessage()
+    {
+        var scenario = Scenario(SystemRole.ShadowTarget, CreateSourceRecords());
+        var sourceProvider = new ThrowingSourceArtifactStreamProvider(scenario.Configuration.ConfigurationHash,
+            scenario.Graph.GraphHash, scenario.SourceNode.Name);
+        var targetConnector = new FakeShadowTargetConnector();
+        var service = new ShadowProjectionService(
+            new ConnectorRegistry([]),
+            new ShadowTargetConnectorRegistry([targetConnector]),
+            sourceProvider: sourceProvider);
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var run = await service.ProjectAsync(scenario.Configuration, scenario.Graph, directory,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(ProjectionStatus.Failed, run.Status);
+            Assert.Equal("PSPROJ_FAILED_INVALIDOPERATIONEXCEPTION", run.FailureCode);
+            Assert.DoesNotContain("sensitive", run.FailureCode, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(0, targetConnector.PrepareCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ProjectionRejectsChainedTargetInputBeforePreparingShadowConnectors()
     {
         var records = CreateSourceRecords();
@@ -441,6 +469,36 @@ public sealed class ProjectionRuntimeTests
     }
 
     private sealed record ScenarioData(LoadedProjectConfiguration Configuration, MigrationGraph Graph, MigrationNode SourceNode);
+
+    private sealed class ThrowingSourceArtifactStreamProvider(
+        string configurationHash,
+        string graphHash,
+        string sourceNodeKey) : ISourceArtifactStreamProvider
+    {
+        public string? CheckpointId => "00000000000000000000000000000001";
+        public string? CheckpointSourceFingerprint => new string('a', 64);
+        public string? CheckpointManifestHash => new string('b', 64);
+        public string? CheckpointConfigurationHash => configurationHash;
+        public string? CheckpointGraphHash => graphHash;
+        public IReadOnlyCollection<string>? CheckpointSourceNodeKeys => [sourceNodeKey];
+
+        public Task<string> ValidateAsync(string sourceNodeKey, ConnectorContext context, ArtifactSelector selector,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("sensitive provider message");
+
+        public async IAsyncEnumerable<RecordEnvelope> ReadAsync(string sourceNodeKey, ConnectorContext context,
+            ArtifactSelector selector,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.Yield();
+            yield break;
+        }
+
+        public ValueTask<Stream> OpenBinaryReadAsync(string sourceNodeKey, ConnectorContext context,
+            ArtifactSelector selector, ArtifactReference artifact, BinaryReferenceValue binaryReference,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+    }
 
     private sealed class FakeSourceConnector(string nodeName, IReadOnlyCollection<RecordEnvelope> records) : ISourceConnector
     {
