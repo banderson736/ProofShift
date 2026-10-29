@@ -50,7 +50,20 @@ function Invoke-Packaged {
         Pop-Location
     }
     if ($exitCode -ne $ExpectedExitCode) {
-        throw "Packaged workspace command returned unexpected exit code $exitCode; output omitted."
+        $commandName = if ($Arguments[0] -eq "workspace" -and $Arguments[1] -eq "evidence" -and
+            $Arguments.Count -gt 2) {
+            "workspace evidence $($Arguments[2])"
+        }
+        elseif ($Arguments[0] -eq "workspace" -and $Arguments.Count -gt 1) {
+            "workspace $($Arguments[1])"
+        }
+        else {
+            $Arguments[0]
+        }
+        $safeDiagnostic = $output | ForEach-Object { "$_" } |
+            Where-Object { $_ -match '^\s*PS[A-Z0-9]+:' } | Select-Object -First 1
+        $diagnosticText = if ($safeDiagnostic) { " $($safeDiagnostic.Trim())" } else { "" }
+        throw "Packaged $commandName command returned exit code $exitCode (expected $ExpectedExitCode).$diagnosticText"
     }
     $text = $output -join [Environment]::NewLine
     $script:CommandOutputs.Add($text)
