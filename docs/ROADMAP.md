@@ -312,11 +312,9 @@ record](PS0_11G_PILOT_READINESS_ACCEPTANCE.md) and
 Out of scope: public release/tag/package publication, signing, self-contained/AOT publishing, installers, new connectors/packs, FHIR Bulk, UI/API/auth, production migration/rollback, AI authoring, assurance-engine/runtime-semantics changes, and unrelated refactoring.
 
 PS-0.11 is complete. PS-1.0A Customer Data Evaluation & Generalized Mapping
-Foundation is explicitly assigned and In Progress on branch
-`ps-1.0a-customer-data-evaluation`. It must not be self-accepted or merged,
-and PS-1.0B requires a new explicit repository-owner assignment. The
-provisional post-PS-0 roadmap remains provisional outside the assigned 1.0A
-scope.
+Foundation is Accepted as recorded below. PS-1.0B requires a separate explicit
+planning/start decision. The provisional post-PS-0 roadmap remains provisional
+outside the accepted PS-1.0A scope.
 
 ## Commercial validation gate after PS-0 / during PS-0
 
@@ -341,17 +339,45 @@ The exact sequence is market-driven.
 
 ### PS-1.0A Customer Data Evaluation & Generalized Mapping Foundation
 
-Status: **In Progress**, explicitly assigned on branch
-`ps-1.0a-customer-data-evaluation` from accepted PS-0.11G baseline
-`a095c21588cbd1608b8a543cdfaab71312b596d8`. This slice adds bounded,
-read-only evaluation of customer-prepared data with deterministic scope
-binding; generalized identity/mapping authoring, supported topology and
-transformations; expected exceptions; generic reconciliation; and a synthetic
-packaged customer-shaped scenario. Every completeness claim must remain within
-the declared scope. Preserve PS-0.11 behavior and external Verification
-boundaries. See the [scope](PS1_0A_CUSTOMER_DATA_EVALUATION.md) and
-[acceptance matrix](PS1_0A_ACCEPTANCE_MATRIX.md). Do not self-accept or merge,
-or begin PS-1.0B before a new explicit assignment.
+Status: **Accepted (October 29, 2026), by explicit repository-owner
+acceptance.** The permanently accepted implementation candidate is
+`860d4d1a96c0eb14a4da07edb07584874e0e4b2d`, merged through PR #20 to `main`
+as `7b836f699933737cca5986afc3e22160bc48665e`. Push CI run
+`40794959644` and PR CI run `40794964414` both passed all 11 required jobs.
+`build-and-test` passed 320 tests (0 failed, 0 skipped); the additional
+Remote Storage, Db2, and Oracle integration jobs passed 54, 2, and 2 tests,
+respectively, with no failures or skips. The final acceptance matrix is
+15 PASS, 0 FAIL, 0 NOT YET, 0 NOT APPLICABLE.
+
+The accepted Linux package has archive SHA-256
+`4ae7c0e570b0e9ff95901fc0503ad2e8e8bd071f10141e68f8f0dcebd3e5434d` and
+content SHA-256 `e57993bfee400df65e8980743b9352e6d714f2432f2b4f464f97492c2e4c4f25`.
+The accepted Windows package has archive SHA-256
+`81badc3a1aed3fbffca5dac140fa303e1e473008bb421e23b4841a6f6b3fa61b` and
+content SHA-256 `88110f039ab1f72673f14fe1953791cfbc45ce58f2326b679e382382946b0d6e`.
+Two independent builds reproduced each platform's archive and content hashes.
+
+The packaged Linux customer scenario captured 114 synthetic source records;
+the clean evaluation projected 12 budget records totaling `12,780.00` and was
+`QUALIFIED`. The defective evaluation totaled `12,781.00` and was
+`NOT QUALIFIED`, with exact distinct failed rules `budget-attributes`,
+`budget-total`, and `proofshift.verification.materialized-state`.
+The expected-exception annotation matched `budget-attributes` without
+waiving its failure; reconciliation remained failed; and out-of-band mutation
+was detected as `MaterializedTargetChanged`.
+
+Acceptance preserves deterministic scope binding, the advertised typed
+relational predicates, fail-closed non-relational predicate behavior,
+historical checkpoint compatibility, current scope persistence, and
+checkpoint-to-projection-to-Verification fan-out provenance. External
+Verification remains read-only, scoped, and does not qualify Recovery.
+Expected-exception annotations remain auditable and never waive findings.
+No production migration or production rollback execution is authorized by
+this acceptance. Windows evidence remains package-only; Linux scenario
+evidence is limited to the packaged Docker evaluation. The [scope](PS1_0A_CUSTOMER_DATA_EVALUATION.md)
+and [acceptance matrix](PS1_0A_ACCEPTANCE_MATRIX.md) record the evidence and
+limitations. PS-1.0B has not started; it requires a separate planning/start
+decision.
 
 Likely areas:
 
