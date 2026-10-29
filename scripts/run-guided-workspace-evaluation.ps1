@@ -100,7 +100,34 @@ function Invoke-PackagedWorkspaceRun {
         Pop-Location
     }
     if ($exitCode -ne $ExpectedExitCode) {
-        throw "Packaged $Purpose guided workspace run returned exit code $exitCode (expected $ExpectedExitCode); output omitted."
+        $resultLines = @($output | ForEach-Object { "$_" } | Where-Object {
+            $_ -match '^\s*\{.*"type"\s*:\s*"result"'
+        })
+        $runState = "unavailable"
+        $disposition = "unavailable"
+        $failureCode = "unavailable"
+        $verificationOutcome = "unavailable"
+        $recoveryQualification = "unavailable"
+        if ($resultLines.Count -eq 1) {
+            try {
+                $runResult = $resultLines[0] | ConvertFrom-Json -ErrorAction Stop
+                if ($runResult.state) { $runState = "$($runResult.state)" }
+                if ($runResult.run.disposition) { $disposition = "$($runResult.run.disposition)" }
+                else { $disposition = "not-established" }
+                if ($runResult.run.failureCode) { $failureCode = "$($runResult.run.failureCode)" }
+                else { $failureCode = "none" }
+                if ($runResult.run.verificationOutcome) {
+                    $verificationOutcome = "$($runResult.run.verificationOutcome)"
+                }
+                if ($runResult.run.recoveryQualification) {
+                    $recoveryQualification = "$($runResult.run.recoveryQualification)"
+                }
+            }
+            catch [System.Management.Automation.RuntimeException] {
+                $runState = "result-json-invalid"
+            }
+        }
+        throw "Packaged $Purpose guided workspace run returned exit code $exitCode (expected $ExpectedExitCode); state=$runState disposition=$disposition failureCode=$failureCode verification=$verificationOutcome recovery=$recoveryQualification; output omitted."
     }
     $script:CommandOutputs.Add(($output -join [Environment]::NewLine))
     $resultLines = @($output | ForEach-Object { "$_" } | Where-Object {
