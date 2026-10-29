@@ -29,6 +29,41 @@ public sealed class PensionSemanticRuleTests
             installed.Resolve([new PackConfigurationDto("pension", "0.9.0"), new PackConfigurationDto("proofshift.pension", "0.9.0")])).Code);
     }
 
+    [Fact]
+    public async Task GenericAggregateTotalReconcilesExactValuesAndRejectsInvalidMeasures()
+    {
+        ValueNode[] expected =
+        {
+            new IntegerValue(4),
+            new DecimalValue(6m)
+        };
+        var matching = await EvaluateAggregateAsync(expected, [new DecimalValue(10m)]);
+        Assert.Contains(matching, finding => finding.Code == "AggregateTotalComparison" &&
+            finding.Result == EvidenceResult.Pass && Assert.IsType<DecimalValue>(finding.Expected!.Value).Value == 10m);
+
+        var mismatched = await EvaluateAggregateAsync(expected, [new DecimalValue(9m)]);
+        Assert.Contains(mismatched, finding => finding.Code == "AggregateTotalComparison" &&
+            finding.Result == EvidenceResult.Fail);
+
+        var invalid = await EvaluateAggregateAsync(expected, [new NullValue()]);
+        Assert.Contains(invalid, finding => finding.Code == "AggregateInputInvalid" &&
+            finding.Result == EvidenceResult.Fail);
+
+        var nonNumeric = await EvaluateAggregateAsync([new StringValue("10")], [new DecimalValue(10m)]);
+        Assert.Contains(nonNumeric, finding => finding.Code == "AggregateInputInvalid" &&
+            finding.Result == EvidenceResult.Fail &&
+            Assert.IsType<IntegerValue>(finding.Expected!.Value).Value == 1);
+
+        var overflow = await EvaluateAggregateAsync(
+            [new DecimalValue(decimal.MaxValue), new DecimalValue(1m)],
+            [new DecimalValue(decimal.MaxValue)]);
+        Assert.Contains(overflow, finding => finding.Code == "AggregateTotalComparison" &&
+            finding.Result == EvidenceResult.Fail);
+        Assert.Contains(overflow, finding => finding.Code == "AggregateInputInvalid" &&
+            finding.Result == EvidenceResult.Fail &&
+            finding.Explanation.Contains("overflow", StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -186,6 +221,42 @@ public sealed class PensionSemanticRuleTests
             finding.RuleVersion, finding.Result, finding.Inputs, finding.Explanation, DateTimeOffset.UnixEpoch,
             finding.Expected, finding.Actual, finding.Severity, finding.Code)));
         Assert.Equal(findings.Count, evidence.Records.Count);
+        return findings;
+    }
+
+    private static async Task<List<VerificationFinding>> EvaluateAggregateAsync(
+        IEnumerable<ValueNode> expectedValues, IEnumerable<ValueNode> actualValues)
+    {
+        const string nodeKey = "target-records";
+        const string semanticType = "Customer.Record";
+        const string measure = "amount";
+        var node = new MigrationNode(new MigrationNodeId(Guid.NewGuid()), nodeKey, MigrationNodeType.Target,
+            semanticType, new SystemId("target-system"), new StorageEndpointId("target-store"),
+            new ArtifactSelector("table", [new("name", "records")], ["id"]));
+        var graph = new MigrationGraph(new MigrationGraphId(Guid.NewGuid()), [node], [],
+            new string('a', 64), "test-v1");
+        var configuration = new LoadedProjectConfiguration(
+            new RootConfigurationDto(1, new ProjectConfigurationDto("synthetic-customer", "Synthetic Customer"), null, [], null, null, null),
+            [], [], [], "synthetic-configuration", new string('b', 64));
+        var binding = new ProjectionVerificationBinding(new RunId(Guid.NewGuid()), new string('b', 64),
+            graph.GraphHash, new CheckpointId(Guid.NewGuid()), new string('c', 64), new string('d', 64),
+            new string('e', 64), "test-v1", 0, expectedValues.Count(), "succeeded", new string('f', 64),
+            "synthetic-customer", []);
+        VerificationArtifactRecord[] Records(IEnumerable<ValueNode> values, VerificationArtifactRole role) =>
+            values.Select((value, index) => new VerificationArtifactRecord(nodeKey, role, semanticType,
+                new ArtifactReference(new ArtifactId($"{role}:{index}"), new SystemId("target-system"),
+                    new StorageEndpointId("target-store"), "row", index.ToString(CultureInfo.InvariantCulture)),
+                [new KeyValuePair<string, ValueNode>(measure, value)], declaredFields: [measure])).ToArray();
+        var workspace = new FixtureVerificationWorkspace([], Records(expectedValues, VerificationArtifactRole.ExpectedTarget),
+            Records(actualValues, VerificationArtifactRole.ActualTarget));
+        var context = new VerificationExecutionContext(configuration, graph, binding, new RunId(Guid.NewGuid()), workspace);
+        var definition = Rule("aggregate-total", "aggregate-total-comparison",
+            ("targetNode", nodeKey), ("semanticType", semanticType), ("measureField", measure));
+        var rule = new VerificationRuleRegistry([new GenericVerificationRuleProvider()]).Resolve([definition]).Rules.Single();
+        var findings = new List<VerificationFinding>();
+        await foreach (var finding in rule.EvaluateAsync(context, TestContext.Current.CancellationToken)
+            .WithCancellation(TestContext.Current.CancellationToken).ConfigureAwait(false))
+            findings.Add(finding);
         return findings;
     }
 

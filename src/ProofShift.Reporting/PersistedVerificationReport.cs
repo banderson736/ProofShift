@@ -123,6 +123,13 @@ public sealed record PersistedVerificationEvidenceReference(
     string Result,
     string Severity);
 
+public sealed record PersistedEvaluationScope(
+    string SourceNodeKey,
+    string Id,
+    string Type,
+    string Fingerprint,
+    long ArtifactCount);
+
 public sealed record PersistedVerificationReport
 {
     public const string FormatVersion = "proofshift-persisted-verification-report-v1";
@@ -159,6 +166,8 @@ public sealed record PersistedVerificationReport
     public string LineageBasis { get; }
     public bool RecoveryAssessed { get; }
     public bool QualificationAvailable { get; }
+    public IReadOnlyList<PersistedEvaluationScope> EvaluationScopes { get; }
+    public string EvaluationScopeClaimBoundary { get; }
 
     internal PersistedVerificationReport(string projectId, string projectName,
         PersistedExternalVerificationRun run, EvidenceStoreManifest evidenceManifest,
@@ -198,6 +207,20 @@ public sealed record PersistedVerificationReport
         LineageBasis = "graph-derived expected lineage";
         RecoveryAssessed = false;
         QualificationAvailable = false;
+        EvaluationScopes = checkpoint.Endpoints
+            .Where(endpoint => endpoint.EvaluationScopeId is not null &&
+                endpoint.EvaluationScopeType is not null &&
+                endpoint.EvaluationScopeFingerprint is not null)
+            .OrderBy(endpoint => endpoint.SourceNodeKey, StringComparer.Ordinal)
+            .Select(endpoint => new PersistedEvaluationScope(endpoint.SourceNodeKey,
+                endpoint.EvaluationScopeId!, endpoint.EvaluationScopeType!,
+                endpoint.EvaluationScopeFingerprint!, endpoint.ArtifactCount))
+            .ToArray();
+        EvaluationScopeClaimBoundary = EvaluationScopes.Count == 0
+            ? "Results are limited to configured source selectors; no claim is made about artifacts outside them."
+            : EvaluationScopes.Count == checkpoint.Endpoints.Count
+                ? "Results are limited to the declared evaluation scopes; no result proves completeness outside them."
+                : "Results are limited to each source's configured selector; only listed sources have explicit evaluation scopes, and no result proves completeness outside those selectors.";
     }
 
     private static System.Collections.ObjectModel.ReadOnlyDictionary<string, string> ReadOnly(

@@ -36,6 +36,7 @@ public sealed class StructuredFileConnector : ICheckpointSourceConnector, IPhysi
     public async IAsyncEnumerable<RecordEnvelope> ReadAsync(ConnectorContext context, ArtifactSelector selector, ReadOptions options,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        EvaluationScopeCapability.Validate(this, selector);
         if (options.Partition.Count != 0) throw Error(ConnectorIssueCodes.PartitioningUnsupported, "Partitioned file observation is unsupported.");
         Validate(selector);
         var path = ResolvePath(context, selector);

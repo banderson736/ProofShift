@@ -111,17 +111,31 @@ public sealed record ArtifactSelectorConfigurationDto
     public string? Kind { get; }
     public DomainDictionary<string> Properties { get; }
     public DomainList<string> IdentityFields { get; }
+    public EvaluationScopeConfigurationDto? EvaluationScope { get; }
 
     public ArtifactSelectorConfigurationDto(
         string? kind,
         IEnumerable<KeyValuePair<string, string>> properties,
-        IEnumerable<string> identityFields)
+        IEnumerable<string> identityFields,
+        EvaluationScopeConfigurationDto? evaluationScope = null)
     {
         Kind = kind;
         Properties = new DomainDictionary<string>(properties);
         IdentityFields = new DomainList<string>(identityFields);
+        EvaluationScope = evaluationScope;
     }
 }
+
+public sealed record EvaluationScopeConfigurationDto(
+    string? Id,
+    string? Type,
+    string? Description,
+    DomainList<EvaluationPredicateConfigurationDto> Predicates);
+
+public sealed record EvaluationPredicateConfigurationDto(
+    string? Field,
+    string? Operator,
+    DomainList<string> Values);
 
 public sealed record MigrationEdgeConfigurationDto
 {
@@ -362,7 +376,7 @@ public static class MigrationGraphConfigurationParser
 
         foreach (var entry in selectorNode.Values)
         {
-            if (entry.Key is "kind" or "properties" or "identity" or "key" or "table")
+            if (entry.Key is "kind" or "properties" or "identity" or "key" or "table" or "evaluationScope")
             {
                 continue;
             }
@@ -397,7 +411,93 @@ public static class MigrationGraphConfigurationParser
         }
 
         var normalizedKind = string.IsNullOrWhiteSpace(kind) ? null : kind.Trim();
-        return new ArtifactSelectorConfigurationDto(normalizedKind, properties, identity);
+        return new ArtifactSelectorConfigurationDto(normalizedKind, properties, identity,
+            ParseEvaluationScope(Find(selectorNode, "evaluationScope"), file, $"{path}.evaluationScope", issues));
+    }
+
+    private static EvaluationScopeConfigurationDto? ParseEvaluationScope(
+        ConfigurationDocumentNode? node,
+        string file,
+        string path,
+        ICollection<GraphValidationIssue> issues)
+    {
+        if (node is null) return null;
+        if (node is not ConfigurationMappingNode mapping)
+        {
+            AddIssue(issues, GraphIssueCodes.InvalidSelector, "Evaluation scope must be a mapping.", file, path);
+            return null;
+        }
+        foreach (var key in mapping.Values.Keys.Except(["id", "type", "description", "predicates"], StringComparer.Ordinal))
+            AddIssue(issues, GraphIssueCodes.InvalidSelector, $"Unsupported evaluation scope property '{key}'.", file, $"{path}.{key}");
+
+        var predicates = new List<EvaluationPredicateConfigurationDto>();
+        if (Find(mapping, "predicates") is { } predicateNode)
+        {
+            if (predicateNode is not ConfigurationSequenceNode sequence)
+            {
+                AddIssue(issues, GraphIssueCodes.InvalidSelector, "Evaluation predicates must be a sequence.", file, $"{path}.predicates");
+            }
+            else
+            {
+                for (var index = 0; index < sequence.Values.Count; index++)
+                {
+                    if (sequence.Values[index] is not ConfigurationMappingNode predicate)
+                    {
+                        AddIssue(issues, GraphIssueCodes.InvalidSelector, "Each evaluation predicate must be a mapping.", file, $"{path}.predicates[{index}]");
+                        continue;
+                    }
+                    var predicatePath = $"{path}.predicates[{index}]";
+                    foreach (var key in predicate.Values.Keys.Except(["field", "operator", "values", "value", "from", "to"],
+                        StringComparer.Ordinal))
+                        AddIssue(issues, GraphIssueCodes.InvalidSelector, $"Unsupported evaluation predicate property '{key}'.",
+                            file, $"{predicatePath}.{key}");
+
+                    var values = new List<string>();
+                    if (predicate.Values.TryGetValue("values", out var configuredValues))
+                    {
+                        if (configuredValues is not ConfigurationSequenceNode valueSequence)
+                        {
+                            AddIssue(issues, GraphIssueCodes.InvalidSelector, "Evaluation predicate values must be a sequence of scalar strings.",
+                                file, $"{predicatePath}.values");
+                        }
+                        else
+                        {
+                            foreach (var value in valueSequence.Values)
+                            {
+                                if (ReadText(value) is { } text) values.Add(text);
+                                else AddIssue(issues, GraphIssueCodes.InvalidSelector, "Evaluation predicate values must be scalar strings.",
+                                    file, $"{predicatePath}.values");
+                            }
+                        }
+                        if (predicate.Values.ContainsKey("value") || predicate.Values.ContainsKey("from") ||
+                            predicate.Values.ContainsKey("to"))
+                            AddIssue(issues, GraphIssueCodes.InvalidSelector,
+                                "Use either 'values' or scalar 'value'/'from'/'to' properties, not both.", file, predicatePath);
+                    }
+                    else
+                    {
+                        foreach (var key in new[] { "value", "from", "to" })
+                        {
+                            if (!predicate.Values.TryGetValue(key, out var value)) continue;
+                            if (ReadText(value) is { } text) values.Add(text);
+                            else AddIssue(issues, GraphIssueCodes.InvalidSelector,
+                                "Evaluation predicate values must be scalar strings.", file, $"{predicatePath}.{key}");
+                        }
+                    }
+
+                    predicates.Add(new EvaluationPredicateConfigurationDto(
+                        ReadText(Find(predicate, "field")),
+                        ReadText(Find(predicate, "operator")),
+                        new DomainList<string>(values)));
+                }
+            }
+        }
+
+        return new EvaluationScopeConfigurationDto(
+            ReadText(Find(mapping, "id")),
+            ReadText(Find(mapping, "type")),
+            ReadText(Find(mapping, "description")),
+            new DomainList<EvaluationPredicateConfigurationDto>(predicates));
     }
 
     private static List<MigrationEdgeConfigurationDto> ParseEdges(

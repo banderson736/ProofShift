@@ -1,0 +1,41 @@
+version: 2
+rules:
+  accounting:
+    type: source-artifact-accounting
+    version: "1"
+    severity: error
+  lineage:
+    type: target-lineage
+    version: "1"
+    severity: error
+  presence:
+    type: target-presence
+    version: "1"
+    severity: error
+  unexplained:
+    type: unexpected-target
+    version: "1"
+    severity: error
+  budget-attributes:
+    type: attribute-comparison
+    version: "1"
+    severity: error
+    targetNode: target-budgets
+    semanticType: PublicWorks.AssetBudget
+    attribute: budget_amount
+  budget-total:
+    type: aggregate-total-comparison
+    version: "1"
+    severity: error
+    targetNode: target-budgets
+    semanticType: PublicWorks.AssetBudget
+    measureField: budget_amount
+expectedExceptions:
+  - id: seeded-budget-review
+    ruleId: budget-attributes
+    findingCode: AttributeMismatch
+    targetNode: target-budgets
+    artifactIdSha256: cc63a29907bf620c15349daa834ed7b8a0a84f4231417ad31e2ad6944d28bc3c
+    evaluationScopeId: customer-public-works
+    owner: synthetic-fixture-owner
+    reason: Seeded budget correction demonstrates annotation without waiver.

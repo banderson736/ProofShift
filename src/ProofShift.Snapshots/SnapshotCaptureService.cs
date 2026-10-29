@@ -60,6 +60,7 @@ public sealed class SnapshotCaptureService
                 cancellationToken.ThrowIfCancellationRequested();
                 var context = _contextFactory.Create(configuration, node);
                 var connector = _connectors.Resolve(context.Connector);
+                EvaluationScopeCapability.Validate(connector, node.Selector);
                 using var inspectionStage = performanceRecorder?.StartStage(PerformanceStageKind.Checkpoint,
                     "source inspection", connector.Id.Value, node.Name);
                 var inspection = await connector.InspectAsync(context, node.Selector, cancellationToken).ConfigureAwait(false);
@@ -140,7 +141,10 @@ public sealed class SnapshotCaptureService
                     segment.Length,
                     consistencyDecision.RequestedStrategy,
                     consistencyDecision.EffectiveStrategy,
-                    consistencyDecision.Downgrade));
+                    consistencyDecision.Downgrade,
+                    node.Selector.EvaluationScope?.Id,
+                    node.Selector.EvaluationScope is { } scope ? EvaluationScopeName(scope.Type) : null,
+                    node.Selector.EvaluationScope?.Fingerprint));
                 artifactCount = checked(artifactCount + nodeArtifacts);
                 byteCount = checked(byteCount + nodeBytes);
             }
@@ -221,4 +225,12 @@ public sealed class SnapshotCaptureService
             return new SnapshotCaptureResult(checkpointId, status, null, sources.Length, endpoints.Count, artifactCount, byteCount, failureCode);
         }
     }
+
+    private static string EvaluationScopeName(EvaluationScopeType type) => type switch
+    {
+        EvaluationScopeType.FullDeclaredSource => "full-declared-source",
+        EvaluationScopeType.BoundedEvaluation => "bounded-evaluation",
+        EvaluationScopeType.CustomerPreparedSubset => "customer-prepared-subset",
+        _ => throw new ArgumentOutOfRangeException(nameof(type))
+    };
 }

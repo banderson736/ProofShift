@@ -57,7 +57,7 @@ public sealed record GraphCompilationResult
         IEnumerable<GraphValidationIssue> issues)
     {
         GraphVersion = graphVersion;
-        GraphCanonicalizationVersion = GraphCanonicalizer.FormatVersion;
+        GraphCanonicalizationVersion = graph?.GraphCanonicalizationVersion ?? GraphCanonicalizer.FormatVersion;
         Graph = graph;
         CanonicalGraph = canonicalGraph;
         Summary = summary;
@@ -140,6 +140,7 @@ public static class MigrationGraphCompiler
             domainEdges,
             externalKeys);
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+        var canonicalizationVersion = canonical[..canonical.IndexOf('\n', StringComparison.Ordinal)];
         var graphId = new MigrationGraphId(StableGraphIdentifier.Derive(
             projectKey,
             graphFile.RelativePath,
@@ -150,7 +151,7 @@ public static class MigrationGraphCompiler
             domainNodes,
             domainEdges,
             hash,
-            GraphCanonicalizer.FormatVersion);
+            canonicalizationVersion);
 
         foreach (var issue in graph.Validate())
         {
@@ -230,6 +231,12 @@ public static class MigrationGraphCompiler
             }
 
             var selector = CompileSelector(item.Selector, graphFile.RelativePath, path, issues);
+            if (selector?.EvaluationScope is not null && type != MigrationNodeType.Source)
+            {
+                AddIssue(issues, GraphIssueCodes.InvalidSelector,
+                    "Evaluation scope may be declared only on a source graph node.",
+                    graphFile.RelativePath, $"{path}.selector.evaluationScope");
+            }
             var nodeId = new MigrationNodeId(StableGraphIdentifier.Derive(
                 projectKey,
                 graphFile.RelativePath,
@@ -275,7 +282,83 @@ public static class MigrationGraphCompiler
             return null;
         }
 
-        return new ArtifactSelector(selector.Kind, selector.Properties, selector.IdentityFields);
+        var evaluationScope = CompileEvaluationScope(selector.EvaluationScope, file, $"{nodePath}.selector.evaluationScope", issues);
+        return new ArtifactSelector(selector.Kind, selector.Properties, selector.IdentityFields, evaluationScope);
+    }
+
+    private static EvaluationScope? CompileEvaluationScope(
+        EvaluationScopeConfigurationDto? definition,
+        string file,
+        string path,
+        ICollection<GraphValidationIssue> issues)
+    {
+        if (definition is null) return null;
+        if (string.IsNullOrWhiteSpace(definition.Id))
+            AddIssue(issues, GraphIssueCodes.InvalidSelector, "Evaluation scope requires a non-empty id.", file, $"{path}.id");
+        if (!TryParseEvaluationScopeType(definition.Type, out var type))
+            AddIssue(issues, GraphIssueCodes.InvalidSelector, "Evaluation scope type must be full-declared-source, bounded-evaluation, or customer-prepared-subset.", file, $"{path}.type");
+
+        var predicates = new List<EvaluationPredicate>();
+        for (var index = 0; index < definition.Predicates.Count; index++)
+        {
+            var predicate = definition.Predicates[index];
+            if (string.IsNullOrWhiteSpace(predicate.Field) ||
+                !TryParseEvaluationPredicateOperator(predicate.Operator, out var predicateOperator))
+            {
+                AddIssue(issues, GraphIssueCodes.InvalidSelector, "Evaluation predicate requires a field and a supported operator.", file,
+                    $"{path}.predicates[{index}]");
+                continue;
+            }
+
+            try
+            {
+                predicates.Add(new EvaluationPredicate(predicate.Field, predicateOperator, predicate.Values));
+            }
+            catch (ArgumentException)
+            {
+                AddIssue(issues, GraphIssueCodes.InvalidSelector, "Evaluation predicate values do not match its operator.", file,
+                    $"{path}.predicates[{index}]");
+            }
+        }
+
+        if (definition.Id is null || !TryParseEvaluationScopeType(definition.Type, out type)) return null;
+        try
+        {
+            return new EvaluationScope(definition.Id, type, predicates, definition.Description);
+        }
+        catch (ArgumentException)
+        {
+            AddIssue(issues, GraphIssueCodes.InvalidSelector,
+                "Only bounded evaluation scopes may declare relational predicates, and each predicate must be valid.",
+                file, path);
+            return null;
+        }
+    }
+
+    private static bool TryParseEvaluationScopeType(string? value, out EvaluationScopeType type)
+    {
+        switch (Normalize(value))
+        {
+            case "fulldeclaredsource": type = EvaluationScopeType.FullDeclaredSource; return true;
+            case "boundedevaluation": type = EvaluationScopeType.BoundedEvaluation; return true;
+            case "customerpreparedsubset": type = EvaluationScopeType.CustomerPreparedSubset; return true;
+            default: type = default; return false;
+        }
+    }
+
+    private static bool TryParseEvaluationPredicateOperator(string? value, out EvaluationPredicateOperator predicateOperator)
+    {
+        switch (Normalize(value))
+        {
+            case "equals": predicateOperator = EvaluationPredicateOperator.Equals; return true;
+            case "notequals": predicateOperator = EvaluationPredicateOperator.NotEquals; return true;
+            case "in": predicateOperator = EvaluationPredicateOperator.In; return true;
+            case "range": predicateOperator = EvaluationPredicateOperator.Range; return true;
+            case "datetimerange": predicateOperator = EvaluationPredicateOperator.DateTimeRange; return true;
+            case "isnull": predicateOperator = EvaluationPredicateOperator.IsNull; return true;
+            case "isnotnull": predicateOperator = EvaluationPredicateOperator.IsNotNull; return true;
+            default: predicateOperator = default; return false;
+        }
     }
 
     private static List<EdgeDraft> CompileEdges(

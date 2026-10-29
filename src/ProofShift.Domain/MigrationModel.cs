@@ -14,16 +14,19 @@ public sealed record ArtifactSelector
     public string Kind { get; }
     public DomainDictionary<string> Properties { get; }
     public DomainList<string> IdentityFields { get; }
+    public EvaluationScope? EvaluationScope { get; }
 
     public ArtifactSelector(
         string kind,
         IEnumerable<KeyValuePair<string, string>>? properties = null,
-        IEnumerable<string>? identityFields = null)
+        IEnumerable<string>? identityFields = null,
+        EvaluationScope? evaluationScope = null)
     {
         Kind = DomainGuard.Required(kind, nameof(kind));
         Properties = new DomainDictionary<string>(properties ?? Array.Empty<KeyValuePair<string, string>>());
         IdentityFields = new DomainList<string>((identityFields ?? Array.Empty<string>())
             .Select(field => DomainGuard.Required(field, nameof(identityFields))));
+        EvaluationScope = evaluationScope;
         if (IdentityFields.Distinct(StringComparer.Ordinal).Count() != IdentityFields.Count)
         {
             throw new ArgumentException("Selector identity fields must be unique.", nameof(identityFields));

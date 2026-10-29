@@ -138,7 +138,16 @@ internal sealed record ExternalVerificationOutput(
     string LineageBasis,
     bool RecoveryAssessed,
     bool QualificationAvailable,
-    string EvidencePath);
+    string EvidencePath,
+    IReadOnlyList<EvaluationScopeOutput> EvaluationScopes,
+    string EvaluationScopeClaimBoundary);
+
+internal sealed record EvaluationScopeOutput(
+    string SourceNodeKey,
+    string Id,
+    string Type,
+    string Fingerprint,
+    long ArtifactCount);
 
 internal sealed record DryRunOutput(
     string? Project,

@@ -53,11 +53,13 @@ public sealed record VerificationRuleSet
     public DomainList<VerificationOrderingKey> RequiredOrderingKeys { get; }
     public IReadOnlyDictionary<string, RuleDescriptor> DescriptorsByRuleId { get; }
     public IReadOnlyDictionary<string, string> ProviderVersions { get; }
+    public IReadOnlyList<ExpectedExceptionAnnotation> ExpectedExceptions { get; }
     public string Fingerprint { get; }
 
     internal VerificationRuleSet(IEnumerable<VerificationRuleDefinition> definitions,
         IEnumerable<IVerificationRule> rules, IEnumerable<KeyValuePair<string, string>> providerVersions,
-        IReadOnlyDictionary<string, RuleDescriptor> descriptorsByRuleId, string fingerprint)
+        IReadOnlyDictionary<string, RuleDescriptor> descriptorsByRuleId, string fingerprint,
+        IEnumerable<ExpectedExceptionAnnotation>? expectedExceptions = null)
     {
         Definitions = new DomainList<VerificationRuleDefinition>(definitions.OrderBy(item => item.Id.Value, StringComparer.Ordinal));
         Rules = new DomainList<IVerificationRule>(rules.OrderBy(item => item.Id.Value, StringComparer.Ordinal));
@@ -69,6 +71,8 @@ public sealed record VerificationRuleSet
                 pair => pair.Value, StringComparer.Ordinal), StringComparer.Ordinal));
         ProviderVersions = new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(
             new SortedDictionary<string, string>(providerVersions.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal), StringComparer.Ordinal));
+        ExpectedExceptions = Array.AsReadOnly(
+            (expectedExceptions ?? []).OrderBy(item => item.Id, StringComparer.Ordinal).ToArray());
         Fingerprint = fingerprint;
     }
 }
@@ -103,6 +107,8 @@ public sealed class VerificationRuleRegistry
     public VerificationRuleSet Resolve(IEnumerable<VerificationRuleDefinition> definitions)
     {
         ArgumentNullException.ThrowIfNull(definitions);
+        var expectedExceptions = definitions is VerificationRuleConfiguration configuration
+            ? configuration.ExpectedExceptions : [];
         var configured = definitions.OrderBy(definition => definition.Id.Value, StringComparer.Ordinal).ToArray();
         if (configured.Length == 0)
             throw new VerificationRuleException(VerificationIssueCodes.UnknownRuleType, "Verification rule configuration is empty.");
@@ -121,11 +127,12 @@ public sealed class VerificationRuleRegistry
         }
 
         return new VerificationRuleSet(configured, rules, _providerVersions, descriptors,
-            Fingerprint(configured, _providerVersions));
+            Fingerprint(configured, _providerVersions, expectedExceptions), expectedExceptions);
     }
 
     private static string Fingerprint(IEnumerable<VerificationRuleDefinition> definitions,
-        IReadOnlyDictionary<string, string> providerVersions)
+        IReadOnlyDictionary<string, string> providerVersions,
+        IEnumerable<ExpectedExceptionAnnotation> expectedExceptions)
     {
         var canonical = new StringBuilder();
         Append(canonical, "proofshift-verification-rule-set-v1");
@@ -148,6 +155,22 @@ public sealed class VerificationRuleRegistry
                     Append(canonical, option.Key);
                     Append(canonical, GraphTargetIdentity.CanonicalValue(option.Value));
                 }
+                var annotations = expectedExceptions.OrderBy(item => item.Id, StringComparer.Ordinal).ToArray();
+                if (annotations.Length > 0)
+                {
+                    Append(canonical, "expected-exception-annotations-v1");
+                    foreach (var annotation in annotations)
+                    {
+                        Append(canonical, annotation.Id);
+                        Append(canonical, annotation.RuleId.Value);
+                        Append(canonical, annotation.FindingCode);
+                        Append(canonical, annotation.TargetNode);
+                        Append(canonical, annotation.ArtifactIdSha256);
+                        Append(canonical, annotation.EvaluationScopeId);
+                        Append(canonical, annotation.Reason);
+                        Append(canonical, annotation.Owner);
+                    }
+                }
             }
             foreach (var option in definition.Options.OrderBy(pair => pair.Key, StringComparer.Ordinal))
             {
@@ -167,4 +190,3 @@ public sealed class VerificationRuleException(string code, string message, RuleS
     public string Code { get; } = code;
     public RuleSourceLocation? Location { get; } = location;
 }
-

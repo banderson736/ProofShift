@@ -5,6 +5,7 @@ using ProofShift.Graph;
 using ProofShift.Snapshots;
 
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("ProofShift.DemoScenarios")]
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("ProofShift.Verification.Tests")]
 
 namespace ProofShift.Verification;
 

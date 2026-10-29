@@ -53,6 +53,9 @@ public sealed record CheckpointEndpoint
     public string SegmentReference { get; }
     public string SegmentSha256 { get; }
     public long SegmentLength { get; }
+    public string? EvaluationScopeId { get; }
+    public string? EvaluationScopeType { get; }
+    public string? EvaluationScopeFingerprint { get; }
 
     public CheckpointEndpoint(
         string sourceNodeKey,
@@ -75,7 +78,10 @@ public sealed record CheckpointEndpoint
         long segmentLength,
         string? requestedConsistencyStrategy = null,
         string? effectiveConsistencyStrategy = null,
-        string? consistencyDowngrade = null)
+        string? consistencyDowngrade = null,
+        string? evaluationScopeId = null,
+        string? evaluationScopeType = null,
+        string? evaluationScopeFingerprint = null)
     {
         SourceNodeKey = DomainGuard.Required(sourceNodeKey, nameof(sourceNodeKey));
         SystemId = DomainGuard.Required(systemId, nameof(systemId));
@@ -112,6 +118,14 @@ public sealed record CheckpointEndpoint
         SegmentReference = DomainGuard.Required(segmentReference, nameof(segmentReference));
         SegmentSha256 = Hash(segmentSha256, nameof(segmentSha256));
         SegmentLength = segmentLength;
+        EvaluationScopeId = string.IsNullOrWhiteSpace(evaluationScopeId) ? null : evaluationScopeId.Trim();
+        EvaluationScopeType = string.IsNullOrWhiteSpace(evaluationScopeType) ? null : evaluationScopeType.Trim();
+        EvaluationScopeFingerprint = evaluationScopeFingerprint is null
+            ? null
+            : Hash(evaluationScopeFingerprint, nameof(evaluationScopeFingerprint));
+        if ((EvaluationScopeId is null) != (EvaluationScopeType is null) ||
+            (EvaluationScopeId is null) != (EvaluationScopeFingerprint is null))
+            throw new ArgumentException("Evaluation scope metadata must be complete when present.", nameof(evaluationScopeId));
         if (guarantee == CheckpointGuarantee.Materialized && !replayable)
         {
             throw new ArgumentException("Materialized checkpoints must be replayable.", nameof(replayable));

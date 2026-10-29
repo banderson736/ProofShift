@@ -98,7 +98,11 @@ public sealed class ParquetSourceConnector : ICheckpointSourceConnector, ISource
     }
 
     public IAsyncEnumerable<RecordEnvelope> ReadAsync(ConnectorContext context, ArtifactSelector selector, ReadOptions options,
-        CancellationToken cancellationToken) => Translate(ReadCoreAsync(context, selector, options, cancellationToken), cancellationToken);
+        CancellationToken cancellationToken)
+    {
+        EvaluationScopeCapability.Validate(this, selector);
+        return Translate(ReadCoreAsync(context, selector, options, cancellationToken), cancellationToken);
+    }
 
     public async IAsyncEnumerable<RecordEnvelope> ReadForCheckpointAsync(ConnectorContext context, ArtifactSelector selector,
         ReadOptions options, [EnumeratorCancellation] CancellationToken cancellationToken)

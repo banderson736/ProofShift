@@ -8,6 +8,7 @@ namespace ProofShift.Graph;
 public static class GraphCanonicalizer
 {
     public const string FormatVersion = "proofshift-graph-canonical-v1";
+    public const string EvaluationScopeFormatVersion = "proofshift-graph-canonical-v2";
 
     public static string Canonicalize(
         int graphVersion,
@@ -18,6 +19,11 @@ public static class GraphCanonicalizer
         ArgumentNullException.ThrowIfNull(nodes);
         ArgumentNullException.ThrowIfNull(edges);
         ArgumentNullException.ThrowIfNull(externalNodeKeys);
+        var nodeList = nodes.ToArray();
+        var edgeList = edges.ToArray();
+        var formatVersion = nodeList.Any(node => node.Selector.EvaluationScope is not null)
+            ? EvaluationScopeFormatVersion
+            : FormatVersion;
 
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions
@@ -28,14 +34,14 @@ public static class GraphCanonicalizer
             writer.WriteStartObject();
             writer.WriteNumber("version", graphVersion);
             writer.WriteStartArray("nodes");
-            foreach (var node in nodes.OrderBy(node => node.Name, StringComparer.Ordinal))
+            foreach (var node in nodeList.OrderBy(node => node.Name, StringComparer.Ordinal))
             {
                 WriteNode(writer, node);
             }
 
             writer.WriteEndArray();
             writer.WriteStartArray("edges");
-            foreach (var edge in edges.OrderBy(edge => edge.Name, StringComparer.Ordinal))
+            foreach (var edge in edgeList.OrderBy(edge => edge.Name, StringComparer.Ordinal))
             {
                 WriteEdge(writer, edge, externalNodeKeys);
             }
@@ -45,7 +51,7 @@ public static class GraphCanonicalizer
             writer.Flush();
         }
 
-        return $"{FormatVersion}\n{Encoding.UTF8.GetString(stream.ToArray())}";
+        return $"{formatVersion}\n{Encoding.UTF8.GetString(stream.ToArray())}";
     }
 
     private static void WriteNode(Utf8JsonWriter writer, MigrationNode node)
@@ -72,9 +78,39 @@ public static class GraphCanonicalizer
         }
 
         writer.WriteEndArray();
+        if (node.Selector.EvaluationScope is { } scope)
+        {
+            writer.WriteStartObject("evaluationScope");
+            writer.WriteString("id", scope.Id);
+            writer.WriteString("type", ScopeType(scope.Type));
+            writer.WriteString("fingerprint", scope.Fingerprint);
+            if (scope.Description is not null) writer.WriteString("description", scope.Description);
+            writer.WriteStartArray("predicates");
+            foreach (var predicate in scope.Predicates.OrderBy(EvaluationScope.CanonicalPredicateOrderKey, StringComparer.Ordinal))
+            {
+                writer.WriteStartObject();
+                writer.WriteString("field", predicate.Field);
+                writer.WriteString("operator", EvaluationPredicate.OperatorName(predicate.Operator));
+                writer.WriteStartArray("values");
+                foreach (var value in predicate.Values) writer.WriteStringValue(value);
+                writer.WriteEndArray();
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
         writer.WriteEndObject();
         writer.WriteEndObject();
     }
+
+    private static string ScopeType(EvaluationScopeType type) => type switch
+    {
+        EvaluationScopeType.FullDeclaredSource => "full-declared-source",
+        EvaluationScopeType.BoundedEvaluation => "bounded-evaluation",
+        EvaluationScopeType.CustomerPreparedSubset => "customer-prepared-subset",
+        _ => throw new ArgumentOutOfRangeException(nameof(type))
+    };
 
     private static void WriteEdge(
         Utf8JsonWriter writer,

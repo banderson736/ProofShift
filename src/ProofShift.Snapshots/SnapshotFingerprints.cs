@@ -31,6 +31,14 @@ public static class SnapshotFingerprints
             Append(canonical, identity);
         }
 
+        if (selector.EvaluationScope is { } scope)
+        {
+            Append(canonical, "evaluation-scope-v1");
+            Append(canonical, scope.Id);
+            Append(canonical, scope.Type.ToString());
+            Append(canonical, scope.Fingerprint);
+        }
+
         return Hash(canonical.ToString());
     }
 

@@ -76,8 +76,11 @@ public class RemoteObjectSourceConnector : ICheckpointSourceConnector, ISourceBi
     }
 
     public IAsyncEnumerable<RecordEnvelope> ReadAsync(ConnectorContext context, ArtifactSelector selector, ReadOptions options,
-        CancellationToken cancellationToken) =>
-        Translate(ReadCoreAsync(context, selector, options, cancellationToken), cancellationToken);
+        CancellationToken cancellationToken)
+    {
+        EvaluationScopeCapability.Validate(this, selector);
+        return Translate(ReadCoreAsync(context, selector, options, cancellationToken), cancellationToken);
+    }
 
     public async IAsyncEnumerable<RecordEnvelope> ReadForCheckpointAsync(ConnectorContext context, ArtifactSelector selector,
         ReadOptions options, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)

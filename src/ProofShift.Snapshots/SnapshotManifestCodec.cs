@@ -110,7 +110,10 @@ internal static class SnapshotManifestCodec
             endpoint.SourceFingerprint,
             endpoint.SegmentReference,
             endpoint.SegmentSha256,
-            endpoint.SegmentLength)).OrderBy(endpoint => endpoint.SourceNodeKey, StringComparer.Ordinal).ToArray());
+            endpoint.SegmentLength,
+            endpoint.EvaluationScopeId,
+            endpoint.EvaluationScopeType,
+            endpoint.EvaluationScopeFingerprint)).OrderBy(endpoint => endpoint.SourceNodeKey, StringComparer.Ordinal).ToArray());
 
     private static SourceCheckpoint ToDomain(SnapshotManifestDocument document)
     {
@@ -135,7 +138,10 @@ internal static class SnapshotManifestCodec
             endpoint.SegmentLength,
             endpoint.RequestedConsistencyStrategy,
             endpoint.EffectiveConsistencyStrategy,
-            endpoint.ConsistencyDowngrade)).ToArray();
+            endpoint.ConsistencyDowngrade,
+            endpoint.EvaluationScopeId,
+            endpoint.EvaluationScopeType,
+            endpoint.EvaluationScopeFingerprint)).ToArray();
 
         return new SourceCheckpoint(
             new CheckpointId(Guid.ParseExact(document.CheckpointId, "N")),
@@ -197,5 +203,8 @@ internal static class SnapshotManifestCodec
         string SourceFingerprint,
         string SegmentReference,
         string SegmentSha256,
-        long SegmentLength);
+        long SegmentLength,
+        string? EvaluationScopeId = null,
+        string? EvaluationScopeType = null,
+        string? EvaluationScopeFingerprint = null);
 }

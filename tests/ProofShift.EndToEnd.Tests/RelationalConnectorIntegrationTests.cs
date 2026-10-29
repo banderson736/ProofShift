@@ -264,6 +264,15 @@ public sealed class RelationalConnectorIntegrationTests
             Assert.IsType<LocalDateTimeValue>(rows[0].Values["local_at"]).Value);
         Assert.All(rows, row => Assert.Equal("pg-source", row.Artifact.SystemId.Value));
 
+        var scopedSelector = new ArtifactSelector("table",
+            [new KeyValuePair<string, string>("name", "assurance.member_rows")], CompositePostgresKey,
+            new EvaluationScope("inactive-members", EvaluationScopeType.BoundedEvaluation,
+                [new EvaluationPredicate("active", EvaluationPredicateOperator.Equals, ["false"])]));
+        var scopedRows = await ReadAllAsync(connector.ReadAsync(context, scopedSelector, new ReadOptions(),
+            TestContext.Current.CancellationToken));
+        Assert.Equal(50, scopedRows.Count);
+        Assert.All(scopedRows, row => Assert.Equal(new BooleanValue(false), row.Values["active"]));
+
         var postgresResolver = Assert.IsAssignableFrom<ISourceBinaryContentResolver>(connector);
         await using (var binaryStream = await postgresResolver.OpenBinaryReadAsync(
             context, selector, rows[0].Artifact, postgresBinary, TestContext.Current.CancellationToken))
@@ -289,6 +298,89 @@ public sealed class RelationalConnectorIntegrationTests
             TableSelector("assurance.missing_rows", CompositePostgresKey),
             TestContext.Current.CancellationToken);
         Assert.Contains(missingTableInspection.Issues, issue => issue.Code == ConnectorIssueCodes.SourceObjectNotFound);
+    }
+
+    [Fact]
+    public async Task PostgreSqlEvaluationScopePredicatesMatchTypesNullsAndRejectInvalidInputs()
+    {
+        var container = await StartPostgresContainerAsync();
+        await using var cleanup = container;
+        await using (var setup = new NpgsqlConnection(container.GetConnectionString()))
+        {
+            await setup.OpenAsync(TestContext.Current.CancellationToken);
+            await using var command = setup.CreateCommand();
+            command.CommandText = """
+                CREATE SCHEMA assurance;
+                CREATE TABLE assurance.scope_predicates (
+                    id integer NOT NULL PRIMARY KEY,
+                    active boolean NULL,
+                    amount numeric NULL,
+                    effective_at timestamptz NOT NULL,
+                    optional_value text NULL,
+                    always_null text NULL,
+                    text_value text NOT NULL
+                );
+                INSERT INTO assurance.scope_predicates VALUES
+                    (1, TRUE, 10.50, '2025-01-01 00:00:00+00', NULL, NULL, 'alpha'),
+                    (2, FALSE, 20.25, '2025-01-02 00:00:00+00', 'x', NULL, 'beta'),
+                    (3, FALSE, 30.00, '2025-01-03 00:00:00+00', 'y', NULL, 'gamma'),
+                    (4, NULL, NULL, '2025-01-04 00:00:00+00', 'z', NULL, 'delta'),
+                    (5, TRUE, 50.00, '2025-01-05 00:00:00+00', 'w', NULL, 'epsilon');
+                """;
+            await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+        }
+        var connector = new PostgresSourceConnector();
+        var context = RelationalContext("postgres", "pg-source", "member-store", container.GetConnectionString());
+
+        await AssertScopedIdsAsync(connector, context,
+            new EvaluationPredicate("active", EvaluationPredicateOperator.Equals, ["true"]), [1, 5]);
+        await AssertScopedIdsAsync(connector, context,
+            new EvaluationPredicate("active", EvaluationPredicateOperator.NotEquals, ["true"]), [2, 3]);
+        await AssertScopedIdsAsync(connector, context,
+            new EvaluationPredicate("id", EvaluationPredicateOperator.In, ["1", "3"]), [1, 3]);
+        await AssertScopedIdsAsync(connector, context,
+            new EvaluationPredicate("id", EvaluationPredicateOperator.In, ["99"]), []);
+        await AssertScopedIdsAsync(connector, context,
+            new EvaluationPredicate("amount", EvaluationPredicateOperator.Range, ["20", "30"]), [2, 3]);
+        await AssertScopedIdsAsync(connector, context,
+            new EvaluationPredicate("amount", EvaluationPredicateOperator.Range, ["100", "200"]), []);
+        await AssertScopedIdsAsync(connector, context,
+            new EvaluationPredicate("effective_at", EvaluationPredicateOperator.DateTimeRange,
+                ["2025-01-02T00:00:00+00:00", "2025-01-03T00:00:00+00:00"]), [2, 3]);
+        await AssertScopedIdsAsync(connector, context,
+            new EvaluationPredicate("effective_at", EvaluationPredicateOperator.DateTimeRange,
+                ["2025-02-01T00:00:00+00:00", "2025-02-02T00:00:00+00:00"]), []);
+        await AssertScopedIdsAsync(connector, context,
+            new EvaluationPredicate("optional_value", EvaluationPredicateOperator.IsNull), [1]);
+        await AssertScopedIdsAsync(connector, context,
+            new EvaluationPredicate("id", EvaluationPredicateOperator.IsNull), []);
+        await AssertScopedIdsAsync(connector, context,
+            new EvaluationPredicate("optional_value", EvaluationPredicateOperator.IsNotNull), [2, 3, 4, 5]);
+        await AssertScopedIdsAsync(connector, context,
+            new EvaluationPredicate("always_null", EvaluationPredicateOperator.IsNotNull), []);
+
+        await AssertInvalidScopePredicateAsync(connector, context,
+            new EvaluationPredicate("active", EvaluationPredicateOperator.Equals, ["not-a-boolean"]));
+        await AssertInvalidScopePredicateAsync(connector, context,
+            new EvaluationPredicate("amount", EvaluationPredicateOperator.In, ["not-a-number"]));
+        await AssertInvalidScopePredicateAsync(connector, context,
+            new EvaluationPredicate("amount", EvaluationPredicateOperator.Range, ["malformed", "10"]));
+        await AssertInvalidScopePredicateAsync(connector, context,
+            new EvaluationPredicate("amount", EvaluationPredicateOperator.Range, ["30", "20"]));
+        await AssertInvalidScopePredicateAsync(connector, context,
+            new EvaluationPredicate("text_value", EvaluationPredicateOperator.Range, ["a", "z"]));
+        await AssertInvalidScopePredicateAsync(connector, context,
+            new EvaluationPredicate("text_value", EvaluationPredicateOperator.DateTimeRange,
+                ["2025-01-01T00:00:00+00:00", "2025-01-02T00:00:00+00:00"]));
+        await AssertInvalidScopePredicateAsync(connector, context,
+            new EvaluationPredicate("effective_at", EvaluationPredicateOperator.DateTimeRange,
+                ["not-a-date", "2025-01-03T00:00:00+00:00"]));
+        await AssertInvalidScopePredicateAsync(connector, context,
+            new EvaluationPredicate("missing_field", EvaluationPredicateOperator.Equals, ["1"]));
+        Assert.Throws<ArgumentException>(() =>
+            new EvaluationPredicate("optional_value", EvaluationPredicateOperator.IsNull, ["unexpected"]));
+        Assert.Throws<ArgumentException>(() =>
+            new EvaluationPredicate("optional_value", EvaluationPredicateOperator.IsNotNull, ["unexpected"]));
     }
 
     [Fact]
@@ -459,6 +551,26 @@ public sealed class RelationalConnectorIntegrationTests
             new RuntimeConfiguration([
                 new KeyValuePair<string, RuntimeSetting>("connection", RuntimeSetting.FromRuntimeValue(connectionString, isSecret: true))
             ]));
+
+    private static async Task AssertScopedIdsAsync(PostgresSourceConnector connector, ConnectorContext context,
+        EvaluationPredicate predicate, long[] expectedIds)
+    {
+        var selector = new ArtifactSelector("table", [new("name", "assurance.scope_predicates")], ["id"],
+            new EvaluationScope("predicate-contract", EvaluationScopeType.BoundedEvaluation, [predicate]));
+        var rows = await ReadAllAsync(connector.ReadAsync(context, selector, new ReadOptions(),
+            TestContext.Current.CancellationToken));
+        Assert.Equal(expectedIds, rows.Select(row => Assert.IsType<IntegerValue>(row.Values["id"]).Value).ToArray());
+    }
+
+    private static async Task AssertInvalidScopePredicateAsync(PostgresSourceConnector connector, ConnectorContext context,
+        EvaluationPredicate predicate)
+    {
+        var selector = new ArtifactSelector("table", [new("name", "assurance.scope_predicates")], ["id"],
+            new EvaluationScope("predicate-contract", EvaluationScopeType.BoundedEvaluation, [predicate]));
+        var exception = await Assert.ThrowsAsync<ConnectorReadException>(() => ReadAllAsync(connector.ReadAsync(
+            context, selector, new ReadOptions(), TestContext.Current.CancellationToken)));
+        Assert.Equal(ConnectorIssueCodes.InvalidEvaluationPredicate, exception.Code);
+    }
 
     private static async Task<List<RecordEnvelope>> ReadAllAsync(IAsyncEnumerable<RecordEnvelope> records)
     {

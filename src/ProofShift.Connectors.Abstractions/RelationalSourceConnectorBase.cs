@@ -21,6 +21,12 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
 
     public ConnectorId Id { get; }
     public string Version { get; }
+    public ConnectorCapabilityDescriptor Capabilities => new(Id.Value, Version, true, true, true, true,
+        false, true, true, CheckpointConsistency.ToString(), false,
+        EvaluationScopePredicates: new DomainList<string>(
+        [
+            "equals", "not-equals", "in", "range", "date-time-range", "is-null", "is-not-null"
+        ]));
 
     protected abstract DbConnection CreateConnection(string connectionString);
     protected abstract string ColumnsSql { get; }
@@ -323,6 +329,7 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(selector);
         ArgumentNullException.ThrowIfNull(options);
+        EvaluationScopeCapability.Validate(this, selector);
         if (options.Partition.Count > 0)
         {
             throw new ConnectorReadException(ConnectorIssueCodes.PartitioningUnsupported,
@@ -365,12 +372,12 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
         await using var transaction = isolationLevel is { } isolation
             ? await connection.BeginTransactionAsync(isolation, cancellationToken).ConfigureAwait(false)
             : null;
-        var sql = BuildSelectSql(schema, table, selectedColumns, identity);
         string? previousArtifactId = null;
         await using (var command = connection.CreateCommand())
         {
-            command.CommandText = sql;
             command.Transaction = transaction;
+            command.CommandText = BuildSelectSql(schema, table, selectedColumns, identity, selector,
+                inspection.Columns, command);
             await using (var reader = await ExecuteReaderAsync(command, cancellationToken).ConfigureAwait(false))
             {
                 while (await ReadNextAsync(reader, cancellationToken).ConfigureAwait(false))
@@ -637,12 +644,188 @@ public abstract class RelationalSourceConnectorBase : ICheckpointSourceConnector
         }
     }
 
-    private string BuildSelectSql(string schema, string table, IReadOnlyCollection<string> columns, IReadOnlyCollection<string> identity)
+    private string BuildSelectSql(string schema, string table, IReadOnlyCollection<string> columns,
+        IReadOnlyCollection<string> identity, ArtifactSelector selector, IReadOnlyCollection<SourceColumn> sourceColumns,
+        DbCommand command)
     {
         var selected = string.Join(", ", columns.Select(QuoteIdentifier));
         var order = string.Join(", ", identity.Select(QuoteIdentifier));
-        return $"SELECT {selected} FROM {QuoteIdentifier(schema)}.{QuoteIdentifier(table)} ORDER BY {order}";
+        var predicates = new List<string>();
+        if (selector.EvaluationScope is { } scope)
+        {
+            for (var index = 0; index < scope.Predicates.Count; index++)
+            {
+                var predicate = scope.Predicates[index];
+                var column = sourceColumns.SingleOrDefault(item =>
+                    string.Equals(item.Name, predicate.Field, StringComparison.Ordinal));
+                if (column is null || !IsValidIdentifier(predicate.Field) || IsBinaryType(column.DataType))
+                    throw new ConnectorReadException(ConnectorIssueCodes.InvalidEvaluationPredicate,
+                        "Evaluation predicate field is absent from discovery or has an unsupported physical type.");
+                var field = QuoteIdentifier(predicate.Field);
+                var parameterRoot = $"scope{index.ToString(CultureInfo.InvariantCulture)}";
+                switch (predicate.Operator)
+                {
+                    case EvaluationPredicateOperator.IsNull:
+                        predicates.Add($"{field} IS NULL");
+                        break;
+                    case EvaluationPredicateOperator.IsNotNull:
+                        predicates.Add($"{field} IS NOT NULL");
+                        break;
+                    case EvaluationPredicateOperator.Equals:
+                    case EvaluationPredicateOperator.NotEquals:
+                        predicates.Add($"{field} {(predicate.Operator == EvaluationPredicateOperator.Equals ? "=" : "<>")} {ParameterPlaceholder(parameterRoot)}");
+                        AddParameter(command, parameterRoot, ParseScopeValue(column.DataType, predicate.Values[0],
+                            predicate.Operator));
+                        break;
+                    case EvaluationPredicateOperator.In:
+                    {
+                        var placeholders = new List<string>(predicate.Values.Count);
+                        for (var valueIndex = 0; valueIndex < predicate.Values.Count; valueIndex++)
+                        {
+                            var parameterName = $"{parameterRoot}_{valueIndex.ToString(CultureInfo.InvariantCulture)}";
+                            placeholders.Add(ParameterPlaceholder(parameterName));
+                            AddParameter(command, parameterName, ParseScopeValue(column.DataType,
+                                predicate.Values[valueIndex], predicate.Operator));
+                        }
+                        predicates.Add($"{field} IN ({string.Join(", ", placeholders)})");
+                        break;
+                    }
+                    case EvaluationPredicateOperator.Range:
+                    case EvaluationPredicateOperator.DateTimeRange:
+                    {
+                        var numeric = IsNumericType(column.DataType);
+                        var temporal = IsTemporalType(column.DataType);
+                        if (predicate.Operator == EvaluationPredicateOperator.Range && !numeric ||
+                            predicate.Operator == EvaluationPredicateOperator.DateTimeRange && !temporal)
+                            throw new ConnectorReadException(ConnectorIssueCodes.InvalidEvaluationPredicate,
+                                "Evaluation range predicate does not match the discovered field type.");
+                        var lowerParameter = $"{parameterRoot}_from";
+                        var upperParameter = $"{parameterRoot}_to";
+                        predicates.Add($"{field} >= {ParameterPlaceholder(lowerParameter)} AND {field} <= {ParameterPlaceholder(upperParameter)}");
+                        var lower = ParseScopeValue(column.DataType, predicate.Values[0], predicate.Operator);
+                        var upper = ParseScopeValue(column.DataType, predicate.Values[1], predicate.Operator);
+                        if (((IComparable)lower).CompareTo(upper) > 0)
+                            throw new ConnectorReadException(ConnectorIssueCodes.InvalidEvaluationPredicate,
+                                "Evaluation range lower bound must not exceed its upper bound.");
+                        AddParameter(command, lowerParameter, lower);
+                        AddParameter(command, upperParameter, upper);
+                        break;
+                    }
+                    default:
+                        throw new ConnectorReadException(ConnectorIssueCodes.InvalidEvaluationPredicate,
+                            "Evaluation predicate operator is unsupported.");
+                }
+            }
+        }
+
+        var where = predicates.Count == 0 ? string.Empty : $" WHERE {string.Join(" AND ", predicates)}";
+        return $"SELECT {selected} FROM {QuoteIdentifier(schema)}.{QuoteIdentifier(table)}{where} ORDER BY {order}";
     }
+
+    private static object ParseScopeValue(string dataType, string value, EvaluationPredicateOperator operation)
+    {
+        var type = dataType.ToLowerInvariant();
+        if (IsTemporalType(type))
+        {
+            if (type.Contains("with time zone", StringComparison.Ordinal) ||
+                type.Contains("timestamptz", StringComparison.Ordinal) ||
+                type.Contains("datetimeoffset", StringComparison.Ordinal))
+            {
+                if (!HasExplicitOffset(value) ||
+                    !DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var offset))
+                    throw InvalidScopeValue();
+                return offset;
+            }
+            if (type == "date" || type.StartsWith("date ", StringComparison.Ordinal))
+            {
+                if (!DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+                    throw InvalidScopeValue();
+                return date.ToDateTime(TimeOnly.MinValue);
+            }
+            if (!DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var local) ||
+                local.Kind != DateTimeKind.Unspecified)
+                throw InvalidScopeValue();
+            return local;
+        }
+
+        if (IsNumericType(type))
+        {
+            if (type.Contains("real", StringComparison.Ordinal) || type.Contains("float", StringComparison.Ordinal) ||
+                type.Contains("double", StringComparison.Ordinal))
+            {
+                if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var floatingPoint) ||
+                    !double.IsFinite(floatingPoint))
+                    throw InvalidScopeValue();
+                return floatingPoint;
+            }
+            if (type.Contains("int", StringComparison.Ordinal) || type.Contains("serial", StringComparison.Ordinal))
+            {
+                if (!long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var integer))
+                    throw InvalidScopeValue();
+                return integer;
+            }
+            if (!decimal.TryParse(value, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint,
+                    CultureInfo.InvariantCulture, out var number))
+                throw InvalidScopeValue();
+            return number;
+        }
+
+        if (type is "uuid" or "uniqueidentifier")
+        {
+            if (!Guid.TryParse(value, out var identifier)) throw InvalidScopeValue();
+            return identifier;
+        }
+
+        if (type is "bit" or "bool" or "boolean")
+        {
+            if (bool.TryParse(value, out var boolean)) return boolean;
+            if (value is "0" or "1") return value == "1";
+            throw InvalidScopeValue();
+        }
+
+        if (operation is EvaluationPredicateOperator.Range or EvaluationPredicateOperator.DateTimeRange)
+            throw InvalidScopeValue();
+        if (IsTextType(type)) return value;
+        throw InvalidScopeValue();
+    }
+
+    private static bool IsNumericType(string dataType)
+    {
+        var type = dataType.ToLowerInvariant();
+        return type is "int" or "integer" or "smallint" or "bigint" or "tinyint" or "serial" or
+                "bigserial" or "smallserial" or "money" or "real" or "float" or "double" ||
+            type.StartsWith("int", StringComparison.Ordinal) && !type.StartsWith("interval", StringComparison.Ordinal) ||
+            type.StartsWith("decimal", StringComparison.Ordinal) || type.StartsWith("numeric", StringComparison.Ordinal) ||
+            type.StartsWith("number", StringComparison.Ordinal) || type.StartsWith("money", StringComparison.Ordinal) ||
+            type.StartsWith("float", StringComparison.Ordinal) || type.StartsWith("double", StringComparison.Ordinal) ||
+            type.StartsWith("real", StringComparison.Ordinal) || type.StartsWith("serial", StringComparison.Ordinal);
+    }
+
+    private static bool IsTemporalType(string dataType)
+    {
+        var type = dataType.ToLowerInvariant();
+        return type == "date" || type.StartsWith("date ", StringComparison.Ordinal) ||
+            type.Contains("timestamp", StringComparison.Ordinal) || type.Contains("datetime", StringComparison.Ordinal) ||
+            type.StartsWith("time stamp", StringComparison.Ordinal);
+    }
+
+    private static bool IsTextType(string dataType)
+    {
+        var type = dataType.ToLowerInvariant();
+        return type is "text" or "ntext" or "string" or "citext" or "name" or "bpchar" ||
+            type.Contains("char", StringComparison.Ordinal) || type.Contains("clob", StringComparison.Ordinal);
+    }
+
+    private static bool HasExplicitOffset(string value)
+    {
+        if (value.EndsWith('Z') || value.EndsWith('z')) return true;
+        if (value.Length < 6 || value[^6] is not ('+' or '-') || value[^3] != ':') return false;
+        return char.IsAsciiDigit(value[^5]) && char.IsAsciiDigit(value[^4]) &&
+            char.IsAsciiDigit(value[^2]) && char.IsAsciiDigit(value[^1]);
+    }
+
+    private static ConnectorReadException InvalidScopeValue() => new(ConnectorIssueCodes.InvalidEvaluationPredicate,
+        "Evaluation predicate value is incompatible with the discovered field type or invariant format.");
 
     private static string[] ResolveSelectedColumns(
         ArtifactSelector selector,

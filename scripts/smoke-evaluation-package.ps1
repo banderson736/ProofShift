@@ -198,7 +198,12 @@ foreach ($requiredPath in @(
     (Join-Path $packageRoot "THIRD-PARTY-LICENSES"),
     (Join-Path $packageRoot "START_HERE.md"),
     (Join-Path $packageRoot "docs/EVALUATION.md"),
+    (Join-Path $packageRoot "docs/SOURCE_CONNECTOR_COMPATIBILITY.md"),
     (Join-Path $packageRoot "docs/BYOM_EVALUATION.md"),
+    (Join-Path $packageRoot "docs/CUSTOMER_EVALUATION_RUNBOOK.md"),
+    (Join-Path $packageRoot "docs/CUSTOMER_DATA_PREPARATION.md"),
+    (Join-Path $packageRoot "docs/GENERALIZED_MAPPING_GUIDE.md"),
+    (Join-Path $packageRoot "docs/RECONCILIATION_RULE_GUIDE.md"),
     (Join-Path $packageRoot "docs/PILOT_EVALUATOR_GUIDE.md"),
     (Join-Path $packageRoot "docs/PILOT_INTAKE_CHECKLIST.md"),
     (Join-Path $packageRoot "docs/DEMO_RUNBOOK.md"),
@@ -212,10 +217,27 @@ foreach ($requiredPath in @(
     (Join-Path $packageRoot "scenarios/byom-public-works/reviewed-mappings.csv"),
     (Join-Path $packageRoot "scenarios/byom-public-works/database/sqlserver-source.sql"),
     (Join-Path $packageRoot "scenarios/byom-public-works/database/postgres-target-schema.sql"),
+    (Join-Path $packageRoot "scenarios/byom-public-works/database/postgres-shadow-target-schema.sql"),
     (Join-Path $packageRoot "scenarios/byom-public-works/database/external-load-defective.sql"),
-    (Join-Path $packageRoot "scenarios/byom-public-works/database/external-load-corrected.sql")
+    (Join-Path $packageRoot "scenarios/byom-public-works/database/external-load-corrected.sql"),
+    (Join-Path $packageRoot "scenarios/byom-public-works/shadow/proofshift.yaml"),
+    (Join-Path $packageRoot "scenarios/byom-public-works/shadow/migration/graph.yaml"),
+    (Join-Path $packageRoot "scenarios/byom-public-works/shadow/rules/rules.yaml"),
+    (Join-Path $packageRoot "scenarios/byom-public-works/shadow/systems/source.yaml"),
+    (Join-Path $packageRoot "scenarios/byom-public-works/shadow/systems/shadow.yaml"),
+    (Join-Path $packageRoot "scenarios/byom-public-works/shadow/recovery/policy.yaml"),
+    (Join-Path $packageRoot "scripts/run-byom-evaluation.ps1")
 )) {
     if (-not (Test-Path -LiteralPath $requiredPath)) { throw "Required packaged resource is missing: $requiredPath" }
+}
+
+$packagedByomRunner = Join-Path $packageRoot "scripts/run-byom-evaluation.ps1"
+$packagedRunnerTokens = $null
+$packagedRunnerErrors = $null
+[System.Management.Automation.Language.Parser]::ParseFile(
+    $packagedByomRunner, [ref]$packagedRunnerTokens, [ref]$packagedRunnerErrors) | Out-Null
+if ($packagedRunnerErrors.Count -gt 0) {
+    throw "Packaged BYOM runner contains PowerShell syntax errors: $($packagedRunnerErrors -join '; ')"
 }
 
 $manifestPath = Join-Path $packageRoot "package-manifest.json"
@@ -263,7 +285,12 @@ $script:PackageRoot = $packageRoot
 $operatorDocuments = @(
     "START_HERE.md",
     "docs/EVALUATION.md",
+    "docs/SOURCE_CONNECTOR_COMPATIBILITY.md",
     "docs/BYOM_EVALUATION.md",
+    "docs/CUSTOMER_EVALUATION_RUNBOOK.md",
+    "docs/CUSTOMER_DATA_PREPARATION.md",
+    "docs/GENERALIZED_MAPPING_GUIDE.md",
+    "docs/RECONCILIATION_RULE_GUIDE.md",
     "docs/PILOT_EVALUATOR_GUIDE.md",
     "docs/PILOT_INTAKE_CHECKLIST.md"
 )
@@ -296,7 +323,9 @@ foreach ($primaryDocumentPath in $primaryDocumentPaths) {
     }
 }
 $documentedCommands = [IO.File]::ReadAllText((Join-Path $packageRoot "docs/PILOT_EVALUATOR_GUIDE.md")) +
-    [IO.File]::ReadAllText((Join-Path $packageRoot "docs/BYOM_EVALUATION.md"))
+    [IO.File]::ReadAllText((Join-Path $packageRoot "docs/BYOM_EVALUATION.md")) +
+    [IO.File]::ReadAllText((Join-Path $packageRoot "docs/CUSTOMER_EVALUATION_RUNBOOK.md")) +
+    [IO.File]::ReadAllText((Join-Path $packageRoot "docs/SOURCE_CONNECTOR_COMPATIBILITY.md"))
 foreach ($requiredExample in @(
     "proofshift --help",
     "proofshift demo list",
@@ -309,10 +338,34 @@ foreach ($requiredExample in @(
     "proofshift verify-external <config> --checkpoint <checkpoint-id> --observation <label>",
     "proofshift evidence <config> --run <verification-run-id>",
     "proofshift report <config> --verification-run <verification-run-id>",
-    "proofshift compare <config> --before-verification <defective-verification-run-id> --after-verification <corrected-verification-run-id>"
+    "proofshift compare <config> --before-verification <defective-verification-run-id> --after-verification <corrected-verification-run-id>",
+    "proofshift capabilities --json",
+    "DROP SCHEMA",
+    "docker rm --force --volumes `$fixtureContainerId",
+    "Remove-Item -LiteralPath `$evaluationRoot -Recurse -Force"
 )) {
     if ($documentedCommands.IndexOf($requiredExample, [StringComparison]::Ordinal) -lt 0) {
         throw "Pilot documentation is missing the required command form '$requiredExample'."
+    }
+
+    $sourceCompatibilityText = [IO.File]::ReadAllText((Join-Path $packageRoot "docs/SOURCE_CONNECTOR_COMPATIBILITY.md"))
+    foreach ($requiredCompatibilityText in @(
+        "sqlserver",
+        "postgres",
+        "oracle",
+        "db2",
+        "fixed-width",
+        "azure-blob",
+        "sftp",
+        "parquet",
+        "Checkpoint and replay",
+        "Verification observation",
+        "Shadow write / Projection",
+        "fail closed"
+    )) {
+        if ($sourceCompatibilityText.IndexOf($requiredCompatibilityText, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+            throw "The packaged source compatibility table is missing required coverage: '$requiredCompatibilityText'."
+        }
     }
 }
 
@@ -505,7 +558,8 @@ $samples = @(
     "scenarios/hcm-erp-modernization/proofshift.yaml",
     "scenarios/pension-modernization/ps05/proofshift.yaml",
     "scenarios/pension-modernization/ps010b/proofshift-false-reverse.yaml",
-    "scenarios/byom-public-works/discovery/proofshift.yaml"
+    "scenarios/byom-public-works/discovery/proofshift.yaml",
+    "scenarios/byom-public-works/shadow/proofshift.yaml"
 )
 foreach ($sample in $samples) {
     $samplePath = Join-Path $packageRoot $sample
@@ -788,7 +842,7 @@ if (-not $PackageOnly) {
 $byomEvaluation = $null
 if (-not $PackageOnly -and $ExpectedPlatform -eq "linux-x64") {
     $byomWorkRoot = Join-Path $extractionFullPath "byom work"
-    $byomEvaluation = & (Join-Path $PSScriptRoot "run-byom-evaluation.ps1") `
+    $byomEvaluation = & (Join-Path $packageRoot "scripts/run-byom-evaluation.ps1") `
         -PackageRoot $packageRoot -WorkRoot $byomWorkRoot
 }
 
@@ -872,6 +926,31 @@ if (-not $PackageOnly -and $ExpectedPlatform -eq "linux-x64") {
         documentedCommandsValidated = $true
         byom = [ordered]@{
             sourceArtifacts = $byomEvaluation.sourceArtifacts
+            shadowSourceArtifacts = $byomEvaluation.shadowSourceArtifacts
+            shadowCheckpointId = $byomEvaluation.shadowCheckpointId
+            shadowCheckpointSourceFingerprint = $byomEvaluation.shadowCheckpointSourceFingerprint
+            shadowCheckpointManifestHash = $byomEvaluation.shadowCheckpointManifestHash
+            sourceStateUnchanged = $byomEvaluation.sourceStateUnchanged
+            publicTargetStateAfterShadow = $byomEvaluation.publicTargetStateAfterShadow
+            qualifiedShadowProjection = $byomEvaluation.qualifiedShadowProjection
+            qualifiedShadowVerification = $byomEvaluation.qualifiedShadowVerification
+            qualifiedDryRunId = $byomEvaluation.qualifiedDryRunId
+            qualifiedOutcome = $byomEvaluation.qualifiedOutcome
+            qualifiedVerificationRunId = $byomEvaluation.qualifiedVerificationRunId
+            qualifiedRuleSetFingerprint = $byomEvaluation.qualifiedRuleSetFingerprint
+            qualifiedEvidenceFingerprint = $byomEvaluation.qualifiedEvidenceFingerprint
+            qualifiedRecoveryAssessmentFingerprint = $byomEvaluation.qualifiedRecoveryAssessmentFingerprint
+            qualifiedShadowBudgetTotal = $byomEvaluation.qualifiedShadowBudgetTotal
+            defectiveShadowProjection = $byomEvaluation.defectiveShadowProjection
+            defectiveShadowVerification = $byomEvaluation.defectiveShadowVerification
+            defectiveShadowVerificationRunId = $byomEvaluation.defectiveShadowVerificationRunId
+            defectiveRuleSetFingerprint = $byomEvaluation.defectiveRuleSetFingerprint
+            defectiveEvidenceFingerprint = $byomEvaluation.defectiveEvidenceFingerprint
+            defectiveShadowBudgetTotal = $byomEvaluation.defectiveShadowBudgetTotal
+            expectedExceptionRemainedFailed = $byomEvaluation.expectedExceptionRemainedFailed
+            defectiveEvaluationOutcome = $byomEvaluation.defectiveEvaluationOutcome
+            qualifiedEvidenceRecords = $byomEvaluation.qualifiedEvidenceRecords
+            defectiveEvidenceRecords = $byomEvaluation.defectiveEvidenceRecords
             defectiveTargetArtifacts = $byomEvaluation.defectiveTargetArtifacts
             correctedTargetArtifacts = $byomEvaluation.correctedTargetArtifacts
             seededEvidenceFindings = $byomEvaluation.seededFindingCount
@@ -910,7 +989,8 @@ Write-Output "Evaluator front door: PASS"
 Write-Output "Fresh $ExpectedPlatform package smoke: PASS ($($scenarioResults.Count) scenarios)"
 if (-not $PackageOnly -and $ExpectedPlatform -eq "linux-x64") {
     Write-Output "Five packaged domain demos: PASS"
-    Write-Output "BYOM external migration evaluation: PASS"
+    Write-Output "BYOM shadow clean and defective evaluations: PASS"
+    Write-Output "BYOM external read-only evaluation: PASS"
     Write-Output "Pilot rehearsal: PASS"
 }
 elseif ($PackageOnly) {

@@ -29,6 +29,8 @@ public static class ConnectorIssueCodes
     public const string CorruptColumnarFile = "PSCONN032";
     public const string RemoteIntegrityMismatch = "PSCONN033";
     public const string InsecureRemoteConfiguration = "PSCONN034";
+    public const string EvaluationScopeUnsupported = "PSCONN035";
+    public const string InvalidEvaluationPredicate = "PSCONN036";
 }
 
 public static class StableArtifactIdentity

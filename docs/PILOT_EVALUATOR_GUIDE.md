@@ -111,6 +111,9 @@ for the configured checks; it is not production or business approval.
 
 ## Supported boundary and known limitations
 
+The customer-facing, registered connector inventory and its capability limits
+are maintained in the [source/connector compatibility table](SOURCE_CONNECTOR_COMPATIBILITY.md).
+
 - CLI-first product; framework-dependent .NET 10 x64 package.
 - Windows evidence is package-only. Ubuntu evidence covers the packaged
   Docker evaluation workflow only; general Linux support is not claimed.

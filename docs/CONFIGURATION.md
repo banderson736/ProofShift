@@ -131,6 +131,15 @@ nodes:
         name: dbo.MEMBER
       identity:
         - MEMBER_ID
+      evaluationScope:
+        id: pension-2026-cohort
+        type: bounded-evaluation
+        description: Customer-approved evaluation cohort
+        predicates:
+          - field: COHORT_YEAR
+            operator: equals
+            values:
+              - "2026"
 
   participant:
     type: target
@@ -186,6 +195,17 @@ edges:
 ```
 
 Graph `version` is independent of the root `proofshift` configuration version. Edges use `from` and `to` sequences; `exclude` may have an empty `to` sequence. A graph is compiled and canonically fingerprinted by PS-0.3, without loading a connector or domain pack.
+
+An optional `evaluationScope` belongs on a source selector. Its required `id`
+and `type` are bound into the graph and selector fingerprints, source
+checkpoint, and external Verification report. Supported types are
+`full-declared-source` (all records selected by the declared source selector),
+`customer-prepared-subset` (the customer has already prepared the source input
+as the approved subset), and `bounded-evaluation` (the connector applies the
+listed typed relational predicates). Predicates are valid only for
+`bounded-evaluation`; unsupported connectors reject them rather than silently
+reading a broader source. Scope-aware reports state that results do not prove
+completeness outside the declared scope.
 
 ## Historical mapping
 

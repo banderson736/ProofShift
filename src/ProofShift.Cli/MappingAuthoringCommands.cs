@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ProofShift.Configuration;
 using ProofShift.Connectors.Abstractions;
+using ProofShift.Domain;
 using ProofShift.Engine;
 using ProofShift.Graph;
 
@@ -14,6 +15,7 @@ internal static class MappingAuthoringCommands
         {
             var import = args.Length >= 2 && args[0] == "mapping" && args[1] == "import";
             string? sourcePath = null, targetPath = null, output = null, csvPath = null;
+            string? evaluationScopeId = null, evaluationScopeType = null;
             var targetRole = "shadow-target";
             var genericBaseline = false;
             for (var index = import ? 2 : 1; index < args.Length; index++)
@@ -25,6 +27,8 @@ internal static class MappingAuthoringCommands
                     case "--target-discovery": targetPath = args[++index]; break;
                     case "--output": output = args[++index]; break;
                     case "--csv": csvPath = args[++index]; break;
+                    case "--evaluation-scope-id": evaluationScopeId = args[++index]; break;
+                    case "--evaluation-scope-type": evaluationScopeType = args[++index]; break;
                     case "--target-role":
                         targetRole = args[++index];
                         if (targetRole is not ("target" or "shadow-target")) return Usage();
@@ -37,6 +41,13 @@ internal static class MappingAuthoringCommands
                 }
             }
             if (sourcePath is null || targetPath is null || output is null || import && csvPath is null) return Usage();
+            if ((evaluationScopeId is null) != (evaluationScopeType is null)) return Usage();
+            var evaluationScope = evaluationScopeId is null ? null : evaluationScopeType switch
+            {
+                "full-declared-source" => new EvaluationScope(evaluationScopeId, EvaluationScopeType.FullDeclaredSource),
+                "customer-prepared-subset" => new EvaluationScope(evaluationScopeId, EvaluationScopeType.CustomerPreparedSubset),
+                _ => throw new ArgumentException("Mapping authoring supports full-declared-source and customer-prepared-subset scopes.")
+            };
             var source = await PhysicalDiscoveryStore.ReadAsync(sourcePath, CancellationToken.None);
             var target = await PhysicalDiscoveryStore.ReadAsync(targetPath, CancellationToken.None);
             var review = MappingScaffold.Create(source, target);
@@ -55,7 +66,7 @@ internal static class MappingAuthoringCommands
                     .Select(mapping => mapping with { ReviewStatus = "unmapped", TargetEntity = null, TargetField = null, Reasons = [] })).ToArray() };
             }
             await WriteProjectAsync(Path.GetFullPath(output), source, target, review, import, targetRole,
-                genericBaseline).ConfigureAwait(false);
+                genericBaseline, evaluationScope).ConfigureAwait(false);
             var unresolved = review.Mappings.Count(mapping => mapping.Required && mapping.ReviewStatus != "confirmed");
             Console.WriteLine($"{MappingScaffold.Format}: {review.Mappings.Count} mappings; {unresolved} required mappings await review. Output: {Path.GetFullPath(output)}");
             return 0;
@@ -70,7 +81,7 @@ internal static class MappingAuthoringCommands
 
     private static async Task WriteProjectAsync(string directory, PhysicalDiscoveryArtifact source,
         PhysicalDiscoveryArtifact target, MappingReview review, bool requireCompiled, string targetRole,
-        bool genericBaseline)
+        bool genericBaseline, EvaluationScope? evaluationScope)
     {
         if (File.Exists(directory) || Directory.Exists(directory) && Directory.EnumerateFileSystemEntries(directory).Any())
             throw new IOException("Mapping authoring requires a new or empty output directory.");
@@ -80,8 +91,11 @@ internal static class MappingAuthoringCommands
             .ToDictionary(item => item.Name, item => item.Node, StringComparer.Ordinal);
         var targetNames = target.Objects.Select((entity, index) => (Name: MappingScaffold.Name(entity), Node: $"target-{index}"))
             .ToDictionary(item => item.Name, item => item.Node, StringComparer.Ordinal);
-        foreach (var entity in source.Objects) nodes[sourceNames[MappingScaffold.Name(entity)]] = Node(entity, "source", "source", source.ConnectorId);
-        foreach (var entity in target.Objects) nodes[targetNames[MappingScaffold.Name(entity)]] = Node(entity, "target", "target", target.ConnectorId);
+        foreach (var entity in source.Objects)
+            nodes[sourceNames[MappingScaffold.Name(entity)]] = Node(entity, "source", "source", source.ConnectorId,
+                evaluationScope);
+        foreach (var entity in target.Objects)
+            nodes[targetNames[MappingScaffold.Name(entity)]] = Node(entity, "target", "target", target.ConnectorId, null);
         var edges = new Dictionary<string, object>(StringComparer.Ordinal);
         var edgeIndex = 0;
         foreach (var group in review.Mappings.Where(mapping => mapping.TargetEntity is not null && mapping.TargetField is not null)
@@ -92,7 +106,15 @@ internal static class MappingAuthoringCommands
                 fields.Add(mapping.TargetField!, new
                 {
                     source = mapping.SourceField,
-                    pipeline = mapping.Transformation == "copy" ? Array.Empty<object>() : [new { type = mapping.Transformation }],
+                    pipeline = mapping.Pipeline.Count > 0
+                        ? mapping.Pipeline.Select(step => new
+                        {
+                            type = step.Type,
+                            version = step.Version,
+                            parameters = step.Parameters
+                        }).ToArray()
+                        : mapping.Transformation == "copy" ? Array.Empty<object>() : [new { type = mapping.Transformation }],
+                    mapping.Role,
                     approval = mapping.ReviewStatus,
                     mapping.Required,
                     mapping.Notes,
@@ -119,7 +141,8 @@ internal static class MappingAuthoringCommands
             authoring = new { version = MappingScaffold.Format, review.SourceFingerprint, review.TargetFingerprint,
                 mappings = review.Mappings.Select(mapping => new { source = mapping.SourceEntity + "." + mapping.SourceField,
                     target = mapping.TargetEntity is null ? null : mapping.TargetEntity + "." + mapping.TargetField,
-                    approval = mapping.ReviewStatus, mapping.Required, mapping.Reasons }) }
+                    role = mapping.Role, pipeline = mapping.Pipeline, approval = mapping.ReviewStatus,
+                    mapping.Required, mapping.Reasons }) }
         });
         var rules = new Dictionary<string, object>
         {
@@ -152,24 +175,39 @@ internal static class MappingAuthoringCommands
             .Resolve(Verification.VerificationRuleConfigurationLoader.Load(loaded.Configuration));
     }
 
-    private static object Node(PhysicalObject entity, string type, string system, string connector) => new
+    private static object Node(PhysicalObject entity, string type, string system, string connector,
+        EvaluationScope? evaluationScope) => new
     {
         type, system, storage = "records", semanticType = "Physical.Uninterpreted",
-        selector = new
+        selector = Selector(entity, connector, evaluationScope)
+    };
+
+    private static Dictionary<string, object> Selector(PhysicalObject entity, string connector,
+        EvaluationScope? evaluationScope)
+    {
+        var properties = new Dictionary<string, object>(StringComparer.Ordinal)
         {
-            kind = connector is "postgres" or "sqlserver" or "oracle" or "db2"
+            ["kind"] = connector is "postgres" or "sqlserver" or "oracle" or "db2"
                 ? "table" : connector == "csv" ? "csv" : connector is "json" or "ndjson" or "xml" or "fixed-width" or "parquet" ? connector
                     : connector is "s3" or "azure-blob" or "sftp" ? "object-pattern" : "file-pattern",
-            properties = connector is "postgres" or "sqlserver" or "oracle" or "db2"
+            ["properties"] = connector is "postgres" or "sqlserver" or "oracle" or "db2"
                 ? (entity.SelectorProperties ?? new Dictionary<string, string>())
                     .Append(new KeyValuePair<string, string>("name", MappingScaffold.Name(entity)))
                     .Append(new KeyValuePair<string, string>("columns", string.Join(',', entity.Fields.Select(field => field.Name))))
                     .GroupBy(pair => pair.Key, StringComparer.Ordinal)
                     .ToDictionary(group => group.Key, group => group.Last().Value, StringComparer.Ordinal)
                 : entity.SelectorProperties ?? new Dictionary<string, string> { [connector == "csv" ? "path" : "pattern"] = entity.Name },
-            identity = entity.Keys.FirstOrDefault(key => key.Primary)?.Fields ?? []
-        }
-    };
+            ["identity"] = entity.Keys.FirstOrDefault(key => key.Primary)?.Fields ?? []
+        };
+        if (evaluationScope is not null)
+            properties["evaluationScope"] = new
+            {
+                id = evaluationScope.Id,
+                type = evaluationScope.Type == EvaluationScopeType.FullDeclaredSource
+                    ? "full-declared-source" : "customer-prepared-subset"
+            };
+        return properties;
+    }
 
     private static object SystemView(string connector, string id, string role) => new
     {
@@ -209,7 +247,7 @@ internal static class MappingAuthoringCommands
 
     private static int Usage()
     {
-        Console.Error.WriteLine("Usage: proofshift scaffold --source-discovery <dir> --target-discovery <dir> --output <new-dir> [--target-role target|shadow-target] [--verification-baseline generic]; proofshift mapping import --csv <file> --source-discovery <dir> --target-discovery <dir> --output <new-dir> [--target-role target|shadow-target] [--verification-baseline generic]");
+        Console.Error.WriteLine("Usage: proofshift scaffold --source-discovery <dir> --target-discovery <dir> --output <new-dir> [--evaluation-scope-id <id> --evaluation-scope-type full-declared-source|customer-prepared-subset] [--target-role target|shadow-target] [--verification-baseline generic]; proofshift mapping import --csv <file> --source-discovery <dir> --target-discovery <dir> --output <new-dir> [--evaluation-scope-id <id> --evaluation-scope-type full-declared-source|customer-prepared-subset] [--target-role target|shadow-target] [--verification-baseline generic]");
         return 2;
     }
 }

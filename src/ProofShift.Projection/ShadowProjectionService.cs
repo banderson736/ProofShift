@@ -265,6 +265,8 @@ public sealed class ShadowProjectionService
                     bufferedWrites.Clear();
                 }
 
+                if (_sourceProvider is null)
+                    EvaluationScopeCapability.Validate(sourceRuntime.Connector!, sourceNode.Selector);
                 var sourceRecords = _sourceProvider is null
                     ? sourceRuntime.Connector!.ReadAsync(sourceRuntime.Context, sourceNode.Selector, new ReadOptions(), cancellationToken)
                     : _sourceProvider.ReadAsync(sourceNode.Name, sourceRuntime.Context, sourceNode.Selector, cancellationToken);

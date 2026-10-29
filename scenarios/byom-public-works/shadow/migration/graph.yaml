@@ -1,0 +1,135 @@
+version: 1
+nodes:
+  source-assets:
+    type: source
+    system: source
+    storage: records
+    semanticType: PublicWorks.Asset
+    selector:
+      kind: table
+      properties:
+        name: dbo.assets
+        columns: asset_id,asset_name,asset_type,active
+      identity: [asset_id]
+      evaluationScope:
+        id: customer-public-works
+        type: full-declared-source
+  source-work-orders:
+    type: source
+    system: source
+    storage: records
+    semanticType: PublicWorks.WorkOrder
+    selector:
+      kind: table
+      properties:
+        name: dbo.work_orders
+        columns: work_order_id,asset_id,status,created_at,description
+      identity: [work_order_id]
+      evaluationScope:
+        id: customer-public-works
+        type: full-declared-source
+  source-history:
+    type: source
+    system: source
+    storage: records
+    semanticType: PublicWorks.WorkOrderHistory
+    selector:
+      kind: table
+      properties:
+        name: dbo.work_order_history
+        columns: history_id,work_order_id,status,changed_at,note
+      identity: [history_id]
+      evaluationScope:
+        id: customer-public-works
+        type: full-declared-source
+  source-budgets:
+    type: source
+    system: source
+    storage: records
+    semanticType: PublicWorks.AssetBudget
+    selector:
+      kind: table
+      properties:
+        name: dbo.asset_budgets
+        columns: budget_id,budget_amount
+      identity: [budget_id]
+      evaluationScope:
+        id: customer-public-works
+        type: full-declared-source
+  target-assets:
+    type: target
+    system: shadow
+    storage: records
+    semanticType: PublicWorks.Asset
+    selector:
+      kind: table
+      properties:
+        name: public.assets
+        columns: asset_id,asset_name,asset_type,active
+      identity: [asset_id]
+  target-work-orders:
+    type: target
+    system: shadow
+    storage: records
+    semanticType: PublicWorks.WorkOrder
+    selector:
+      kind: table
+      properties:
+        name: public.work_orders
+        columns: work_order_id,asset_id,status,created_at,description
+      identity: [work_order_id]
+  target-history:
+    type: target
+    system: shadow
+    storage: records
+    semanticType: PublicWorks.WorkOrderHistory
+    selector:
+      kind: table
+      properties:
+        name: public.work_order_history
+        columns: history_id,work_order_id,status,changed_at,note
+      identity: [history_id]
+  target-budgets:
+    type: target
+    system: shadow
+    storage: records
+    semanticType: PublicWorks.AssetBudget
+    selector:
+      kind: table
+      properties:
+        name: public.asset_budgets
+        columns: budget_id,budget_amount
+      identity: [budget_id]
+edges:
+  assets:
+    from: [source-assets]
+    to: [target-assets]
+    operation:
+      type: copy
+    recovery:
+      mode: restore
+      requiresSnapshot: true
+  work-orders:
+    from: [source-work-orders]
+    to: [target-work-orders]
+    operation:
+      type: copy
+    recovery:
+      mode: restore
+      requiresSnapshot: true
+  history:
+    from: [source-history]
+    to: [target-history]
+    operation:
+      type: copy
+    recovery:
+      mode: restore
+      requiresSnapshot: true
+  budgets:
+    from: [source-budgets]
+    to: [target-budgets]
+    operation:
+      type: copy
+    recovery:
+      mode: restore
+      requiresSnapshot: true
