@@ -91,6 +91,23 @@ internal static class WorkspaceEvidencePackageService
     public static async Task<WorkspaceEvidencePackageCreation> CreateAsync(string workspaceDirectory,
         string runReference, string? outputPath, bool diagnostic, CancellationToken cancellationToken)
     {
+        var diagnosticCode = "PSWORKPKG101";
+        try
+        {
+            return await CreateCoreAsync(workspaceDirectory, runReference, outputPath, diagnostic,
+                code => diagnosticCode = code, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidDataException exception) when (exception.Data[DiagnosticCodeDataKey] is not string)
+        {
+            exception.Data[DiagnosticCodeDataKey] = diagnosticCode;
+            throw;
+        }
+    }
+
+    private static async Task<WorkspaceEvidencePackageCreation> CreateCoreAsync(string workspaceDirectory,
+        string runReference, string? outputPath, bool diagnostic, Action<string> setDiagnosticCode,
+        CancellationToken cancellationToken)
+    {
         var root = Path.GetFullPath(workspaceDirectory);
         var validation = await EvaluationWorkspaceManifestStore.ValidateAsync(root).ConfigureAwait(false);
         if (!validation.Valid)
@@ -125,6 +142,7 @@ internal static class WorkspaceEvidencePackageService
             !string.Equals(run.GraphHash, plan.GraphHash, StringComparison.Ordinal))
             throw new InvalidDataException("Current workspace plan does not match the completed run; refusing to package changed configuration.");
 
+        setDiagnosticCode("PSWORKPKG102");
         var candidates = new List<PackageArtifactSource>();
         candidates.Add(PackageArtifactSource.FromBytes("run-manifest", "artifacts/run.json",
             await File.ReadAllBytesAsync(Path.Combine(runDirectory, "run.json"), cancellationToken).ConfigureAwait(false),
@@ -146,6 +164,7 @@ internal static class WorkspaceEvidencePackageService
         var runRelative = NormalizeRelative(Path.GetRelativePath(root, runDirectory).Replace('\\', '/'));
         var artifactDeclarations = new List<WorkspaceEvidencePackageArtifact>();
 
+        setDiagnosticCode("PSWORKPKG103");
         if (run.EvidenceReference is { } evidenceReference)
         {
             var evidenceManifestPath = ResolveRunReference(root, runDirectory, evidenceReference);
@@ -173,6 +192,7 @@ internal static class WorkspaceEvidencePackageService
             throw new InvalidDataException("A completed business evaluation has no persisted Evidence reference.");
         }
 
+        setDiagnosticCode("PSWORKPKG104");
         if (run.ProjectionManifestReference is { } projectionReference)
         {
             var projectionPath = ResolveRunReference(root, runDirectory, projectionReference);
@@ -198,6 +218,7 @@ internal static class WorkspaceEvidencePackageService
             throw new InvalidDataException("A completed shadow evaluation has no Projection manifest reference.");
         }
 
+        setDiagnosticCode("PSWORKPKG105");
         if (run.RecoveryArtifactReference is { } recoveryReference)
         {
             try
@@ -244,6 +265,7 @@ internal static class WorkspaceEvidencePackageService
             throw new InvalidDataException("A completed qualified evaluation has no Recovery artifact reference.");
         }
 
+        setDiagnosticCode("PSWORKPKG106");
         AddExternal(artifactDeclarations, "checkpoint-manifest", run.CheckpointManifestHash,
             run.CheckpointId is null ? null : $"checkpoint:{run.CheckpointId}",
             "Immutable checkpoint metadata remains in the workspace checkpoint store; its manifest hash is bound by the run.");

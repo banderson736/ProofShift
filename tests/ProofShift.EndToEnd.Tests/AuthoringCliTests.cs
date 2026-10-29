@@ -548,6 +548,32 @@ public sealed class AuthoringCliTests
     }
 
     [Fact]
+    public async Task WorkspaceEvidencePackageReportsSafeDiagnosticWhenSavedSummaryDisagrees()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-evidence-package-summary-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var run = await CreatePackageFixtureRunAsync(root, "QUALIFIED", EvidenceResult.Pass);
+            var runDirectory = Path.Combine(root, "runs", run.ToString("D"));
+            const string sensitiveSummary = "sensitive summary fixture";
+            await File.WriteAllTextAsync(Path.Combine(runDirectory, "summary.md"), sensitiveSummary,
+                TestContext.Current.CancellationToken);
+
+            var result = await RunAsync("workspace", "evidence", "package", root, run.ToString("D"),
+                "--output", Path.Combine(root, "evidence", "tampered-summary.zip"), "--json");
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("PSWORKPKG102", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain(sensitiveSummary, result.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task WorkspaceEvidencePackageReportsSafeDiagnosticWhenRecoveryArtifactIntegrityFails()
     {
         var root = Path.Combine(Path.GetTempPath(), $"proofshift-evidence-package-recovery-{Guid.NewGuid():N}");
