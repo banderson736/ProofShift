@@ -7,6 +7,10 @@ technical review, not owner acceptance or merge authorization.
 
 - Baseline candidate reviewed before the current gate-closure work:
   `ad37b331795df2ec7073e1a6e5dc12bf63ce9b5f`
+- Gate-closure implementation candidate:
+  `eb1973c6529feae16812ac3cfaf24c548b481f84`
+- Candidate parent: `0284eabdb934636fa1474f6a2a5fc95d6c969a0c`
+- Candidate tree: `44fbb927afc8bce91c3e891dc315146af2670adf`
 - Branch: `ps-1.0a-customer-data-evaluation`
 - Parent: `d041f28c6597e6be0fd3f483d69bacf9f795f0a4`
 - Tree: `de597d4333802e7284516c9cd7dc85eb5f4a4754`
@@ -28,6 +32,14 @@ technical review, not owner acceptance or merge authorization.
   both BYOM workflows, and documented-command checks. Windows package-only
   smoke passed; it did not claim scenario execution. Linux runtime-only smoke
   passed.
+- Gate-closure Windows package:
+  `ProofShift-Evaluation-0.1.0-preview.1-win-x64.zip`
+  - SHA-256: `27c8e158a007acfe2e8a2f822d198ea4c35e57000ea3b3149697580916c91d24`
+  - Content SHA-256: `77ada4608f47c42d76ea4969bb2d89547c119b90bbaaa1839b6d6e2ab821f43c`
+  - Exact source revision: `eb1973c6529feae16812ac3cfaf24c548b481f84`
+- Gate-closure package-only smoke: Windows archive integrity, front door,
+  packaged documentation links/commands, compatibility inventory, and
+  preflight passed. No Windows scenario execution is claimed.
 
 The candidate, CI, and package evidence above describe the baseline only. The
 gate-closure evidence below applies to follow-up changes; final acceptance
@@ -45,7 +57,8 @@ the follow-up work:
   failed to connect to that unavailable endpoint. No application assertion
   failure was reported by those five tests.
 - Package-script parsing and `git diff --check` passed. Full package/Docker
-  smoke and exact-candidate CI remain pending.
+  scenario smoke on Linux and exact-candidate CI remain pending. The exact
+  Windows candidate package-only smoke passed as recorded above.
 
 ## Acceptance gates
 
@@ -65,7 +78,7 @@ the follow-up work:
 | 12 | Customer runbook and data-preparation, generalized mapping, and reconciliation guides are accurate and linked | PASS | Added the customer-facing [source/connector compatibility table](SOURCE_CONNECTOR_COMPATIBILITY.md), linked it from evaluator and customer guides, documented conservative cleanup and retention steps, and added package inclusion and smoke-contract checks. PowerShell parsing and documentation/link/contract checks passed; the packaged Docker smoke remains pending exact-candidate CI. |
 | 13 | Existing PS-0.11 behavior, reports, demos, package contents, and protected checks remain compatible | NOT YET | The new follow-up changes have not yet run through the protected CI and package jobs. Baseline compatibility evidence remains as recorded above; the full EndToEnd local run was blocked by the unavailable Docker endpoint. |
 | 14 | Architecture decision and repository assignment/status documentation are complete and consistent | PASS | ADR-0036 records the scope design and preserves the unscoped v1 compatibility boundary. The scope/runbook/BYOM documentation is consistent with the accepted read-only external Verification and no-merge/no-production-execution boundaries. This matrix keeps PS-1.0A In Progress and not owner accepted. |
-| 15 | Required CI and platform/package checks pass on the exact candidate | NOT YET | The 11-job result above belongs to baseline `ad37b331795df2ec7073e1a6e5dc12bf63ce9b5f`. A new candidate containing the gate-closure changes must be pushed and pass every required check; no new candidate SHA or run exists yet. |
+| 15 | Required CI and platform/package checks pass on the exact candidate | NOT YET | The 11-job result above belongs to baseline `ad37b331795df2ec7073e1a6e5dc12bf63ce9b5f`. Gate-closure implementation candidate `eb1973c6529feae16812ac3cfaf24c548b481f84` has local Windows package-only validation; it still must pass every protected job, including Linux packaged Docker evaluation, on the exact pushed candidate. |
 
 ### Packaged BYOM result details
 
