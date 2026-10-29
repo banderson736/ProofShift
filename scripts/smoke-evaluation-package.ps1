@@ -342,7 +342,7 @@ foreach ($requiredExample in @(
     "proofshift capabilities --json",
     "DROP SCHEMA",
     "docker rm --force --volumes `$fixtureContainerId",
-    "Remove-Item -LiteralPath $evaluationRoot -Recurse -Force"
+    "Remove-Item -LiteralPath `$evaluationRoot -Recurse -Force"
 )) {
     if ($documentedCommands.IndexOf($requiredExample, [StringComparison]::Ordinal) -lt 0) {
         throw "Pilot documentation is missing the required command form '$requiredExample'."
