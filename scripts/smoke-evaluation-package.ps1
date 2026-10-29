@@ -198,6 +198,7 @@ foreach ($requiredPath in @(
     (Join-Path $packageRoot "THIRD-PARTY-LICENSES"),
     (Join-Path $packageRoot "START_HERE.md"),
     (Join-Path $packageRoot "docs/EVALUATION.md"),
+    (Join-Path $packageRoot "docs/SOURCE_CONNECTOR_COMPATIBILITY.md"),
     (Join-Path $packageRoot "docs/BYOM_EVALUATION.md"),
     (Join-Path $packageRoot "docs/CUSTOMER_EVALUATION_RUNBOOK.md"),
     (Join-Path $packageRoot "docs/CUSTOMER_DATA_PREPARATION.md"),
@@ -284,6 +285,7 @@ $script:PackageRoot = $packageRoot
 $operatorDocuments = @(
     "START_HERE.md",
     "docs/EVALUATION.md",
+    "docs/SOURCE_CONNECTOR_COMPATIBILITY.md",
     "docs/BYOM_EVALUATION.md",
     "docs/CUSTOMER_EVALUATION_RUNBOOK.md",
     "docs/CUSTOMER_DATA_PREPARATION.md",
@@ -321,7 +323,9 @@ foreach ($primaryDocumentPath in $primaryDocumentPaths) {
     }
 }
 $documentedCommands = [IO.File]::ReadAllText((Join-Path $packageRoot "docs/PILOT_EVALUATOR_GUIDE.md")) +
-    [IO.File]::ReadAllText((Join-Path $packageRoot "docs/BYOM_EVALUATION.md"))
+    [IO.File]::ReadAllText((Join-Path $packageRoot "docs/BYOM_EVALUATION.md")) +
+    [IO.File]::ReadAllText((Join-Path $packageRoot "docs/CUSTOMER_EVALUATION_RUNBOOK.md")) +
+    [IO.File]::ReadAllText((Join-Path $packageRoot "docs/SOURCE_CONNECTOR_COMPATIBILITY.md"))
 foreach ($requiredExample in @(
     "proofshift --help",
     "proofshift demo list",
@@ -334,10 +338,34 @@ foreach ($requiredExample in @(
     "proofshift verify-external <config> --checkpoint <checkpoint-id> --observation <label>",
     "proofshift evidence <config> --run <verification-run-id>",
     "proofshift report <config> --verification-run <verification-run-id>",
-    "proofshift compare <config> --before-verification <defective-verification-run-id> --after-verification <corrected-verification-run-id>"
+    "proofshift compare <config> --before-verification <defective-verification-run-id> --after-verification <corrected-verification-run-id>",
+    "proofshift capabilities --json",
+    "DROP SCHEMA",
+    "docker rm --force --volumes `$fixtureContainerId",
+    "Remove-Item -LiteralPath $evaluationRoot -Recurse -Force"
 )) {
     if ($documentedCommands.IndexOf($requiredExample, [StringComparison]::Ordinal) -lt 0) {
         throw "Pilot documentation is missing the required command form '$requiredExample'."
+    }
+
+    $sourceCompatibilityText = [IO.File]::ReadAllText((Join-Path $packageRoot "docs/SOURCE_CONNECTOR_COMPATIBILITY.md"))
+    foreach ($requiredCompatibilityText in @(
+        "sqlserver",
+        "postgres",
+        "oracle",
+        "db2",
+        "fixed-width",
+        "azure-blob",
+        "sftp",
+        "parquet",
+        "Checkpoint and replay",
+        "Verification observation",
+        "Shadow write / Projection",
+        "fail closed"
+    )) {
+        if ($sourceCompatibilityText.IndexOf($requiredCompatibilityText, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+            throw "The packaged source compatibility table is missing required coverage: '$requiredCompatibilityText'."
+        }
     }
 }
 

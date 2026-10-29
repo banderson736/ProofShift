@@ -3,6 +3,9 @@
 Reconciliation compares graph-derived expected target state with independent
 target observations. Generic rules are domain-neutral; they do not replace
 customer or regulatory acceptance criteria.
+The [source and connector compatibility table](SOURCE_CONNECTOR_COMPATIBILITY.md)
+describes the registered read-only observation and shadow destination
+capabilities.
 
 ## Generic rule families
 

@@ -3,6 +3,8 @@
 Mapping authoring turns read-only physical discovery into a reviewable graph.
 It does not infer business meaning from similar names or types, and it does
 not execute a production migration.
+See the [supported source and connector compatibility table](SOURCE_CONNECTOR_COMPATIBILITY.md)
+for registered formats, checkpoint/replay behavior, and connector limits.
 
 ## Review workflow
 

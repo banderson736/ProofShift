@@ -39,26 +39,14 @@ Connector validation is against the repository's MinIO, Azurite 3.35.0 and OpenS
 
 `ci.yml` runs core tests separately from required `oracle-integration` and `db2-integration` jobs. Oracle is built at test time through the official Oracle source repository and official Free download endpoint. Db2 uses the pinned Community image and explicit test-time license acceptance. Neither vendor suite is part of a skip-on-unavailable path.
 
-## Capability Matrix
+## Customer-facing compatibility
 
-Capabilities below reflect the CLI connector catalog. Target observation is performed through a reader and does not imply write authority. Only PostgreSQL and filesystem are registered with shadow writers.
-
-| Connector | Discovery | Read | Checkpoint | Target observation | Shadow write |
-| --- | --- | --- | --- | --- | --- |
-| SQL Server (`sqlserver`) | Yes | Yes | Yes | Yes | No |
-| PostgreSQL (`postgres`) | Yes | Yes | Yes | Yes | Yes |
-| Oracle (`oracle`) | Yes | Yes | Yes | Yes | No |
-| Db2 LUW (`db2`) | Yes | Yes | Yes | Yes | No |
-| CSV (`csv`) | Yes | Yes | Yes | Yes | No |
-| Filesystem (`files`) | Yes | Yes | Yes | Yes | Yes |
-| Fixed-width (`fixed-width`) | Yes | Yes | Yes | Yes | No |
-| JSON (`json`) | Yes | Yes | Yes | Yes | No |
-| NDJSON (`ndjson`) | Yes | Yes | Yes | Yes | No |
-| XML (`xml`) | Yes | Yes | Yes | Yes | No |
-| S3 / S3-compatible (`s3`) | Yes | Yes | Yes | Yes | No |
-| Azure Blob (`azure-blob`) | Yes | Yes | Yes | Yes | No |
-| SFTP (`sftp`) | Yes | Yes | Yes | Yes | No |
-| Parquet (`parquet`, over filesystem / S3 / Azure Blob / SFTP) | Yes | Yes | Yes | Yes | No |
+The canonical customer-facing source/connector inventory, including discovery,
+checkpoint/replay, Verification observation, Projection, limits, and
+prerequisites, is maintained in
+[Supported Source and Connector Compatibility](SOURCE_CONNECTOR_COMPATIBILITY.md).
+The test-runtime details in this document describe CI fixtures only and do not
+extend that supported capability inventory.
 
 Connector-owned JSON Schemas and strict CLI validation are covered for Oracle, Db2, fixed-width, JSON, NDJSON and XML. Authoring tests cover closed endpoint/selector properties, required settings and alternatives, selector kind, enum/range values, fixed-width boundaries and actionable configuration paths.
 

@@ -2,6 +2,8 @@ using System.Numerics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using ProofShift.Configuration;
 using ProofShift.Connectors.Abstractions;
 using ProofShift.Domain;
@@ -35,6 +37,97 @@ public sealed class SnapshotStoreTests
             Assert.Equal("bounded-evaluation", endpoint.EvaluationScopeType);
             Assert.Equal(scope.Fingerprint, endpoint.EvaluationScopeFingerprint);
             Assert.Equal(1, endpoint.ArtifactCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task HistoricalUnscopedManifestLoadsAndReplaysWithoutMutation()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var sourceRecord = CreateRecord(Convert.ToHexString(SHA256.HashData([])).ToLowerInvariant(), 0);
+            var selector = new ArtifactSelector("table",
+                [new KeyValuePair<string, string>("name", "member")], ["member_id"]);
+            var (store, checkpointId, checkpoint) = await CreateCheckpointAsync(directory, sourceRecord, selector,
+                (_, _) => ValueTask.FromResult<Stream>(new MemoryStream()));
+            var manifestPath = Path.Combine(directory, checkpointId.Value.ToString("N"), "manifest.json");
+            var (historicalManifestBytes, historicalManifestHash) = EncodePreScopeManifest(checkpoint);
+            Assert.Equal(historicalManifestBytes, EncodePreScopeManifest(checkpoint).Bytes);
+            await File.WriteAllBytesAsync(manifestPath, historicalManifestBytes, TestContext.Current.CancellationToken);
+
+            using (var manifestJson = JsonDocument.Parse(historicalManifestBytes))
+            {
+                var root = manifestJson.RootElement;
+                Assert.Equal("proofshift-snapshot-manifest-v2", root.GetProperty("manifestFormatVersion").GetString());
+                Assert.Equal(historicalManifestHash, root.GetProperty("manifestHash").GetString());
+                var endpoint = Assert.Single(root.GetProperty("endpoints").EnumerateArray());
+                Assert.False(endpoint.TryGetProperty("evaluationScopeId", out _));
+                Assert.False(endpoint.TryGetProperty("evaluationScopeType", out _));
+                Assert.False(endpoint.TryGetProperty("evaluationScopeFingerprint", out _));
+            }
+
+            var loadedManifest = await store.ReadManifestAsync(checkpointId.Value.ToString("N"),
+                TestContext.Current.CancellationToken);
+            Assert.Equal(historicalManifestHash, loadedManifest.ManifestHash);
+            var loadedEndpoint = Assert.Single(loadedManifest.Endpoints);
+            Assert.Null(loadedEndpoint.EvaluationScopeId);
+            Assert.Null(loadedEndpoint.EvaluationScopeType);
+            Assert.Null(loadedEndpoint.EvaluationScopeFingerprint);
+
+            var scopedSelector = new ArtifactSelector("table",
+                [new KeyValuePair<string, string>("name", "member")], ["member_id"],
+                new EvaluationScope("later-scope", EvaluationScopeType.BoundedEvaluation));
+            await using (var loaded = await store.OpenCompleteAsync(checkpointId.Value.ToString("N"),
+                TestContext.Current.CancellationToken))
+            {
+                var exception = await Assert.ThrowsAsync<SnapshotStoreException>(async () =>
+                {
+                    await foreach (var _ in loaded.ReadAsync("members", scopedSelector, TestContext.Current.CancellationToken)) { }
+                });
+                Assert.Equal(SnapshotIssueCodes.SelectorMismatch, exception.Code);
+            }
+
+            var replayFingerprints = new List<string>();
+            for (var replay = 0; replay < 2; replay++)
+            {
+                await using var loaded = await store.OpenCompleteAsync(checkpointId.Value.ToString("N"),
+                    TestContext.Current.CancellationToken);
+                var replayedRecords = new List<RecordEnvelope>();
+                await foreach (var record in loaded.ReadAsync("members", selector, TestContext.Current.CancellationToken))
+                    replayedRecords.Add(record);
+                var replayed = Assert.Single(replayedRecords);
+                Assert.Equal(sourceRecord.Artifact, replayed.Artifact);
+                Assert.Equal(sourceRecord.Provenance.Connector, replayed.Provenance.Connector);
+                Assert.Equal(sourceRecord.Provenance.Endpoint, replayed.Provenance.Endpoint);
+                Assert.Equal(sourceRecord.Provenance.Location, replayed.Provenance.Location);
+                Assert.Equal(sourceRecord.Provenance.ObservedAt, replayed.Provenance.ObservedAt);
+                Assert.Equal(sourceRecord.Provenance.SourceHash, replayed.Provenance.SourceHash);
+                Assert.Equal(sourceRecord.Provenance.Metadata["fixture"], replayed.Provenance.Metadata["fixture"]);
+                Assert.Equal("fixture,snapshotCheckpointId,snapshotMaterialized,snapshotRecordFingerprint,snapshotSourceNode",
+                    string.Join(",", replayed.Provenance.Metadata.Keys.OrderBy(key => key, StringComparer.Ordinal)));
+                Assert.Equal(checkpointId.Value.ToString("N"), replayed.Provenance.Metadata["snapshotCheckpointId"]);
+                Assert.Equal("true", replayed.Provenance.Metadata["snapshotMaterialized"]);
+                Assert.Equal("members", replayed.Provenance.Metadata["snapshotSourceNode"]);
+                Assert.Equal(SnapshotFingerprints.RecordFingerprint(sourceRecord),
+                    replayed.Provenance.Metadata["snapshotRecordFingerprint"]);
+                replayFingerprints.Add(SnapshotFingerprints.RecordFingerprint(replayed));
+            }
+
+            Assert.Equal(new[] { SnapshotFingerprints.RecordFingerprint(sourceRecord) }, replayFingerprints.Distinct());
+            Assert.Equal(historicalManifestBytes,
+                await File.ReadAllBytesAsync(manifestPath, TestContext.Current.CancellationToken));
+
+            var corruptedManifest = Encoding.UTF8.GetString(historicalManifestBytes)
+                .Replace(historicalManifestHash, new string('0', 64), StringComparison.Ordinal);
+            await File.WriteAllTextAsync(manifestPath, corruptedManifest, TestContext.Current.CancellationToken);
+            var integrityException = await Assert.ThrowsAsync<SnapshotStoreException>(
+                () => store.OpenCompleteAsync(checkpointId.Value.ToString("N"), TestContext.Current.CancellationToken));
+            Assert.Equal(SnapshotIssueCodes.IntegrityFailure, integrityException.Code);
         }
         finally
         {
@@ -274,6 +367,61 @@ public sealed class SnapshotStoreTests
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    private static (byte[] Bytes, string Hash) EncodePreScopeManifest(SourceCheckpoint checkpoint)
+    {
+        // Independent wire DTO from accepted a095c21588cbd1608b8a543cdfaab71312b596d8,
+        // SnapshotManifestCodec: v2 property order, null omission, and hash over the document without manifestHash.
+        var options = new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
+        object Document(string? hash) => new
+        {
+            manifestFormatVersion = "proofshift-snapshot-manifest-v2",
+            materializedFormatVersion = "proofshift-materialized-snapshot-v1",
+            manifestHash = hash,
+            checkpointId = checkpoint.Id.Value.ToString("N"),
+            status = "complete",
+            projectId = checkpoint.ProjectId,
+            configurationHash = checkpoint.ConfigurationHash,
+            graphHash = checkpoint.GraphHash,
+            captureStartedAt = checkpoint.CaptureStartedAt.ToString("O", CultureInfo.InvariantCulture),
+            captureCompletedAt = checkpoint.CaptureCompletedAt.ToString("O", CultureInfo.InvariantCulture),
+            maximumEndpointSkewTicks = checkpoint.MaximumEndpointSkew.Ticks,
+            crossSystemAtomic = checkpoint.CrossSystemAtomic,
+            replayable = checkpoint.Replayable,
+            guarantee = "materialized",
+            artifactCount = checkpoint.ArtifactCount,
+            byteCount = checkpoint.ByteCount,
+            sourceFingerprint = checkpoint.SourceFingerprint,
+            endpoints = checkpoint.Endpoints.OrderBy(endpoint => endpoint.SourceNodeKey, StringComparer.Ordinal)
+                .Select(endpoint => new
+                {
+                    sourceNodeKey = endpoint.SourceNodeKey,
+                    systemId = endpoint.SystemId.Value,
+                    endpointId = endpoint.EndpointId.Value,
+                    connector = endpoint.Connector.Value,
+                    connectorVersion = endpoint.ConnectorVersion,
+                    selectorHash = endpoint.SelectorHash,
+                    identityFields = endpoint.IdentityFields.ToArray(),
+                    captureStartedAt = endpoint.CaptureStartedAt.ToString("O", CultureInfo.InvariantCulture),
+                    captureCompletedAt = endpoint.CaptureCompletedAt.ToString("O", CultureInfo.InvariantCulture),
+                    sourceConsistency = endpoint.SourceConsistency.ToString().ToLowerInvariant(),
+                    requestedConsistencyStrategy = endpoint.RequestedConsistencyStrategy,
+                    effectiveConsistencyStrategy = endpoint.EffectiveConsistencyStrategy,
+                    consistencyDowngrade = endpoint.ConsistencyDowngrade,
+                    guarantee = "materialized",
+                    replayable = endpoint.Replayable,
+                    artifactCount = endpoint.ArtifactCount,
+                    byteCount = endpoint.ByteCount,
+                    sourceFingerprint = endpoint.SourceFingerprint,
+                    segmentReference = endpoint.SegmentReference,
+                    segmentSha256 = endpoint.SegmentSha256,
+                    segmentLength = endpoint.SegmentLength
+                }).ToArray()
+        };
+        var hash = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(Document(null), options)))
+            .ToLowerInvariant();
+        return (JsonSerializer.SerializeToUtf8Bytes(Document(hash), options), hash);
     }
 
     private static async Task<(FileSystemSnapshotStore Store, CheckpointId Id, SourceCheckpoint Checkpoint)> CreateCheckpointAsync(

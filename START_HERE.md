@@ -67,6 +67,7 @@ Verification, qualification is unavailable.
 
 Read [the evaluation guide](docs/EVALUATION.md), [the BYOM guide](docs/BYOM_EVALUATION.md),
 [the customer evaluation runbook](docs/CUSTOMER_EVALUATION_RUNBOOK.md),
+[the supported source and connector compatibility table](docs/SOURCE_CONNECTOR_COMPATIBILITY.md),
 [the customer data preparation guide](docs/CUSTOMER_DATA_PREPARATION.md),
 [the generalized mapping guide](docs/GENERALIZED_MAPPING_GUIDE.md), [the reconciliation rule guide](docs/RECONCILIATION_RULE_GUIDE.md),
 [the pilot evaluator guide](docs/PILOT_EVALUATOR_GUIDE.md), and

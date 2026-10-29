@@ -6,6 +6,10 @@ read-only Verification of a separately populated external target. Both are
 ordinary projects using ProofShift's normal configuration and CLI; neither is
 a canned domain demo, domain pack, migration executor, or source-code example
 that must be built from the repository.
+Consult the [supported source and connector compatibility table](SOURCE_CONNECTOR_COMPATIBILITY.md)
+for the registered capabilities and prerequisites; follow the
+[customer runbook cleanup procedure](CUSTOMER_EVALUATION_RUNBOOK.md#6-cleanup-and-retention)
+after the evaluation.
 
 ## Assurance boundary
 

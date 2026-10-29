@@ -19,6 +19,11 @@ account, persisted Verification-only reports, exact seeded findings, and
 corrected repeat fingerprint stability. It does not execute the migration or
 make a Recovery qualification claim.
 
+For customer source prerequisites, implemented capabilities, and limitations,
+see the [supported source and connector compatibility table](SOURCE_CONNECTOR_COMPATIBILITY.md).
+Use the [customer runbook](CUSTOMER_EVALUATION_RUNBOOK.md#6-cleanup-and-retention)
+for explicit cleanup and retention steps.
+
 ## Requirements
 
 - Operators need the compatible **.NET 10 runtime**, not the SDK, to run the framework-dependent package. Basic CLI operations are proven in an isolated runtime-only environment. Package build and development use the exact .NET SDK pinned in repository `global.json` (`10.0.402`).

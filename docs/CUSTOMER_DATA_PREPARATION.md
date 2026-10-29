@@ -2,6 +2,10 @@
 
 ## Data handling boundary
 
+Confirm that the chosen source type is listed in the canonical
+[source/connector compatibility table](SOURCE_CONNECTOR_COMPATIBILITY.md)
+before preparing an evaluation.
+
 ProofShift is evaluated in a customer-controlled environment. Do not send
 customer data, extracts, schemas with confidential names, or resolved secrets
 to repository issues, pull requests, logs, or public support channels. The

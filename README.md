@@ -85,7 +85,9 @@ See `docs/ARCHITECTURE.md`, `docs/PS0_SPECIFICATION.md`, and `docs/DOMAIN_MODEL.
 - .NET 10 / C# 14
 - CLI-first PS-0
 - PostgreSQL for ProofShift's own persistence when persistence becomes necessary
-- SQL Server + PostgreSQL + filesystem/CSV initial connectors
+- The registered source formats, connector capabilities, prerequisites, and
+  limits are maintained in the
+  [source/connector compatibility table](docs/SOURCE_CONNECTOR_COMPATIBILITY.md)
 - OpenTelemetry for operational observability
 - deterministic synthetic data and exact-count end-to-end tests
 - no required Kubernetes/Kafka/Redis/UI for PS-0

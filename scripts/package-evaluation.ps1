@@ -252,6 +252,7 @@ try {
         "docs/demo/DEMO_SCENARIO_MANIFEST.md",
         "docs/demo/CROSS_DOMAIN_DEMOS.md",
         "docs/EVALUATION.md",
+        "docs/SOURCE_CONNECTOR_COMPATIBILITY.md",
         "docs/BYOM_EVALUATION.md",
         "docs/CUSTOMER_EVALUATION_RUNBOOK.md",
         "docs/CUSTOMER_DATA_PREPARATION.md",
@@ -324,7 +325,7 @@ try {
         contentSha256 = $contentHash
         entryPoint = "dotnet app/ProofShift.Cli.dll"
         scenarioRunner = "demo/ProofShift.DemoRunner.dll (non-test runtime)"
-        allowlist = @("app/*.dll and runtime assets", "demo/*.dll/.json and runtime assets", "scenarios/** including the synthetic BYOM evaluation kit", "START_HERE.md", "docs/EVALUATION.md", "docs/BYOM_EVALUATION.md", "docs/CUSTOMER_EVALUATION_RUNBOOK.md", "docs/CUSTOMER_DATA_PREPARATION.md", "docs/GENERALIZED_MAPPING_GUIDE.md", "docs/RECONCILIATION_RULE_GUIDE.md", "docs/PILOT_EVALUATOR_GUIDE.md", "docs/PILOT_INTAKE_CHECKLIST.md", "docs/DEMO_RUNBOOK.md", "docs/demo/DEMO_SCENARIO_MANIFEST.md", "docs/demo/CROSS_DOMAIN_DEMOS.md", "docs/PS0_10F_SCENARIO_INDEX.json", "LICENSE", "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-LICENSES/**")
+        allowlist = @("app/*.dll and runtime assets", "demo/*.dll/.json and runtime assets", "scenarios/** including the synthetic BYOM evaluation kit", "START_HERE.md", "docs/EVALUATION.md", "docs/SOURCE_CONNECTOR_COMPATIBILITY.md", "docs/BYOM_EVALUATION.md", "docs/CUSTOMER_EVALUATION_RUNBOOK.md", "docs/CUSTOMER_DATA_PREPARATION.md", "docs/GENERALIZED_MAPPING_GUIDE.md", "docs/RECONCILIATION_RULE_GUIDE.md", "docs/PILOT_EVALUATOR_GUIDE.md", "docs/PILOT_INTAKE_CHECKLIST.md", "docs/DEMO_RUNBOOK.md", "docs/demo/DEMO_SCENARIO_MANIFEST.md", "docs/demo/CROSS_DOMAIN_DEMOS.md", "docs/PS0_10F_SCENARIO_INDEX.json", "LICENSE", "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-LICENSES/**")
         denylist = @("source code", "test assemblies and test-platform dependencies", "PDB/debug symbols", ".git", ".proofshift", "TestResults", "benchmark outputs", "vendor container images", "secrets", "local environment files")
     }
     $manifestJson = ConvertTo-Json -InputObject $packageManifest -Depth 20

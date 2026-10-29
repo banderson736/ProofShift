@@ -3,8 +3,12 @@ using System.Text.Json;
 using ProofShift.Configuration;
 using ProofShift.Connectors.Abstractions;
 using ProofShift.Domain;
+using ProofShift.Evidence;
 using ProofShift.Engine;
 using ProofShift.Graph;
+using ProofShift.Projection;
+using ProofShift.Snapshots;
+using ProofShift.Verification;
 using YamlDotNet.RepresentationModel;
 using Xunit;
 
@@ -427,7 +431,12 @@ public sealed class AuthoringCliTests
     [Fact]
     public async Task MappingImportEmitsExplicitFieldFanOutEdgesWithoutImplicitMerge()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"proofshift-fanout-cli-{Guid.NewGuid():N}");
+        var repositoryDirectory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (repositoryDirectory is not null && !File.Exists(Path.Combine(repositoryDirectory.FullName, "ProofShift.sln")))
+            repositoryDirectory = repositoryDirectory.Parent;
+        Assert.NotNull(repositoryDirectory);
+        var root = Path.Combine(repositoryDirectory.FullName, "TestResults", $"fanout-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
         try
         {
             var context = new ConnectorContext("logical", "records", new ConnectorId("postgres"),
@@ -443,7 +452,7 @@ public sealed class AuthoringCliTests
                         [new("pk", true, ["id"])], []),
                     new("public", "search", "table",
                         [new("id", "integer", false, 1), new("search_label", "text", false, 2)],
-                        [new("pk", true, ["id"])], [])
+                        [new("pk", true, ["search_label"])], [])
                 ]);
             var sourcePath = Path.Combine(root, "source-discovery");
             var targetPath = Path.Combine(root, "target-discovery");
@@ -454,13 +463,13 @@ public sealed class AuthoringCliTests
                 Source Entity,Source Field,Target Entity,Target Field,Transformation,Required,Notes,Review Status,Role
                 dbo.records,id,public.records,id,copy,true,,confirmed,identity
                 dbo.records,display_name,public.records,display_name,copy,true,,confirmed,attribute
-                dbo.records,id,public.search,id,copy,true,,confirmed,identity
-                dbo.records,display_name,public.search,search_label,copy,true,,confirmed,attribute
+                dbo.records,display_name,public.search,search_label,copy,true,,confirmed,identity
+                dbo.records,id,public.search,id,copy,true,,confirmed,attribute
                 """, TestContext.Current.CancellationToken);
             var project = Path.Combine(root, "project");
             var import = await RunAsync("mapping", "import", "--csv", csv,
                 "--source-discovery", sourcePath, "--target-discovery", targetPath,
-                "--output", project, "--target-role", "target", "--verification-baseline", "generic",
+                "--output", project, "--target-role", "shadow-target", "--verification-baseline", "generic",
                 "--evaluation-scope-id", "customer-cohort",
                 "--evaluation-scope-type", "full-declared-source");
             Assert.True(import.ExitCode == 0, import.Output + import.Error);
@@ -505,6 +514,34 @@ public sealed class AuthoringCliTests
             Assert.True(compiled.IsValid, string.Join(Environment.NewLine, compiled.Issues.Select(issue => issue.Message)));
             var compiledGraph = compiled.Graph!;
             var sourceNode = compiledGraph.Nodes.Single(node => node.Name == "source-0");
+            var targetsByName = compiledGraph.Nodes.Where(node => node.Type == MigrationNodeType.Target)
+                .ToDictionary(node => node.Name, StringComparer.Ordinal);
+            Assert.Equal(2, targetsByName.Count);
+            Assert.Contains("target-0", targetsByName.Keys);
+            Assert.Contains("target-1", targetsByName.Keys);
+            Assert.Equal("search_label", Assert.Single(targetsByName["target-1"].Selector.IdentityFields));
+
+            var edgesByTarget = compiledGraph.Edges.ToDictionary(
+                edge => compiledGraph.Nodes.Single(node => edge.Targets.Contains(node.Id)).Name,
+                StringComparer.Ordinal);
+            Assert.Equal(2, edgesByTarget.Count);
+            Assert.Contains("target-0", edgesByTarget.Keys);
+            Assert.Contains("target-1", edgesByTarget.Keys);
+            Assert.All(edgesByTarget.Values, edge =>
+            {
+                Assert.Equal(MigrationOperationType.Transform, edge.Operation.Type);
+                Assert.Equal(sourceNode.Id, Assert.Single(edge.Sources));
+                Assert.Single(edge.Targets);
+            });
+            var primaryMappings = edgesByTarget["target-0"].Operation.Fields.ToDictionary(field => field.Target, field => field.Source);
+            Assert.Equal(2, primaryMappings.Count);
+            Assert.Equal("id", primaryMappings["id"]);
+            Assert.Equal("display_name", primaryMappings["display_name"]);
+            var searchMappings = edgesByTarget["target-1"].Operation.Fields.ToDictionary(field => field.Target, field => field.Source);
+            Assert.Equal(2, searchMappings.Count);
+            Assert.Equal("id", searchMappings["id"]);
+            Assert.Equal("display_name", searchMappings["search_label"]);
+
             var sourceRecord = new RecordEnvelope(
                 new ArtifactReference(new ArtifactId("source-record-1"), sourceNode.SystemId,
                     sourceNode.EndpointId, "record", "id:7"),
@@ -539,8 +576,291 @@ public sealed class AuthoringCliTests
                     Assert.False(output.Values.ContainsKey("display_name"));
                 }
             }
+
+            var environment = new FanoutEnvironmentProvider(new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["PROOFSHIFT_SOURCE_CONNECTION"] = "unused-synthetic-source",
+                ["PROOFSHIFT_TARGET_CONNECTION"] = "unused-synthetic-target"
+            });
+            var contextFactory = new RuntimeConnectorContextFactory(environment);
+            var checkpointStore = new FileSystemSnapshotStore(Path.Combine(root, "checkpoint-store"));
+            var sourceConnector = new FanoutCheckpointConnector(sourceRecord);
+            var capture = await new SnapshotCaptureService(new ConnectorRegistry([sourceConnector]), checkpointStore,
+                contextFactory).CaptureAsync(loaded.Configuration, compiledGraph, TestContext.Current.CancellationToken);
+            Assert.Equal(CheckpointStatus.Complete, capture.Status);
+            Assert.Equal(1, capture.CapturedArtifacts);
+            var checkpointEndpoint = Assert.Single(capture.Checkpoint!.Endpoints);
+            Assert.Equal(sourceNode.Name, checkpointEndpoint.SourceNodeKey);
+            Assert.Equal(1, checkpointEndpoint.ArtifactCount);
+            Assert.Equal(1, sourceConnector.CheckpointReadCount);
+
+            await using var loadedCheckpoint = await checkpointStore.OpenCompleteAsync(
+                capture.Id.Value.ToString("N"), TestContext.Current.CancellationToken);
+            var replayedSources = new List<RecordEnvelope>();
+            await foreach (var replayed in loadedCheckpoint.ReadAsync(sourceNode.Name, sourceNode.Selector,
+                TestContext.Current.CancellationToken))
+                replayedSources.Add(replayed);
+            var replayedSource = Assert.Single(replayedSources);
+            Assert.Equal(sourceRecord.Artifact, replayedSource.Artifact);
+            Assert.Equal(sourceRecord.Artifact.Id, replayedSource.Artifact.Id);
+            Assert.Equal(sourceRecord.Artifact.Identity, replayedSource.Artifact.Identity);
+
+            var shadowTargetConnector = new FanoutShadowTargetConnector();
+            var projectionService = new ShadowProjectionService(new ConnectorRegistry([sourceConnector]),
+                new ShadowTargetConnectorRegistry([shadowTargetConnector]), contextFactory,
+                new CheckpointSourceArtifactStreamProvider(loadedCheckpoint));
+            var projection = await projectionService.ProjectAsync(loaded.Configuration, compiledGraph, project,
+                TestContext.Current.CancellationToken);
+            Assert.Equal(ProjectionStatus.Succeeded, projection.Status);
+            Assert.Equal(2, projection.SourceArtifactCount);
+            Assert.Equal(2, projection.TargetArtifactCount);
+            Assert.Equal(0, sourceConnector.LiveReadCount);
+            Assert.Equal(capture.Id.Value.ToString("N"), projection.CheckpointId);
+            Assert.Equal(capture.Checkpoint.SourceFingerprint, projection.CheckpointSourceFingerprint);
+            Assert.Equal(capture.Checkpoint.ManifestHash, projection.CheckpointManifestHash);
+
+            var projectedTarget0 = Assert.Single(shadowTargetConnector.ReadRecords(projection.Id, "target-0"));
+            var projectedTarget1 = Assert.Single(shadowTargetConnector.ReadRecords(projection.Id, "target-1"));
+            Assert.NotEqual(projectedTarget0.Artifact.Id, projectedTarget1.Artifact.Id);
+            Assert.Equal("2:id=9:integer:7", projectedTarget0.Artifact.Identity);
+            Assert.Equal("12:search_label=21:string:Fanout Example", projectedTarget1.Artifact.Identity);
+            Assert.Equal(StableArtifactIdentity.CreateArtifactId(projectedTarget0.Artifact.SystemId.Value,
+                projectedTarget0.Artifact.EndpointId.Value, projectedTarget0.Artifact.ArtifactType,
+                projectedTarget0.Artifact.Identity), projectedTarget0.Artifact.Id.Value);
+            Assert.Equal(StableArtifactIdentity.CreateArtifactId(projectedTarget1.Artifact.SystemId.Value,
+                projectedTarget1.Artifact.EndpointId.Value, projectedTarget1.Artifact.ArtifactType,
+                projectedTarget1.Artifact.Identity), projectedTarget1.Artifact.Id.Value);
+            Assert.Equal("Fanout Example", Assert.IsType<StringValue>(projectedTarget0.Values["display_name"]).Value);
+            Assert.False(projectedTarget0.Values.ContainsKey("search_label"));
+            Assert.Equal("Fanout Example", Assert.IsType<StringValue>(projectedTarget1.Values["search_label"]).Value);
+            Assert.Equal(new IntegerValue(7), projectedTarget1.Values["id"]);
+            Assert.False(projectedTarget1.Values.ContainsKey("display_name"));
+            Assert.Equal(sourceRecord.Artifact.Id.Value, projectedTarget0.Provenance.Metadata["projectionSource"]);
+            Assert.Equal(sourceRecord.Artifact.Id.Value, projectedTarget1.Provenance.Metadata["projectionSource"]);
+            Assert.Equal(edgesByTarget["target-0"].Name, projectedTarget0.Provenance.Metadata["projectionEdge"]);
+            Assert.Equal(edgesByTarget["target-1"].Name, projectedTarget1.Provenance.Metadata["projectionEdge"]);
+
+            shadowTargetConnector.ReplaceValue(projection.Id, "target-1", "id", new IntegerValue(8));
+            var projectionManifestHash = await ProjectionRunManifestStore.WriteAsync(project, projection,
+                TestContext.Current.CancellationToken);
+            var binding = new ProjectionVerificationBinding(projection.Id, projection.ConfigurationHash,
+                projection.GraphHash, capture.Id, capture.Checkpoint.ManifestHash!, capture.Checkpoint.SourceFingerprint!,
+                projection.Fingerprint!, projection.FingerprintVersion, projection.SourceArtifactCount,
+                projection.TargetArtifactCount, "succeeded", projectionManifestHash, projection.JournalPath,
+                projection.ConnectorVersions);
+            var targetRuntimes = targetsByName.Values.Select(node => new VerificationTargetRuntime(node.Name,
+                shadowTargetConnector, new TargetObservationContext(contextFactory.Create(loaded.Configuration, node),
+                    projection.Id, SystemRole.ShadowTarget))).ToArray();
+            var ruleSet = new VerificationRuleRegistry([new GenericVerificationRuleProvider()]).Resolve(
+            [
+                VerificationRule("source-accounting", "source-artifact-accounting"),
+                VerificationRule("target-lineage", "target-lineage"),
+                VerificationRule("target-presence", "target-presence"),
+                VerificationRule("unexpected-targets", "unexpected-target"),
+                AttributeRule("primary-name", "target-0", "display_name", sourceNode.SemanticType),
+                AttributeRule("search-id", "target-1", "id", sourceNode.SemanticType),
+                AttributeRule("search-label", "target-1", "search_label", sourceNode.SemanticType)
+            ]);
+            var verification = await new VerificationService(checkpointStore).VerifyAsync(loaded.Configuration,
+                compiledGraph, binding, ruleSet, project, Path.Combine(root, "verification-work"), "fanout-test",
+                targetRuntimes, TestContext.Current.CancellationToken);
+            Assert.Equal(VerificationOutcome.Failed, verification.Run.Outcome);
+            Assert.Equal(1, verification.Ledger.SourceCount);
+            Assert.Equal(2, verification.Ledger.TargetCount);
+            Assert.Equal(1, verification.Ledger.DispositionCount);
+            Assert.Equal(2, verification.Ledger.LineageCount);
+
+            var searchIdFinding = Assert.Single(verification.Findings, finding =>
+                finding.RuleId.Value == "search-id" && finding.Code == "AttributeMismatch");
+            Assert.Equal(EvidenceResult.Fail, searchIdFinding.Result);
+            Assert.Contains(searchIdFinding.Inputs, input => input.ArtifactId == sourceRecord.Artifact.Id &&
+                input.GraphNodeId == sourceNode.Id);
+            Assert.Contains(searchIdFinding.Inputs, input => input.ArtifactId == projectedTarget1.Artifact.Id &&
+                input.GraphNodeId == targetsByName["target-1"].Id);
+            Assert.Equal(2, searchIdFinding.Inputs.Count(input => input.ArtifactId == projectedTarget1.Artifact.Id &&
+                input.GraphNodeId == targetsByName["target-1"].Id));
+            Assert.Contains(searchIdFinding.Inputs, input => input.MigrationEdgeId == edgesByTarget["target-1"].Id);
+            Assert.Contains(searchIdFinding.Inputs, input => input.CheckpointId == capture.Id);
+            Assert.Contains(searchIdFinding.Inputs, input => input.ProjectionRunId == projection.Id);
+            Assert.DoesNotContain(searchIdFinding.Inputs, input => input.GraphNodeId == targetsByName["target-0"].Id);
+
+            var evidenceRecord = Assert.Single(verification.EvidenceGraph.Records,
+                record => record.RuleId == searchIdFinding.RuleId && record.Code == searchIdFinding.Code);
+            Assert.Contains(evidenceRecord.Inputs, input => input.ArtifactId == sourceRecord.Artifact.Id &&
+                input.GraphNodeId == sourceNode.Id);
+            Assert.Equal(2, evidenceRecord.Inputs.Count(input => input.ArtifactId == projectedTarget1.Artifact.Id &&
+                input.GraphNodeId == targetsByName["target-1"].Id));
+            Assert.Contains(evidenceRecord.Inputs, input => input.MigrationEdgeId == edgesByTarget["target-1"].Id);
+            Assert.Contains(evidenceRecord.Inputs, input => input.CheckpointId == capture.Id);
+            Assert.Contains(evidenceRecord.Inputs, input => input.ProjectionRunId == projection.Id);
+            Assert.DoesNotContain(evidenceRecord.Inputs, input => input.GraphNodeId == targetsByName["target-0"].Id);
+            Assert.Equal(verification.Ledger.Fingerprint,
+                verification.EvidenceGraph.VerificationContext!.VerificationLedgerFingerprint);
+            var evidenceStore = new FileSystemEvidenceStore(Path.Combine(root, "evidence"));
+            var evidenceReceipt = await evidenceStore.SaveAsync(verification.EvidenceGraph,
+                TestContext.Current.CancellationToken);
+            Assert.True(await evidenceStore.VerifyIntegrityAsync(verification.Run.Id,
+                TestContext.Current.CancellationToken));
+            Assert.Equal(verification.EvidenceGraph.Fingerprint, evidenceReceipt.Fingerprint);
+
+            await using var ledger = await SqliteVerificationLedgerStore.OpenAsync(project, verification.Ledger,
+                TestContext.Current.CancellationToken);
+            var dispositions = new List<ArtifactDispositionRecord>();
+            await foreach (var disposition in ledger.ReadDispositionsAsync(TestContext.Current.CancellationToken))
+                dispositions.Add(disposition);
+            var dispositionRecord = Assert.Single(dispositions);
+            Assert.Equal(sourceRecord.Artifact.Id, dispositionRecord.Source.Id);
+            Assert.Equal(sourceRecord.Artifact.SystemId, dispositionRecord.Source.SystemId);
+            Assert.Equal(sourceRecord.Artifact.EndpointId, dispositionRecord.Source.EndpointId);
+            Assert.Equal(sourceRecord.Artifact.ArtifactType, dispositionRecord.Source.ArtifactType);
+            Assert.Equal($"opaque:{sourceRecord.Artifact.Id.Value}", dispositionRecord.Source.Identity);
+            Assert.Equal(sourceNode.Id, dispositionRecord.SourceNodeId);
+            Assert.Equal(ArtifactDisposition.Transformed, dispositionRecord.Disposition);
+            Assert.Equal(2, dispositionRecord.Targets.Count);
+            Assert.Equal(2, dispositionRecord.TargetNodeIds.Count);
+            var targetDispositionPairs = dispositionRecord.Targets.Zip(dispositionRecord.TargetNodeIds)
+                .ToDictionary(pair => pair.Second, pair => pair.First);
+            var dispositionTarget0 = targetDispositionPairs[targetsByName["target-0"].Id];
+            Assert.Equal(projectedTarget0.Artifact.Id, dispositionTarget0.Id);
+            Assert.Equal(projectedTarget0.Artifact.SystemId, dispositionTarget0.SystemId);
+            Assert.Equal(projectedTarget0.Artifact.EndpointId, dispositionTarget0.EndpointId);
+            Assert.Equal(projectedTarget0.Artifact.ArtifactType, dispositionTarget0.ArtifactType);
+            Assert.Equal($"opaque:{projectedTarget0.Artifact.Id.Value}", dispositionTarget0.Identity);
+            var dispositionTarget1 = targetDispositionPairs[targetsByName["target-1"].Id];
+            Assert.Equal(projectedTarget1.Artifact.Id, dispositionTarget1.Id);
+            Assert.Equal(projectedTarget1.Artifact.SystemId, dispositionTarget1.SystemId);
+            Assert.Equal(projectedTarget1.Artifact.EndpointId, dispositionTarget1.EndpointId);
+            Assert.Equal(projectedTarget1.Artifact.ArtifactType, dispositionTarget1.ArtifactType);
+            Assert.Equal($"opaque:{projectedTarget1.Artifact.Id.Value}", dispositionTarget1.Identity);
+
+            var lineages = new List<LineageRecord>();
+            await foreach (var lineage in ledger.ReadLineageAsync(TestContext.Current.CancellationToken))
+                lineages.Add(lineage);
+            Assert.Equal(2, lineages.Count);
+            var lineageByTargetNode = lineages.ToDictionary(lineage => lineage.TargetNodeId!.Value);
+            var target0Lineage = lineageByTargetNode[targetsByName["target-0"].Id];
+            Assert.Equal(projectedTarget0.Artifact.Id, target0Lineage.Target.Id);
+            Assert.Equal(sourceRecord.Artifact.Id, Assert.Single(target0Lineage.Sources).Id);
+            Assert.Equal($"opaque:{projectedTarget0.Artifact.Id.Value}", target0Lineage.Target.Identity);
+            Assert.Equal($"opaque:{sourceRecord.Artifact.Id.Value}", Assert.Single(target0Lineage.Sources).Identity);
+            Assert.Equal(sourceNode.Id, Assert.Single(target0Lineage.SourceNodeIds));
+            Assert.Equal(edgesByTarget["target-0"].Id, Assert.Single(target0Lineage.Path));
+            Assert.Equal(LineageBasis.ExecutionObserved, target0Lineage.Basis);
+            var target1Lineage = lineageByTargetNode[targetsByName["target-1"].Id];
+            Assert.Equal(projectedTarget1.Artifact.Id, target1Lineage.Target.Id);
+            Assert.Equal(sourceRecord.Artifact.Id, Assert.Single(target1Lineage.Sources).Id);
+            Assert.Equal($"opaque:{projectedTarget1.Artifact.Id.Value}", target1Lineage.Target.Identity);
+            Assert.Equal($"opaque:{sourceRecord.Artifact.Id.Value}", Assert.Single(target1Lineage.Sources).Identity);
+            Assert.Equal(sourceNode.Id, Assert.Single(target1Lineage.SourceNodeIds));
+            Assert.Equal(edgesByTarget["target-1"].Id, Assert.Single(target1Lineage.Path));
+            Assert.Equal(LineageBasis.ExecutionObserved, target1Lineage.Basis);
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
+    private static VerificationRuleDefinition VerificationRule(string id, string type) =>
+        new(new RuleId(id), type, "1", EvidenceSeverity.Error);
+
+    private static VerificationRuleDefinition AttributeRule(string id, string targetNode, string field, string semanticType) =>
+        new(new RuleId(id), "attribute-comparison", "1", EvidenceSeverity.Error,
+        [
+            new KeyValuePair<string, string>("targetNode", targetNode),
+            new KeyValuePair<string, string>("attribute", field),
+            new KeyValuePair<string, string>("semanticType", semanticType)
+        ]);
+
+    private sealed class FanoutEnvironmentProvider(IReadOnlyDictionary<string, string> values) : IEnvironmentVariableProvider
+    {
+        public string? GetValue(string name) => values.GetValueOrDefault(name);
+    }
+
+    private sealed class FanoutCheckpointConnector(RecordEnvelope sourceRecord) : ICheckpointSourceConnector
+    {
+        public ConnectorId Id { get; } = new("postgres");
+        public string Version => "fanout-test-v1";
+        public SourceConsistencyGuarantee CheckpointConsistency => SourceConsistencyGuarantee.Observed;
+        public int CheckpointReadCount { get; private set; }
+        public int LiveReadCount { get; private set; }
+
+        public Task<SourceInspection> InspectAsync(ConnectorContext context, ArtifactSelector selector,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new SourceInspection(SourceInspectionStatus.Valid, identityFields: selector.IdentityFields));
+
+        public IAsyncEnumerable<RecordEnvelope> ReadAsync(ConnectorContext context, ArtifactSelector selector,
+            ReadOptions options, CancellationToken cancellationToken)
+        {
+            LiveReadCount++;
+            return ReadRecordAsync(cancellationToken);
+        }
+
+        public IAsyncEnumerable<RecordEnvelope> ReadForCheckpointAsync(ConnectorContext context,
+            ArtifactSelector selector, ReadOptions options, CancellationToken cancellationToken)
+        {
+            CheckpointReadCount++;
+            return ReadRecordAsync(cancellationToken);
+        }
+
+        private async IAsyncEnumerable<RecordEnvelope> ReadRecordAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.Yield();
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return sourceRecord;
+        }
+    }
+
+    private sealed class FanoutShadowTargetConnector : IShadowTargetConnector
+    {
+        private readonly Dictionary<(RunId RunId, string NodeKey), List<RecordEnvelope>> _records = [];
+
+        public ConnectorId Id { get; } = new("postgres");
+        public string Version => "fanout-test-v1";
+
+        public Task PrepareAsync(ShadowTargetContext context, ArtifactSelector selector,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _records.Add((context.RunId, context.ConnectorContext.NodeKey), []);
+            return Task.CompletedTask;
+        }
+
+        public Task WriteAsync(ShadowWriteRequest request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _records[(request.Context.RunId, request.NodeKey)].Add(request.Record);
+            return Task.CompletedTask;
+        }
+
+        public Task CompleteAsync(ShadowTargetContext context, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public async IAsyncEnumerable<RecordEnvelope> ReadAsync(ReadRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.Yield();
+            var key = (request.Context.RunId, request.Context.ConnectorContext.NodeKey);
+            foreach (var record in _records[key].OrderBy(record => record.Artifact.Identity, StringComparer.Ordinal))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return record;
+            }
+        }
+
+        public System.Collections.ObjectModel.ReadOnlyCollection<RecordEnvelope> ReadRecords(RunId runId, string nodeKey) =>
+            _records[(runId, nodeKey)].AsReadOnly();
+
+        public void ReplaceValue(RunId runId, string nodeKey, string field, ValueNode value)
+        {
+            var records = _records[(runId, nodeKey)];
+            Assert.Single(records);
+            var record = records[0];
+            records[0] = new RecordEnvelope(record.Artifact, record.SemanticType,
+                record.Values.Select(pair => new KeyValuePair<string, ValueNode>(pair.Key,
+                    pair.Key == field ? value : pair.Value)), record.Provenance, record.Relationships, record.Temporal);
+        }
     }
 
     [Theory]
