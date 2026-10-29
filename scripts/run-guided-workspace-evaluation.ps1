@@ -82,6 +82,7 @@ function Invoke-PackagedWorkspaceRun {
     param(
         [string] $Workspace,
         [string] $CheckpointId,
+        [string] $Purpose,
         [int] $ExpectedExitCode = 0
     )
 
@@ -99,7 +100,7 @@ function Invoke-PackagedWorkspaceRun {
         Pop-Location
     }
     if ($exitCode -ne $ExpectedExitCode) {
-        throw "Packaged guided workspace run returned unexpected exit code $exitCode; output omitted."
+        throw "Packaged $Purpose guided workspace run returned exit code $exitCode (expected $ExpectedExitCode); output omitted."
     }
     $script:CommandOutputs.Add(($output -join [Environment]::NewLine))
     $resultLines = @($output | ForEach-Object { "$_" } | Where-Object {
@@ -389,7 +390,7 @@ try {
     if ($unavailablePreflight.status -eq "READY") { throw "Unavailable SQL Server endpoint incorrectly reported READY." }
     [Environment]::SetEnvironmentVariable($sourceConnectionName, $sourceConnection, "Process")
 
-    $cleanResult = Invoke-PackagedWorkspaceRun $workspace $null
+    $cleanResult = Invoke-PackagedWorkspaceRun -Workspace $workspace -CheckpointId $null -Purpose "clean run"
     Assert-Equal $cleanResult.state "Completed" "Clean guided run execution state"
     Assert-Equal $cleanResult.run.disposition "QUALIFIED" "Clean guided run disposition"
     Assert-Equal $cleanResult.run.checkpointId.Length 36 "Clean guided run checkpoint identity"
@@ -447,7 +448,7 @@ try {
     [Environment]::SetEnvironmentVariable($targetConnectionName, $targetConnection, "Process")
 
     $checkpoint = $cleanManifest.checkpointId
-    $replayResult = Invoke-PackagedWorkspaceRun $workspace $checkpoint
+    $replayResult = Invoke-PackagedWorkspaceRun -Workspace $workspace -CheckpointId $checkpoint -Purpose "offline replay"
     Assert-Equal $replayResult.state "Completed" "Offline replay execution state"
     Assert-Equal $replayResult.run.disposition "QUALIFIED" "Offline replay disposition"
     Assert-Equal $replayResult.run.replayedCheckpoint $true "Offline replay flag"
@@ -619,7 +620,8 @@ try {
     Remove-Item -LiteralPath $unownedTemporary -Recurse -Force
 
     [Environment]::SetEnvironmentVariable($sourceConnectionName, $unavailableSourceConnection, "Process")
-    $incomplete = Invoke-PackagedWorkspaceRun $workspace $null 1
+    $incomplete = Invoke-PackagedWorkspaceRun -Workspace $workspace -CheckpointId $null `
+        -Purpose "unavailable-source" -ExpectedExitCode 1
     if ($incomplete.state -notin @("PreflightBlocked", "Failed", "Interrupted") -or $incomplete.run.disposition) {
         throw "Unavailable-source run fabricated a final business disposition."
     }
