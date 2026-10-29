@@ -398,6 +398,19 @@ try {
         "psql", "-At", "-U", "postgres", "-d", "byom_shadow", "-c", $shadowPublicTargetCountsQuery)).Trim()
     Assert-Equal $shadowPublicTargetCounts "0:0:0:0" "Shadow public target state after isolated shadow projection"
 
+    [Environment]::SetEnvironmentVariable("PROOFSHIFT_TEST_SHADOW_SOURCE_PASSWORD", $sourcePassword, "Process")
+    [Environment]::SetEnvironmentVariable("PROOFSHIFT_TEST_SHADOW_ADMIN_PASSWORD", $adminPassword, "Process")
+    try {
+        $workspaceEvaluation = & (Join-Path $script:PackageRoot "scripts/run-guided-workspace-evaluation.ps1") `
+            -PackageRoot $script:PackageRoot `
+            -WorkRoot (Join-Path $script:WorkRoot "guided-workspace-evaluation") `
+            -SourceContainer $sourceContainer -SourcePort $sourcePort -TargetContainer $targetContainer
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable("PROOFSHIFT_TEST_SHADOW_SOURCE_PASSWORD", $null, "Process")
+        [Environment]::SetEnvironmentVariable("PROOFSHIFT_TEST_SHADOW_ADMIN_PASSWORD", $null, "Process")
+    }
+
     $null = Invoke-Docker @("stop", $sourceContainer)
     $sourceState = Invoke-Docker @("inspect", "--format", "{{.State.Running}}", $sourceContainer)
     Assert-Equal $sourceState.Trim() "false" "Source state after checkpoint"
@@ -562,6 +575,7 @@ SELECT
         shadowCheckpointId = $shadowCheckpointId
         shadowCheckpointSourceFingerprint = $shadowCheckpoint.sourceFingerprint
         shadowCheckpointManifestHash = $shadowCheckpoint.checkpointManifestHash
+        guidedWorkspaceEvaluation = $workspaceEvaluation
         sourceStateUnchanged = $true
         shadowSourceStateUnchanged = $true
         publicTargetStateAfterShadow = $publicTargetCounts

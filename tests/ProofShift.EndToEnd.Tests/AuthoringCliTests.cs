@@ -1,5 +1,9 @@
 using System.Diagnostics;
+using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using ProofShift.Cli;
 using ProofShift.Configuration;
 using ProofShift.Connectors.Abstractions;
 using ProofShift.Domain;
@@ -65,6 +69,993 @@ public sealed class AuthoringCliTests
             Assert.Equal(1, second.ExitCode);
             Assert.Contains("PSAUTHOR011", second.Error, StringComparison.Ordinal);
             Assert.Equal(original, await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("generic")]
+    [InlineData("pension")]
+    public async Task WorkspaceInitCreatesPortableLayoutAndValidationFailsClosedOnUnsafePaths(string template)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-{Guid.NewGuid():N}");
+        try
+        {
+            var init = await RunAsync("workspace", "init", root, "--template", template);
+            Assert.Equal(0, init.ExitCode);
+            Assert.Contains("Customer data: data/", init.Output, StringComparison.Ordinal);
+            Assert.Contains("Evidence packages: evidence/", init.Output, StringComparison.Ordinal);
+
+            var manifestPath = Path.Combine(root, "proofshift.workspace.json");
+            var manifestText = await File.ReadAllTextAsync(manifestPath, TestContext.Current.CancellationToken);
+            Assert.DoesNotContain("PROOFSHIFT_TARGET_CONNECTION", manifestText, StringComparison.Ordinal);
+            using (var manifest = JsonDocument.Parse(manifestText))
+            {
+                var document = manifest.RootElement;
+                Assert.Equal(1, document.GetProperty("formatVersion").GetInt32());
+                Assert.NotEqual(Guid.Empty, document.GetProperty("workspaceId").GetGuid());
+                Assert.Equal("proofshift.yaml", document.GetProperty("projectConfiguration").GetString());
+                Assert.Equal("data", document.GetProperty("paths").GetProperty("customerData").GetString());
+                Assert.Equal(".proofshift/tmp", document.GetProperty("paths").GetProperty("temporary").GetString());
+            }
+
+            foreach (var directory in new[] { "data", "discovery", "generated", "runs", "evidence", Path.Combine(".proofshift", "tmp") })
+                Assert.True(Directory.Exists(Path.Combine(root, directory)), $"Expected workspace directory '{directory}'.");
+
+            var validation = await RunAsync("workspace", "validate", root, "--json");
+            Assert.Equal(0, validation.ExitCode);
+            using (var result = JsonDocument.Parse(validation.Output))
+            {
+                Assert.True(result.RootElement.GetProperty("valid").GetBoolean());
+                Assert.Empty(result.RootElement.GetProperty("issues").EnumerateArray());
+            }
+            Assert.Equal(manifestText, await File.ReadAllTextAsync(manifestPath, TestContext.Current.CancellationToken));
+
+            var duplicate = await RunAsync("workspace", "init", root, "--template", template);
+            Assert.Equal(1, duplicate.ExitCode);
+            Assert.Contains("PSAUTHOR011", duplicate.Error, StringComparison.Ordinal);
+            Assert.Equal(manifestText, await File.ReadAllTextAsync(manifestPath, TestContext.Current.CancellationToken));
+
+            await File.WriteAllTextAsync(manifestPath, manifestText.Replace("\"proofshift.yaml\"", "\"../outside.yaml\"", StringComparison.Ordinal),
+                TestContext.Current.CancellationToken);
+            var unsafePath = await RunAsync("workspace", "validate", root, "--json");
+            Assert.Equal(1, unsafePath.ExitCode);
+            using var invalid = JsonDocument.Parse(unsafePath.Output);
+            Assert.False(invalid.RootElement.GetProperty("valid").GetBoolean());
+            Assert.Contains(invalid.RootElement.GetProperty("issues").EnumerateArray(),
+                issue => issue.GetProperty("code").GetString() == "PSWORK014");
+            var invalidPreflight = await RunAsync("workspace", "preflight", root, "--json");
+            Assert.Equal(1, invalidPreflight.ExitCode);
+            using (var invalidPreflightJson = JsonDocument.Parse(invalidPreflight.Output))
+            {
+                Assert.Equal("BLOCKED", invalidPreflightJson.RootElement.GetProperty("status").GetString());
+                Assert.True(invalidPreflightJson.RootElement.GetProperty("completed").GetBoolean());
+            }
+            var invalidPlan = await RunAsync("workspace", "plan", root, "--json");
+            Assert.Equal(1, invalidPlan.ExitCode);
+            using (var invalidPlanJson = JsonDocument.Parse(invalidPlan.Output))
+            {
+                Assert.Equal("BLOCKED", invalidPlanJson.RootElement.GetProperty("status").GetString());
+                Assert.Equal(JsonValueKind.Null, invalidPlanJson.RootElement.GetProperty("plan").ValueKind);
+            }
+
+            var overlappingPaths = manifestText.Replace("\"evidence\": \"evidence\"", "\"evidence\": \"data\"", StringComparison.Ordinal);
+            await File.WriteAllTextAsync(manifestPath, overlappingPaths, TestContext.Current.CancellationToken);
+            var overlap = await RunAsync("workspace", "validate", root, "--json");
+            Assert.Equal(1, overlap.ExitCode);
+            using (var overlapResult = JsonDocument.Parse(overlap.Output))
+                Assert.Contains(overlapResult.RootElement.GetProperty("issues").EnumerateArray(),
+                    issue => issue.GetProperty("code").GetString() == "PSWORK007");
+
+            var unsupportedVersion = manifestText.Replace("\"formatVersion\": 1", "\"formatVersion\": 99", StringComparison.Ordinal);
+            await File.WriteAllTextAsync(manifestPath, unsupportedVersion, TestContext.Current.CancellationToken);
+            var version = await RunAsync("workspace", "validate", root, "--json");
+            Assert.Equal(1, version.ExitCode);
+            using var versionResult = JsonDocument.Parse(version.Output);
+            Assert.Contains(versionResult.RootElement.GetProperty("issues").EnumerateArray(),
+                issue => issue.GetProperty("code").GetString() == "PSWORK004");
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspacePreflightDistinguishesStaticValidityFromReadinessAndPlanRedactsCredentials()
+    {
+        const string connectionSecret = "synthetic-connection-secret-value";
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-preflight-{Guid.NewGuid():N}");
+        try
+        {
+            var init = await RunAsync("workspace", "init", root);
+            Assert.Equal(0, init.ExitCode);
+
+            var validate = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION", connectionSecret,
+                "workspace", "validate", root, "--json");
+            Assert.Equal(0, validate.ExitCode);
+            Assert.DoesNotContain(connectionSecret, validate.Output, StringComparison.Ordinal);
+
+            var blocked = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION", null,
+                "workspace", "preflight", root, "--json");
+            Assert.Equal(1, blocked.ExitCode);
+            using (var blockedJson = JsonDocument.Parse(blocked.Output))
+            {
+                var preflight = blockedJson.RootElement;
+                Assert.Equal("BLOCKED", preflight.GetProperty("status").GetString());
+                Assert.False(preflight.GetProperty("connectivityAttempted").GetBoolean());
+                Assert.Contains(preflight.GetProperty("checks").EnumerateArray(),
+                    check => check.GetProperty("id").GetString() == "PSPREF006" &&
+                        check.GetProperty("status").GetString() == "BLOCKED");
+                Assert.Contains(preflight.GetProperty("checks").EnumerateArray(),
+                    check => check.GetProperty("category").GetString() == "connectivity" &&
+                        check.GetProperty("status").GetString() == "NOT_CHECKED");
+            }
+
+            var ready = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION", connectionSecret,
+                "workspace", "preflight", root, "--json");
+            Assert.Equal(0, ready.ExitCode);
+            Assert.DoesNotContain(connectionSecret, ready.Output, StringComparison.Ordinal);
+            using (var readyJson = JsonDocument.Parse(ready.Output))
+            {
+                Assert.Equal("READY", readyJson.RootElement.GetProperty("status").GetString());
+                Assert.False(readyJson.RootElement.GetProperty("connectivityAttempted").GetBoolean());
+                Assert.Contains(readyJson.RootElement.GetProperty("checks").EnumerateArray(),
+                    check => check.GetProperty("id").GetString() == "PSPREF008" &&
+                        check.GetProperty("status").GetString() == "READY");
+            }
+
+            var plan = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION", connectionSecret,
+                "workspace", "plan", root, "--json");
+            var repeatedPlan = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION", connectionSecret,
+                "workspace", "plan", root, "--json");
+            Assert.Equal(0, plan.ExitCode);
+            Assert.Equal(0, repeatedPlan.ExitCode);
+            Assert.DoesNotContain(connectionSecret, plan.Output, StringComparison.Ordinal);
+            using var planJson = JsonDocument.Parse(plan.Output);
+            using var repeatedPlanJson = JsonDocument.Parse(repeatedPlan.Output);
+            var planBody = planJson.RootElement.GetProperty("plan");
+            var repeatedPlanBody = repeatedPlanJson.RootElement.GetProperty("plan");
+            Assert.Equal(planBody.GetProperty("fingerprint").GetString(), repeatedPlanBody.GetProperty("fingerprint").GetString());
+            Assert.Equal(64, planBody.GetProperty("verificationRuleSetFingerprint").GetString()?.Length);
+            Assert.Equal(64, planBody.GetProperty("expectedExceptionsFingerprint").GetString()?.Length);
+            Assert.Equal(2, planBody.GetProperty("nodes").GetArrayLength());
+            Assert.Equal(1, planBody.GetProperty("edges").GetArrayLength());
+            Assert.Equal(5, planBody.GetProperty("rules").GetArrayLength());
+            Assert.Contains("never waive", planBody.GetProperty("expectedExceptionSemantics").GetString(), StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("checkpointId", plan.Output, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("projectionFingerprint", plan.Output, StringComparison.OrdinalIgnoreCase);
+
+            var capabilities = await RunAsync("capabilities", "--json");
+            using var capabilityJson = JsonDocument.Parse(capabilities.Output);
+            foreach (var system in planBody.GetProperty("systems").EnumerateArray())
+            {
+                var descriptor = capabilityJson.RootElement.GetProperty("connectors").EnumerateArray()
+                    .Single(item => item.GetProperty("id").GetString() == system.GetProperty("connector").GetString());
+                var expected = new List<string>();
+                foreach (var (property, capability) in new[]
+                {
+                    ("discovery", "discovery"),
+                    ("sourceRead", "sourceRead"),
+                    ("checkpointCapture", "checkpointCapture"),
+                    ("targetObservation", "targetObservation"),
+                    ("shadowWrite", "shadowWrite"),
+                    ("binaryStreaming", "binaryStreaming"),
+                    ("schemaInspection", "schemaInspection"),
+                    ("offlineReplay", "offlineReplay")
+                })
+                    if (descriptor.GetProperty(property).GetBoolean()) expected.Add(capability);
+                Assert.Equal(expected, system.GetProperty("capabilities").EnumerateArray()
+                    .Select(item => item.GetString()).ToArray());
+            }
+
+            var planChecks = planJson.RootElement.GetProperty("preflight").GetProperty("checks");
+            foreach (var node in planBody.GetProperty("nodes").EnumerateArray())
+            {
+                var system = planBody.GetProperty("systems").EnumerateArray()
+                    .Single(item => item.GetProperty("system").GetString() == node.GetProperty("system").GetString() &&
+                        item.GetProperty("endpoint").GetString() == node.GetProperty("endpoint").GetString());
+                var descriptor = capabilityJson.RootElement.GetProperty("connectors").EnumerateArray()
+                    .Single(item => item.GetProperty("id").GetString() == system.GetProperty("connector").GetString());
+                var required = node.GetProperty("type").GetString() == "Source"
+                    ? new[] { "discovery", "sourceRead", "checkpointCapture" }
+                    : system.GetProperty("role").GetString() == "ShadowTarget"
+                        ? new[] { "targetObservation", "shadowWrite" }
+                        : new[] { "targetObservation" };
+                foreach (var capability in required)
+                {
+                    var supported = descriptor.GetProperty(capability).GetBoolean();
+                    var check = planChecks.EnumerateArray().Single(item =>
+                        item.GetProperty("category").GetString() == "capability" &&
+                        item.GetProperty("component").GetString() == node.GetProperty("key").GetString() &&
+                        item.GetProperty("capability").GetString() == capability);
+                    Assert.Equal(supported ? "READY" : "BLOCKED", check.GetProperty("status").GetString());
+                }
+            }
+
+            var humanPlan = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION", connectionSecret,
+                "workspace", "plan", root);
+            Assert.Equal(0, humanPlan.ExitCode);
+            Assert.Contains("Graph nodes:", humanPlan.Output, StringComparison.Ordinal);
+            Assert.Contains("Graph edges and mappings:", humanPlan.Output, StringComparison.Ordinal);
+            Assert.Contains("Verification rules:", humanPlan.Output, StringComparison.Ordinal);
+            Assert.Contains("Preflight checks:", humanPlan.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain(connectionSecret, humanPlan.Output, StringComparison.Ordinal);
+
+            var rulesPath = Path.Combine(root, "rules", "rules.yaml");
+            var rulesYaml = new YamlStream();
+            rulesYaml.Load(new StringReader(await File.ReadAllTextAsync(rulesPath, TestContext.Current.CancellationToken)));
+            var rulesRoot = (YamlMappingNode)rulesYaml.Documents[0].RootNode;
+            var configuredRules = (YamlMappingNode)rulesRoot.Children[new YamlScalarNode("rules")];
+            var attributesRule = (YamlMappingNode)configuredRules.Children[new YamlScalarNode("attributes")];
+            attributesRule.Children[new YamlScalarNode("severity")] = new YamlScalarNode("warning");
+            using (var writer = new StringWriter())
+            {
+                rulesYaml.Save(writer);
+                await File.WriteAllTextAsync(rulesPath, writer.ToString(), TestContext.Current.CancellationToken);
+            }
+            var changedPlan = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION", connectionSecret,
+                "workspace", "plan", root, "--json");
+            Assert.Equal(0, changedPlan.ExitCode);
+            using var changedPlanJson = JsonDocument.Parse(changedPlan.Output);
+            Assert.NotEqual(planBody.GetProperty("fingerprint").GetString(),
+                changedPlanJson.RootElement.GetProperty("plan").GetProperty("fingerprint").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspacePlanReportsConfiguredDomainPackIdentity()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-packs-{Guid.NewGuid():N}");
+        try
+        {
+            var init = await RunAsync("workspace", "init", root, "--template", "pension");
+            Assert.Equal(0, init.ExitCode);
+
+            var result = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION", "synthetic-only",
+                "workspace", "plan", root, "--json");
+            Assert.Equal(0, result.ExitCode);
+            using var json = JsonDocument.Parse(result.Output);
+            var packs = json.RootElement.GetProperty("plan").GetProperty("packs").EnumerateArray().ToArray();
+            var pack = Assert.Single(packs);
+            Assert.Equal("pension", pack.GetProperty("id").GetString());
+            Assert.Equal("0.9.0", pack.GetProperty("version").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspacePreflightOnlyChecksConnectivityWhenExplicitlyRequested()
+    {
+        const string password = "preflight-password-must-not-leak";
+        var connection = $"Host=127.0.0.1;Port=1;Database=ProofShift;Username=synthetic;Password={password};Timeout=1";
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-connect-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var sourcePath = Path.Combine(root, "data", "source.csv");
+            var sourceHash = System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(sourcePath,
+                TestContext.Current.CancellationToken));
+            var result = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION", connection,
+                "workspace", "preflight", root, "--connect", "--json");
+            Assert.Equal(1, result.ExitCode);
+            Assert.DoesNotContain(password, result.Output, StringComparison.Ordinal);
+            using var json = JsonDocument.Parse(result.Output);
+            Assert.Equal("BLOCKED", json.RootElement.GetProperty("status").GetString());
+            Assert.True(json.RootElement.GetProperty("connectivityAttempted").GetBoolean());
+            Assert.Contains(json.RootElement.GetProperty("checks").EnumerateArray(),
+                check => check.GetProperty("category").GetString() == "connectivity" &&
+                    check.GetProperty("status").GetString() == "BLOCKED");
+            Assert.Equal(sourceHash, System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(sourcePath,
+                TestContext.Current.CancellationToken)));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(Path.Combine(root, "runs")));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(Path.Combine(root, "evidence")));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceRunPersistsBlockedReadinessWithoutDispositionOrRuntimeArtifacts()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-run-blocked-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var sourcePath = Path.Combine(root, "data", "source.csv");
+            var sourceHash = System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(sourcePath,
+                TestContext.Current.CancellationToken));
+
+            var result = await RunAsync("workspace", "run", root, "--json");
+
+            Assert.Equal(1, result.ExitCode);
+            var finalLine = result.Output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).Last();
+            using var json = JsonDocument.Parse(finalLine);
+            Assert.Equal("PreflightBlocked", json.RootElement.GetProperty("state").GetString());
+            Assert.Equal("PreflightBlocked", json.RootElement.GetProperty("run").GetProperty("state").GetString());
+            Assert.True(json.RootElement.GetProperty("run").GetProperty("runId").GetGuid() != Guid.Empty);
+            Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("run").GetProperty("disposition").ValueKind);
+            Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("run").GetProperty("checkpointId").ValueKind);
+            using var firstProgress = JsonDocument.Parse(result.Output.Split(Environment.NewLine,
+                StringSplitOptions.RemoveEmptyEntries).First());
+            Assert.Equal("progress", firstProgress.RootElement.GetProperty("type").GetString());
+            Assert.Contains(json.RootElement.GetProperty("readinessChecks").EnumerateArray(),
+                check => check.GetProperty("status").GetString() == "BLOCKED");
+
+            var runManifestPath = Assert.Single(Directory.EnumerateFiles(Path.Combine(root, "runs"), "run.json",
+                SearchOption.AllDirectories));
+            using var persisted = JsonDocument.Parse(await File.ReadAllTextAsync(runManifestPath,
+                TestContext.Current.CancellationToken));
+            Assert.Equal("PreflightBlocked", persisted.RootElement.GetProperty("state").GetString());
+            Assert.Equal("proofshift-workspace-run-v1", persisted.RootElement.GetProperty("format").GetString());
+            Assert.Equal(json.RootElement.GetProperty("run").GetProperty("runId").GetGuid(),
+                persisted.RootElement.GetProperty("runId").GetGuid());
+            Assert.False(string.IsNullOrWhiteSpace(persisted.RootElement.GetProperty("identityFingerprint").GetString()));
+            Assert.False(string.IsNullOrWhiteSpace(persisted.RootElement.GetProperty("manifestHash").GetString()));
+            Assert.Contains(persisted.RootElement.GetProperty("progress").EnumerateArray(),
+                item => item.GetProperty("stage").GetString() == "readiness" &&
+                    item.GetProperty("status").GetString() == "blocked");
+            Assert.True(!persisted.RootElement.TryGetProperty("disposition", out var persistedDisposition) ||
+                persistedDisposition.ValueKind == JsonValueKind.Null);
+            Assert.Empty(Directory.EnumerateFileSystemEntries(Path.Combine(root, "evidence")));
+            Assert.False(Directory.Exists(Path.Combine(root, ".proofshift", "checkpoints")));
+            Assert.Equal(sourceHash, System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(sourcePath,
+                TestContext.Current.CancellationToken)));
+
+            var retry = await RunAsync("workspace", "run", root, "--json");
+            Assert.Equal(1, retry.ExitCode);
+            var retryJsonLine = retry.Output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).Last();
+            using var retryJson = JsonDocument.Parse(retryJsonLine);
+            Assert.NotEqual(json.RootElement.GetProperty("run").GetProperty("runId").GetGuid(),
+                retryJson.RootElement.GetProperty("run").GetProperty("runId").GetGuid());
+            Assert.Equal(2, Directory.EnumerateFiles(Path.Combine(root, "runs"), "run.json",
+                SearchOption.AllDirectories).Count());
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CheckpointBackedProjectionContextDoesNotResolveSourceSecrets()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-checkpoint-context-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var sourcePath = Path.Combine(root, "systems", "source.yaml");
+            var yaml = new YamlStream();
+            yaml.Load(new StringReader(await File.ReadAllTextAsync(sourcePath, TestContext.Current.CancellationToken)));
+            var source = (YamlMappingNode)yaml.Documents[0].RootNode;
+            var storage = (YamlMappingNode)source.Children[new YamlScalarNode("storage")];
+            var endpoint = (YamlMappingNode)storage.Children[new YamlScalarNode("records")];
+            endpoint.Children[new YamlScalarNode("root")] = new YamlScalarNode("env:PROOFSHIFT_MISSING_REPLAY_ROOT");
+            using (var writer = new StringWriter())
+            {
+                yaml.Save(writer);
+                await File.WriteAllTextAsync(sourcePath, writer.ToString(), TestContext.Current.CancellationToken);
+            }
+
+            var loaded = await new ConfigurationLoader(requireEnvironmentValues: false)
+                .LoadAsync(Path.Combine(root, "proofshift.yaml"), TestContext.Current.CancellationToken);
+            Assert.True(loaded.IsValid, string.Join("; ", loaded.Issues.Select(issue => issue.Message)));
+            var graph = MigrationGraphCompiler.Compile(loaded.Configuration!);
+            Assert.True(graph.IsValid);
+            var sourceNode = graph.Graph!.Nodes.Single(node => node.Type == MigrationNodeType.Source);
+            var contextFactory = new RuntimeConnectorContextFactory(new MissingEnvironmentVariableProvider(), root);
+
+            var replayContext = contextFactory.Create(loaded.Configuration!, sourceNode,
+                resolveEnvironmentReferences: false);
+
+            Assert.Equal("env:PROOFSHIFT_MISSING_REPLAY_ROOT",
+                replayContext.Configuration.GetRequired("root").UseValue(value => value));
+            Assert.Throws<ConnectorConfigurationException>(() => contextFactory.Create(loaded.Configuration!, sourceNode));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("QUALIFIED", EvidenceResult.Pass)]
+    [InlineData("NOT QUALIFIED", EvidenceResult.Fail)]
+    public async Task WorkspaceEvidencePackagesAreOfflineVerifiableForEitherDisposition(
+        string disposition, EvidenceResult evidenceResult)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-evidence-package-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            await File.WriteAllTextAsync(Path.Combine(root, "data", "private-input.txt"),
+                "never-copy-this-secret-token-123", TestContext.Current.CancellationToken);
+            var run = await CreatePackageFixtureRunAsync(root, disposition, evidenceResult);
+            var packagePath = Path.Combine(root, "evidence", $"{run:D}.zip");
+
+            var created = await WorkspaceEvidencePackageService.CreateAsync(root, run.ToString("D"),
+                packagePath, diagnostic: false, TestContext.Current.CancellationToken);
+            var validated = await WorkspaceEvidencePackageService.ValidateAsync(packagePath,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal("final", created.PackageType);
+            Assert.Equal(disposition, created.Disposition);
+            Assert.True(validated.Valid, string.Join("; ", validated.Failures));
+            Assert.Equal(run, validated.RunId);
+            Assert.Equal(created.PackageIdentity, validated.PackageIdentity);
+            Assert.True(created.EmbeddedArtifactCount >= 4);
+            Assert.True(created.ExternalReferenceCount > 0);
+            Assert.True(created.OmittedArtifactCount > 0);
+            Assert.Equal(disposition, validated.Disposition);
+
+            using var archive = ZipFile.OpenRead(packagePath);
+            var summary = Assert.Single(archive.Entries,
+                entry => entry.FullName == WorkspaceEvaluationSummaryService.SummaryPath);
+            var summaryText = ReadEntryText(summary);
+            Assert.Contains($"Run: `{run:D}`", summaryText, StringComparison.Ordinal);
+            Assert.Contains("not a guarantee of production migration safety", summaryText, StringComparison.Ordinal);
+            var evidence = Assert.Single(archive.Entries,
+                entry => entry.FullName == "artifacts/evidence/evidence.ndjson");
+            using var reader = new StreamReader(evidence.Open());
+            var evidenceText = await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
+            Assert.Contains("source-artifact-1", evidenceText, StringComparison.Ordinal);
+            if (disposition == "NOT QUALIFIED")
+                Assert.Contains("proofshift.verification.materialized-state", evidenceText, StringComparison.Ordinal);
+            Assert.DoesNotContain("never-copy-this-secret-token-123", string.Join("",
+                archive.Entries.Select(ReadEntryText)));
+            var projectionJournal = Assert.Single(archive.Entries,
+                entry => entry.FullName == "artifacts/projection/journal.ndjson");
+            var journalText = ReadEntryText(projectionJournal);
+            Assert.Contains("target-artifact-a", journalText, StringComparison.Ordinal);
+            Assert.Contains("target-artifact-b", journalText, StringComparison.Ordinal);
+            var embeddedRun = Assert.Single(archive.Entries, entry => entry.FullName == "artifacts/run.json");
+            using var embeddedRunJson = JsonDocument.Parse(await ReadEntryAsync(embeddedRun));
+            Assert.True(embeddedRunJson.RootElement.GetProperty("replayedCheckpoint").GetBoolean());
+
+            var repeatedPath = Path.Combine(root, "evidence", $"{run:D}-copy.zip");
+            var repeated = await WorkspaceEvidencePackageService.CreateAsync(root, run.ToString("D"),
+                repeatedPath, diagnostic: false, TestContext.Current.CancellationToken);
+            Assert.Equal(created.PackageIdentity, repeated.PackageIdentity);
+
+            var cliPackagePath = Path.Combine(root, "evidence", $"{run:D}-cli.zip");
+            var cliCreate = await RunAsync("workspace", "evidence", "package", root, run.ToString("D"),
+                "--output", cliPackagePath, "--json");
+            Assert.Equal(0, cliCreate.ExitCode);
+            Assert.DoesNotContain("never-copy-this-secret-token-123", cliCreate.Output, StringComparison.Ordinal);
+            using var cliCreatedJson = JsonDocument.Parse(cliCreate.Output);
+            Assert.Equal(created.PackageIdentity, cliCreatedJson.RootElement.GetProperty("packageIdentity").GetString());
+            var cliValidate = await RunAsync("workspace", "evidence", "validate-package", cliPackagePath, "--json");
+            Assert.Equal(0, cliValidate.ExitCode);
+            using var cliValidatedJson = JsonDocument.Parse(cliValidate.Output);
+            Assert.True(cliValidatedJson.RootElement.GetProperty("valid").GetBoolean());
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("QUALIFIED", EvidenceResult.Pass)]
+    [InlineData("NOT QUALIFIED", EvidenceResult.Fail)]
+    public async Task WorkspaceSummaryIsRunBoundUsefulAndRedactsEvidenceValues(
+        string disposition, EvidenceResult evidenceResult)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-summary-{Guid.NewGuid():N}");
+        const string secretValue = "do-not-print-sensitive-evidence-value";
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var run = await CreatePackageFixtureRunAsync(root, disposition, evidenceResult,
+                detailedFindings: disposition == "NOT QUALIFIED", evidenceValue: secretValue);
+            var result = await WorkspaceEvaluationSummaryService.CreateAsync(root, run.ToString("D"), null,
+                TestContext.Current.CancellationToken);
+            var content = await File.ReadAllTextAsync(result.SummaryPath, TestContext.Current.CancellationToken);
+            var metadata = WorkspaceEvaluationSummaryService.ReadMetadata(content);
+
+            Assert.Equal(run, metadata.RunId);
+            Assert.Equal(result.ReportIdentity, metadata.ReportIdentity);
+            var nullIdentity = content.Replace(
+                $"\"runManifestIdentityFingerprint\":\"{metadata.RunManifestIdentityFingerprint}\"",
+                "\"runManifestIdentityFingerprint\":null", StringComparison.Ordinal);
+            Assert.Throws<InvalidDataException>(() => WorkspaceEvaluationSummaryService.ReadMetadata(nullIdentity));
+            Assert.Equal(disposition, result.Disposition);
+            Assert.DoesNotContain(secretValue, content, StringComparison.Ordinal);
+            Assert.DoesNotContain("sensitive note", content, StringComparison.Ordinal);
+            if (disposition == "QUALIFIED")
+            {
+                Assert.Contains("Execution state: **Completed**", content, StringComparison.Ordinal);
+                Assert.Contains("Final disposition: **QUALIFIED**", content, StringComparison.Ordinal);
+                Assert.Contains("No unresolved failed Verification findings", content, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Contains("Final disposition: **NOT QUALIFIED**", content, StringComparison.Ordinal);
+                Assert.Contains("`budget-attributes`", content, StringComparison.Ordinal);
+                Assert.Contains("`budget-total`", content, StringComparison.Ordinal);
+                Assert.Contains("`proofshift.verification.materialized-state`", content, StringComparison.Ordinal);
+                Assert.Contains("Expected exceptions matched: 1", content, StringComparison.Ordinal);
+                Assert.Contains("Expected exceptions waive no findings", content, StringComparison.Ordinal);
+                Assert.Contains("Reconciliation: failed", content, StringComparison.Ordinal);
+                Assert.Contains("Materialized-state/integrity change detected: yes", content, StringComparison.Ordinal);
+                Assert.Equal(3, result.FailedFindingCount);
+            }
+
+            var cli = await RunAsync("workspace", "summary", root, run.ToString("D"), "--json");
+            Assert.Equal(0, cli.ExitCode);
+            Assert.DoesNotContain(secretValue, cli.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceSummaryForIncompleteRunDoesNotInventDisposition()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-summary-incomplete-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var runId = await CreatePackageFixtureRunAsync(root, "QUALIFIED", EvidenceResult.Pass);
+            var runDirectory = Path.Combine(root, "runs", runId.ToString("D"));
+            var run = await WorkspaceRunManifestStore.ReadAsync(runDirectory, TestContext.Current.CancellationToken);
+            await WorkspaceRunManifestStore.WriteAsync(runDirectory, run with
+            {
+                State = "Failed",
+                Disposition = null,
+                FailureCode = "PSWORKRUN_TEST_INTERRUPTED"
+            }, createNew: false, TestContext.Current.CancellationToken);
+
+            var result = await WorkspaceEvaluationSummaryService.CreateAsync(root, runId.ToString("D"), null,
+                TestContext.Current.CancellationToken);
+            var content = await File.ReadAllTextAsync(result.SummaryPath, TestContext.Current.CancellationToken);
+
+            Assert.Null(result.Disposition);
+            Assert.Contains("Execution state: **Failed**", content, StringComparison.Ordinal);
+            Assert.Contains("Final business disposition: **not established**", content, StringComparison.Ordinal);
+            Assert.Contains("PSWORKRUN_TEST_INTERRUPTED", content, StringComparison.Ordinal);
+            Assert.DoesNotContain("Final disposition: **QUALIFIED**", content, StringComparison.Ordinal);
+            Assert.DoesNotContain("Final disposition: **NOT QUALIFIED**", content, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceRunComparisonPreservesFindingIdentityAndExpectedExceptionChanges()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-compare-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var before = await CreatePackageFixtureRunAsync(root, "NOT QUALIFIED", EvidenceResult.Fail,
+                detailedFindings: true);
+            var after = await CreatePackageFixtureRunAsync(root, "QUALIFIED", EvidenceResult.Pass);
+
+            var comparison = await WorkspaceRunComparisonService.CompareAsync(root, before.ToString("D"),
+                after.ToString("D"), TestContext.Current.CancellationToken);
+
+            Assert.True(comparison.DispositionChanged);
+            Assert.False(comparison.SemanticallyEquivalent);
+            Assert.Contains(comparison.Findings, item =>
+                item.Category == "Resolved" && item.RuleId == "budget-attributes");
+            Assert.Contains(comparison.Findings, item =>
+                item.Category == "Resolved" && item.RuleId == "budget-total");
+            Assert.True(comparison.MaterializedStateFindingResolved);
+            Assert.Contains(comparison.ExpectedExceptions, item =>
+                item.Category == "Removed" && item.AnnotationIdentity == "budget-attributes-expected");
+            Assert.False(comparison.SameDispositionImpliesEquivalent);
+
+            var cli = await RunAsync("workspace", "compare", root, before.ToString("D"), after.ToString("D"), "--json");
+            Assert.Equal(0, cli.ExitCode);
+            Assert.Contains("materializedStateFindingResolved", cli.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceRunComparisonIdentifiesChangedFindingAndKeepsFanOutTargetsDistinct()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-compare-changed-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var first = await CreatePackageFixtureRunAsync(root, "NOT QUALIFIED", EvidenceResult.Fail,
+                evidenceValue: "first-value");
+            var second = await CreatePackageFixtureRunAsync(root, "NOT QUALIFIED", EvidenceResult.Fail,
+                evidenceValue: "second-value");
+
+            var comparison = await WorkspaceRunComparisonService.CompareAsync(root, first.ToString("D"),
+                second.ToString("D"), TestContext.Current.CancellationToken);
+
+            Assert.Contains(comparison.Findings, item =>
+                item.Category == "Changed" && item.RuleId == "proofshift.verification.materialized-state");
+            var beforeEvidence = await WorkspaceEvaluationSummaryService.ReadEvidenceAsync(
+                Path.Combine(root, "runs", first.ToString("D")),
+                await WorkspaceRunManifestStore.ReadAsync(Path.Combine(root, "runs", first.ToString("D")),
+                    TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+            Assert.Single(beforeEvidence.Findings.Select(item => item.TargetIdentity).Distinct(StringComparer.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceRunComparisonIgnoresRunOnlyIdentityAndDetectsChangedExceptionAnnotation()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-compare-annotations-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var before = await CreatePackageFixtureRunAsync(root, "NOT QUALIFIED", EvidenceResult.Fail,
+                detailedFindings: true, exceptionReason: "reason one");
+            var semanticallySame = await CreatePackageFixtureRunAsync(root, "NOT QUALIFIED", EvidenceResult.Fail,
+                detailedFindings: true, exceptionReason: "reason one");
+            var annotationChanged = await CreatePackageFixtureRunAsync(root, "NOT QUALIFIED", EvidenceResult.Fail,
+                detailedFindings: true, exceptionReason: "reason two");
+
+            var sameComparison = await WorkspaceRunComparisonService.CompareAsync(root, before.ToString("D"),
+                semanticallySame.ToString("D"), TestContext.Current.CancellationToken);
+            Assert.NotEqual(before, semanticallySame);
+            Assert.True(sameComparison.SemanticallyEquivalent);
+            Assert.False(sameComparison.DispositionChanged);
+            Assert.False(sameComparison.SameDispositionImpliesEquivalent);
+
+            var changedComparison = await WorkspaceRunComparisonService.CompareAsync(root, before.ToString("D"),
+                annotationChanged.ToString("D"), TestContext.Current.CancellationToken);
+            Assert.False(changedComparison.SemanticallyEquivalent);
+            Assert.Contains(changedComparison.ExpectedExceptions, item =>
+                item.Category == "Changed" && item.AnnotationIdentity == "budget-attributes-expected");
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceCleanupPreviewsAndRemovesOnlyOwnedTemporaryData()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-cleanup-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var runId = await CreatePackageFixtureRunAsync(root, "NOT QUALIFIED", EvidenceResult.Fail);
+            var runDirectory = Path.Combine(root, "runs", runId.ToString("D"));
+            var package = Path.Combine(root, "evidence", "retained.zip");
+            await WorkspaceEvidencePackageService.CreateAsync(root, runId.ToString("D"), package,
+                diagnostic: false, TestContext.Current.CancellationToken);
+            var run = await WorkspaceRunManifestStore.ReadAsync(runDirectory, TestContext.Current.CancellationToken);
+            await WorkspaceCleanupService.MarkTemporaryOwnedAsync(runDirectory, run,
+                TestContext.Current.CancellationToken);
+            var temporaryData = Path.Combine(runDirectory, "temporary", "scratch.db");
+            await File.WriteAllTextAsync(temporaryData, "scratch", TestContext.Current.CancellationToken);
+
+            var cliPreview = await RunAsync("workspace", "cleanup", root, runId.ToString("D"), "--json");
+            Assert.Equal(0, cliPreview.ExitCode);
+            Assert.Contains("\"executed\":false", cliPreview.Output, StringComparison.Ordinal);
+            Assert.True(File.Exists(temporaryData));
+            var preview = await WorkspaceCleanupService.RunAsync(root, runId.ToString("D"), execute: false,
+                TestContext.Current.CancellationToken);
+            Assert.False(preview.Executed);
+            Assert.Equal("Ready", Assert.Single(preview.Resources).Status);
+            Assert.True(File.Exists(temporaryData));
+
+            var cliExecute = await RunAsync("workspace", "cleanup", root, runId.ToString("D"),
+                "--execute", "--json");
+            Assert.Equal(0, cliExecute.ExitCode);
+            using var executed = JsonDocument.Parse(cliExecute.Output);
+            Assert.True(executed.RootElement.GetProperty("executed").GetBoolean());
+            Assert.Equal("Removed", executed.RootElement.GetProperty("resources")[0].GetProperty("status").GetString());
+            Assert.False(Directory.Exists(Path.Combine(runDirectory, "temporary")));
+            Assert.True(File.Exists(Path.Combine(runDirectory, "run.json")));
+            Assert.True(File.Exists(package));
+            Assert.True(File.Exists(Path.Combine(runDirectory, "evidence",
+                (await WorkspaceRunManifestStore.ReadAsync(runDirectory, TestContext.Current.CancellationToken))
+                .VerificationRunId!.Replace("-", string.Empty, StringComparison.Ordinal), "manifest.json")));
+            Assert.True((await WorkspaceEvidencePackageService.ValidateAsync(package,
+                TestContext.Current.CancellationToken)).Valid);
+
+            var retried = await WorkspaceCleanupService.RunAsync(root, runId.ToString("D"), execute: true,
+                TestContext.Current.CancellationToken);
+            Assert.True(retried.SafeToExecute);
+            Assert.Equal("AlreadyAbsent", Assert.Single(retried.Resources).Status);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceCleanupRefusesTemporaryDataWithoutMatchingOwnershipMarker()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-cleanup-unowned-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var runId = await CreatePackageFixtureRunAsync(root, "NOT QUALIFIED", EvidenceResult.Fail);
+            var temporary = Path.Combine(root, "runs", runId.ToString("D"), "temporary");
+            Directory.CreateDirectory(temporary);
+            var userFile = Path.Combine(temporary, "unowned.txt");
+            await File.WriteAllTextAsync(userFile, "preserve", TestContext.Current.CancellationToken);
+
+            var preview = await WorkspaceCleanupService.RunAsync(root, runId.ToString("D"), execute: false,
+                TestContext.Current.CancellationToken);
+            var refused = await WorkspaceCleanupService.RunAsync(root, runId.ToString("D"), execute: true,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal("OwnershipUnverified", Assert.Single(preview.Resources).Status);
+            Assert.False(refused.SafeToExecute);
+            Assert.False(refused.Executed);
+            Assert.True(File.Exists(userFile));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceEvidencePackageRejectsTamperingAndUnsafeArchivePaths()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-evidence-package-tamper-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var firstRun = await CreatePackageFixtureRunAsync(root, "QUALIFIED", EvidenceResult.Pass);
+            var secondRun = await CreatePackageFixtureRunAsync(root, "NOT QUALIFIED", EvidenceResult.Fail);
+            var firstPackage = Path.Combine(root, "evidence", "first.zip");
+            await WorkspaceEvidencePackageService.CreateAsync(root, firstRun.ToString("D"),
+                firstPackage, diagnostic: false, TestContext.Current.CancellationToken);
+            var secondRunManifest = await File.ReadAllBytesAsync(
+                Path.Combine(root, "runs", secondRun.ToString("D"), "run.json"),
+                TestContext.Current.CancellationToken);
+
+            var modifiedEvidence = await ReadPackageEntriesAsync(firstPackage);
+            modifiedEvidence["artifacts/evidence/evidence.ndjson"][0] ^= 0x01;
+            Assert.False((await ValidateChangedPackageAsync(root, "modified-evidence.zip", modifiedEvidence)).Valid);
+
+            var modifiedSummary = await ReadPackageEntriesAsync(firstPackage);
+            modifiedSummary[WorkspaceEvaluationSummaryService.SummaryPath][0] ^= 0x01;
+            Assert.False((await ValidateChangedPackageAsync(root, "modified-summary.zip", modifiedSummary)).Valid);
+
+            var deletedArtifact = await ReadPackageEntriesAsync(firstPackage);
+            deletedArtifact.Remove("artifacts/evidence/evidence.ndjson");
+            Assert.False((await ValidateChangedPackageAsync(root, "deleted-evidence.zip", deletedArtifact)).Valid);
+
+            var modifiedManifest = await ReadPackageEntriesAsync(firstPackage);
+            var packageManifest = System.Text.Encoding.UTF8.GetString(modifiedManifest["package.json"]);
+            modifiedManifest["package.json"] = System.Text.Encoding.UTF8.GetBytes(packageManifest.Replace(
+                "\"disposition\": \"QUALIFIED\"", "\"disposition\": \"NOT QUALIFIED\"", StringComparison.Ordinal));
+            Assert.False((await ValidateChangedPackageAsync(root, "modified-manifest.zip", modifiedManifest)).Valid);
+
+            var substitutedRun = await ReadPackageEntriesAsync(firstPackage);
+            substitutedRun["artifacts/run.json"] = secondRunManifest;
+            Assert.False((await ValidateChangedPackageAsync(root, "substituted-run.zip", substitutedRun)).Valid);
+
+            var unsafePath = await ReadPackageEntriesAsync(firstPackage);
+            unsafePath.Add("../escape.txt", [0x41]);
+            Assert.False((await ValidateChangedPackageAsync(root, "unsafe-path.zip", unsafePath)).Valid);
+
+            var unexpectedArtifact = await ReadPackageEntriesAsync(firstPackage);
+            var packageManifestJson = System.Text.Json.Nodes.JsonNode.Parse(
+                Encoding.UTF8.GetString(unexpectedArtifact["package.json"]))!.AsObject();
+            packageManifestJson["artifacts"]!.AsArray().Add(new System.Text.Json.Nodes.JsonObject
+            {
+                ["role"] = "source-data",
+                ["classification"] = "embedded",
+                ["path"] = "artifacts/source/customer.csv",
+                ["sha256"] = new string('0', 64),
+                ["length"] = 1,
+                ["externalReference"] = null,
+                ["reason"] = "Unexpected source data.",
+                ["required"] = true
+            });
+            unexpectedArtifact["package.json"] = Encoding.UTF8.GetBytes(packageManifestJson.ToJsonString());
+            unexpectedArtifact.Add("artifacts/source/customer.csv", [0x41]);
+            var unexpectedArtifactResult = await ValidateChangedPackageAsync(root, "unexpected-artifact.zip",
+                unexpectedArtifact);
+            Assert.False(unexpectedArtifactResult.Valid);
+            Assert.Contains(unexpectedArtifactResult.Failures,
+                failure => failure.Contains("invalid classification or required flag: source-data", StringComparison.Ordinal));
+
+            var duplicatePath = await ReadPackageEntriesAsync(firstPackage);
+            duplicatePath.Add("ARTIFACTS/RUN.JSON", [0x41]);
+            Assert.False((await ValidateChangedPackageAsync(root, "duplicate-path.zip", duplicatePath)).Valid);
+
+            var symbolicLink = await ReadPackageEntriesAsync(firstPackage);
+            symbolicLink.Add("link", [0x41]);
+            Assert.False((await ValidateChangedPackageAsync(root, "symbolic-link.zip", symbolicLink, "link")).Valid);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceEvidencePackageRequiresExplicitDiagnosticModeForIncompleteRuns()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-evidence-package-diagnostic-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var runId = await CreatePackageFixtureRunAsync(root, "QUALIFIED", EvidenceResult.Pass);
+            var workspace = await EvaluationWorkspaceManifestStore.ReadAsync(root)
+                ?? throw new InvalidDataException("Test workspace manifest is missing.");
+            var runDirectory = Path.Combine(root, workspace.Paths.Runs, runId.ToString("D"));
+            var run = await WorkspaceRunManifestStore.ReadAsync(runDirectory, TestContext.Current.CancellationToken);
+            await WorkspaceRunManifestStore.WriteAsync(runDirectory, run with
+            {
+                State = "Failed",
+                Disposition = null,
+                FailureCode = "PSWORKRUN_TEST_INCOMPLETE"
+            }, createNew: false, TestContext.Current.CancellationToken);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                WorkspaceEvidencePackageService.CreateAsync(root, runId.ToString("D"), null,
+                    diagnostic: false, TestContext.Current.CancellationToken));
+            var created = await WorkspaceEvidencePackageService.CreateAsync(root, runId.ToString("D"), null,
+                diagnostic: true, TestContext.Current.CancellationToken);
+            var validation = await WorkspaceEvidencePackageService.ValidateAsync(created.PackagePath,
+                TestContext.Current.CancellationToken);
+
+            Assert.True(validation.Valid, string.Join("; ", validation.Failures));
+            Assert.Equal("diagnostic", validation.PackageType);
+            Assert.Null(validation.Disposition);
+            Assert.Equal("Failed", validation.ExecutionState);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceReplayReadinessDoesNotResolveOrInspectLiveSource()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-replay-readiness-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var sourcePath = Path.Combine(root, "systems", "source.yaml");
+            var yaml = new YamlStream();
+            yaml.Load(new StringReader(await File.ReadAllTextAsync(sourcePath, TestContext.Current.CancellationToken)));
+            var source = (YamlMappingNode)yaml.Documents[0].RootNode;
+            var storage = (YamlMappingNode)source.Children[new YamlScalarNode("storage")];
+            var endpoint = (YamlMappingNode)storage.Children[new YamlScalarNode("records")];
+            endpoint.Children[new YamlScalarNode("root")] = new YamlScalarNode("env:PROOFSHIFT_UNAVAILABLE_SOURCE_ROOT");
+            using (var writer = new StringWriter())
+            {
+                yaml.Save(writer);
+                await File.WriteAllTextAsync(sourcePath, writer.ToString(), TestContext.Current.CancellationToken);
+            }
+
+            var result = await RunWithEnvironmentAsync("PROOFSHIFT_UNAVAILABLE_SOURCE_ROOT", null,
+                "workspace", "run", root, "--checkpoint", Guid.NewGuid().ToString("N"), "--json");
+
+            Assert.Equal(1, result.ExitCode);
+            var finalLine = result.Output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).Last();
+            using var json = JsonDocument.Parse(finalLine);
+            Assert.Equal("PreflightBlocked", json.RootElement.GetProperty("state").GetString());
+            Assert.Contains(json.RootElement.GetProperty("readinessChecks").EnumerateArray(),
+                check => check.GetProperty("category").GetString() == "credentials" &&
+                    check.GetProperty("component").GetString() == "source/records" &&
+                    check.GetProperty("status").GetString() == "READY");
+            Assert.Contains(json.RootElement.GetProperty("readinessChecks").EnumerateArray(),
+                check => check.GetProperty("category").GetString() == "connectivity" &&
+                    check.GetProperty("component").GetString() == "source-records" &&
+                    check.GetProperty("status").GetString() == "READY");
+            Assert.DoesNotContain("PROOFSHIFT_UNAVAILABLE_SOURCE_ROOT", result.Output, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(Path.Combine(root, ".proofshift", "checkpoints")));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspacePreflightBlocksUnapprovedRequiredMappingsWithoutChangingStaticValidation()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-mapping-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var graphPath = Path.Combine(root, "migration", "graph.yaml");
+            var yaml = new YamlStream();
+            yaml.Load(new StringReader(await File.ReadAllTextAsync(graphPath, TestContext.Current.CancellationToken)));
+            var graph = (YamlMappingNode)yaml.Documents[0].RootNode;
+            var edges = (YamlMappingNode)graph.Children[new YamlScalarNode("edges")];
+            var edge = (YamlMappingNode)edges.Children.Values.Single();
+            var operation = (YamlMappingNode)edge.Children[new YamlScalarNode("operation")];
+            var fields = (YamlMappingNode)operation.Children[new YamlScalarNode("fields")];
+            var field = (YamlMappingNode)fields.Children.Values.First();
+            field.Add(new YamlScalarNode("approval"), new YamlScalarNode("suggested"));
+            using (var writer = new StringWriter())
+            {
+                yaml.Save(writer);
+                await File.WriteAllTextAsync(graphPath, writer.ToString(), TestContext.Current.CancellationToken);
+            }
+
+            var validation = await RunAsync("workspace", "validate", root, "--json");
+            Assert.Equal(0, validation.ExitCode);
+            var preflight = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION", "synthetic-only",
+                "workspace", "preflight", root, "--json");
+            Assert.Equal(1, preflight.ExitCode);
+            using var result = JsonDocument.Parse(preflight.Output);
+            Assert.Equal("BLOCKED", result.RootElement.GetProperty("status").GetString());
+            Assert.Contains(result.RootElement.GetProperty("checks").EnumerateArray(),
+                check => check.GetProperty("id").GetString() == "PSAUTHOR001" &&
+                    check.GetProperty("category").GetString() == "mappings");
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceReportsNeverSerializeLiteralCredentialMaterial()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-redaction-{Guid.NewGuid():N}");
+        const string password = "redaction-password-42";
+        const string token = "redaction-token-43";
+        const string sas = "redaction-sas-44";
+        const string privateKey = "redaction-private-key-45";
+        var credential = $"Host=127.0.0.1;Password={password};Token={token};SharedAccessSignature={sas};PrivateKey={privateKey}";
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var targetPath = Path.Combine(root, "systems", "target.yaml");
+            var yaml = new YamlStream();
+            yaml.Load(new StringReader(await File.ReadAllTextAsync(targetPath, TestContext.Current.CancellationToken)));
+            var target = (YamlMappingNode)yaml.Documents[0].RootNode;
+            var storage = (YamlMappingNode)target.Children[new YamlScalarNode("storage")];
+            var endpoint = (YamlMappingNode)storage.Children[new YamlScalarNode("records")];
+            endpoint.Children[new YamlScalarNode("connection")] = new YamlScalarNode(credential);
+            using (var writer = new StringWriter())
+            {
+                yaml.Save(writer);
+                await File.WriteAllTextAsync(targetPath, writer.ToString(), TestContext.Current.CancellationToken);
+            }
+
+            var validate = await RunAsync("workspace", "validate", root, "--json");
+            var preflight = await RunAsync("workspace", "preflight", root, "--json");
+            var plan = await RunAsync("workspace", "plan", root, "--json");
+            Assert.Equal(1, validate.ExitCode);
+            Assert.Equal(1, preflight.ExitCode);
+            Assert.Equal(1, plan.ExitCode);
+            foreach (var output in new[] { validate.Output, preflight.Output, plan.Output })
+            {
+                Assert.DoesNotContain(credential, output, StringComparison.Ordinal);
+                Assert.DoesNotContain(password, output, StringComparison.Ordinal);
+                Assert.DoesNotContain(token, output, StringComparison.Ordinal);
+                Assert.DoesNotContain(sas, output, StringComparison.Ordinal);
+                Assert.DoesNotContain(privateKey, output, StringComparison.Ordinal);
+            }
         }
         finally
         {
@@ -922,7 +1913,245 @@ public sealed class AuthoringCliTests
         finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
     }
 
+    private static async Task<Guid> CreatePackageFixtureRunAsync(string root, string disposition,
+        EvidenceResult evidenceResult, bool detailedFindings = false, string evidenceValue = "fixture-result",
+        string exceptionReason = "sensitive note")
+    {
+        var workspace = await EvaluationWorkspaceManifestStore.ReadAsync(root)
+            ?? throw new InvalidDataException("Test workspace manifest is missing.");
+        var planResult = await WorkspaceEvaluationService.PlanAsync(root, TestContext.Current.CancellationToken);
+        var plan = planResult.Plan ?? throw new InvalidDataException("Test workspace has no effective plan.");
+        var runId = Guid.NewGuid();
+        var verificationRunId = new ProofShift.Domain.RunId(Guid.NewGuid());
+        var checkpointId = Guid.NewGuid();
+        var runDirectory = Path.Combine(root, workspace.Paths.Runs, runId.ToString("D"));
+        var projectionId = new ProofShift.Domain.RunId(Guid.NewGuid());
+        var journalPath = $".proofshift/projections/{projectionId.Value:N}/journal.ndjson";
+        var absoluteJournalPath = Path.Combine(runDirectory, journalPath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(absoluteJournalPath)!);
+        await File.WriteAllTextAsync(absoluteJournalPath,
+            "{\"sources\":[\"source-artifact-1\"],\"targets\":[\"target-artifact-a\",\"target-artifact-b\"],\"edge\":\"fan-out\"}\n",
+            TestContext.Current.CancellationToken);
+        var projectionRun = new ProofShift.Projection.ProjectionRun(projectionId,
+            ProofShift.Projection.ProjectionStatus.Succeeded, "fixture-project", new string('b', 64),
+            plan.GraphHash, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch, 1, 2, 0, null,
+            new string('f', 64), [], [], journalPath, checkpointId.ToString("D"), new string('d', 64),
+            new string('c', 64));
+        var projectionManifestHash = await ProofShift.Projection.ProjectionRunManifestStore.WriteAsync(
+            runDirectory, projectionRun, TestContext.Current.CancellationToken);
+
+        var recoveryId = Guid.NewGuid();
+        var recoveryDirectory = Path.Combine(runDirectory, "recovery", recoveryId.ToString("N"));
+        Directory.CreateDirectory(recoveryDirectory);
+        var recoveryFiles = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        foreach (var name in new[]
+                 {
+                     "assessment.json", "plan.json", "rehearsal.json",
+                     "recovery-evidence.json", "qualification.json"
+                 })
+        {
+            var bytes = Encoding.UTF8.GetBytes($"{{\"artifact\":\"{name}\"}}");
+            await File.WriteAllBytesAsync(Path.Combine(recoveryDirectory, name), bytes,
+                TestContext.Current.CancellationToken);
+            recoveryFiles.Add(name, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
+        }
+        var recoveryDraft = new TestRecoveryManifest("proofshift-recovery-store-v1",
+            recoveryId.ToString("D"), recoveryFiles, null);
+        var recoveryOptions = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        };
+        var recoveryHash = Convert.ToHexString(SHA256.HashData(
+            JsonSerializer.SerializeToUtf8Bytes(recoveryDraft, recoveryOptions))).ToLowerInvariant();
+        var recoveryManifest = JsonSerializer.SerializeToUtf8Bytes(
+            recoveryDraft with { IntegrityHash = recoveryHash }, recoveryOptions);
+        await File.WriteAllBytesAsync(Path.Combine(recoveryDirectory, "manifest.json"), recoveryManifest,
+            TestContext.Current.CancellationToken);
+
+        var evidenceRecords = new List<ProofShift.Domain.EvidenceRecord>();
+        if (detailedFindings && evidenceResult == EvidenceResult.Fail)
+        {
+            var budgetAttributesId = new ProofShift.Domain.EvidenceId(Guid.NewGuid());
+            var budgetAttributesNode = new ProofShift.Domain.MigrationNodeId(
+                Guid.Parse("10000000-0000-0000-0000-000000000001"));
+            var budgetAttributesArtifact = new ProofShift.Domain.ArtifactId("target-budget-attributes");
+            evidenceRecords.Add(new ProofShift.Domain.EvidenceRecord(
+                budgetAttributesId, verificationRunId, ProofShift.Domain.EvidenceType.Comparison,
+                new ProofShift.Domain.RuleId("budget-attributes"), "1", EvidenceResult.Fail,
+                [new ProofShift.Domain.EvidenceReference(artifactId: budgetAttributesArtifact,
+                    graphNodeId: budgetAttributesNode)],
+                "Sensitive finding text and value must not appear in the summary.",
+                DateTimeOffset.UnixEpoch, actual: new ProofShift.Domain.EvidenceValue(
+                    new ProofShift.Domain.StringValue(evidenceValue)), code: "BudgetAttributesMismatch"));
+            foreach (var (rule, code, artifact) in new[]
+                     {
+                         ("budget-total", "BudgetTotalMismatch", "target-budget-total"),
+                         ("proofshift.verification.materialized-state", "MaterializedTargetChanged", "source-artifact-1")
+                     })
+            {
+                evidenceRecords.Add(new ProofShift.Domain.EvidenceRecord(
+                    new ProofShift.Domain.EvidenceId(Guid.NewGuid()), verificationRunId,
+                    ProofShift.Domain.EvidenceType.Comparison, new ProofShift.Domain.RuleId(rule), "1",
+                    EvidenceResult.Fail,
+                    [new ProofShift.Domain.EvidenceReference(artifactId: new ProofShift.Domain.ArtifactId(artifact),
+                        graphNodeId: new ProofShift.Domain.MigrationNodeId(
+                            Guid.Parse(rule == "budget-total"
+                                ? "10000000-0000-0000-0000-000000000002"
+                                : "10000000-0000-0000-0000-000000000003")))],
+                    "Package fixture defect.", DateTimeOffset.UnixEpoch,
+                    actual: new ProofShift.Domain.EvidenceValue(new ProofShift.Domain.StringValue("mismatch")),
+                    code: code));
+            }
+            evidenceRecords.Add(new ProofShift.Domain.EvidenceRecord(
+                new ProofShift.Domain.EvidenceId(Guid.NewGuid()), verificationRunId,
+                ProofShift.Domain.EvidenceType.Decision,
+                new ProofShift.Domain.RuleId("proofshift.verification.expected-exception-annotation"), "1",
+                EvidenceResult.Warning,
+                [
+                    new ProofShift.Domain.EvidenceReference(evidenceId: budgetAttributesId),
+                    new ProofShift.Domain.EvidenceReference(artifactId: budgetAttributesArtifact,
+                        graphNodeId: budgetAttributesNode),
+                    new ProofShift.Domain.EvidenceReference(ruleId: new ProofShift.Domain.RuleId("budget-attributes"))
+                ],
+                $"Expected exception 'budget-attributes-expected' annotates the finding; original failure remains active. Owner: test. Reason: {exceptionReason}.",
+                DateTimeOffset.UnixEpoch, code: "ExpectedExceptionAnnotated",
+                severity: ProofShift.Domain.EvidenceSeverity.Info));
+        }
+        else
+        {
+            evidenceRecords.Add(new ProofShift.Domain.EvidenceRecord(
+                new ProofShift.Domain.EvidenceId(Guid.NewGuid()),
+                verificationRunId,
+                ProofShift.Domain.EvidenceType.Comparison,
+                new ProofShift.Domain.RuleId(evidenceResult == EvidenceResult.Fail
+                    ? "proofshift.verification.materialized-state" : "fixture.rule"),
+                "1",
+                evidenceResult,
+                [new ProofShift.Domain.EvidenceReference(
+                    artifactId: new ProofShift.Domain.ArtifactId("source-artifact-1"),
+                    graphNodeId: new ProofShift.Domain.MigrationNodeId(
+                        Guid.Parse("10000000-0000-0000-0000-000000000003")))],
+                "Package fixture finding preserves source-to-target evidence provenance.",
+                DateTimeOffset.UnixEpoch,
+                actual: new ProofShift.Domain.EvidenceValue(new ProofShift.Domain.StringValue(evidenceValue)),
+                code: evidenceResult == EvidenceResult.Fail ? "MaterializedTargetChanged" : null));
+        }
+        var evidenceGraph = new EvidenceGraph(verificationRunId, evidenceRecords);
+        var evidenceStore = new FileSystemEvidenceStore(Path.Combine(runDirectory, "evidence"));
+        await evidenceStore.SaveAsync(evidenceGraph, TestContext.Current.CancellationToken);
+        var evidenceManifest = await evidenceStore.ReadManifestAsync(verificationRunId,
+            TestContext.Current.CancellationToken);
+
+        var runManifest = new WorkspaceRunManifest
+        {
+            WorkspaceId = workspace.WorkspaceId,
+            RunId = runId,
+            ProductVersion = "0.1.0-preview.1",
+            SourceRevision = "test-revision",
+            SourceTree = "test-tree",
+            StartedAt = DateTimeOffset.UnixEpoch,
+            UpdatedAt = DateTimeOffset.UnixEpoch,
+            State = "Completed",
+            PlanFingerprint = plan.Fingerprint,
+            ConfigurationHash = new string('b', 64),
+            GraphHash = plan.GraphHash,
+            CheckpointId = checkpointId.ToString("D"),
+            CheckpointManifestHash = new string('c', 64),
+            CheckpointSourceFingerprint = new string('d', 64),
+            CheckpointStoreScope = "workspace",
+            ReplayedCheckpoint = true,
+            ProjectionRunId = projectionId.Value.ToString("D"),
+            ProjectionManifestReference = $"runs/{runId:D}/.proofshift/projections/{projectionId.Value:N}/run.json",
+            ProjectionManifestHash = projectionManifestHash,
+            ProjectionFingerprint = new string('f', 64),
+            VerificationRunId = verificationRunId.Value.ToString("D"),
+            VerificationOutcome = evidenceResult == EvidenceResult.Pass ? "Passed" : "Failed",
+            VerificationEvidenceFingerprint = evidenceGraph.Fingerprint,
+            VerificationLedgerFingerprint = new string('e', 64),
+            VerificationLedgerReference = $"runs/{runId:D}/verification-ledger/ledger.sqlite",
+            ReconciliationRuleIds = detailedFindings ? ["budget-total"] : [],
+            ReconciliationFailedRuleIds = detailedFindings && evidenceResult == EvidenceResult.Fail
+                ? ["budget-total"] : [],
+            EvidenceReference = $"runs/{runId:D}/evidence/{verificationRunId.Value:N}/manifest.json",
+            EvidenceManifestIntegrityHash = evidenceManifest.IntegrityHash,
+            RecoveryRunId = recoveryId.ToString("D"),
+            RecoveryQualification = "Qualified",
+            RecoveryArtifactReference = $"runs/{runId:D}/recovery/{recoveryId:N}/manifest.json",
+            RecoveryArtifactIntegrityHash = recoveryHash,
+            Disposition = disposition
+        };
+        await WorkspaceRunManifestStore.WriteAsync(runDirectory, runManifest, createNew: true,
+            TestContext.Current.CancellationToken);
+        return runId;
+    }
+
+    private sealed record TestRecoveryManifest(string Format, string DryRunId,
+        SortedDictionary<string, string> Files, string? IntegrityHash);
+
+    private static async Task<WorkspaceEvidencePackageValidation> ValidateChangedPackageAsync(string root,
+        string name, IReadOnlyDictionary<string, byte[]> entries, string? symbolicLinkEntry = null)
+    {
+        var path = Path.Combine(root, "evidence", name);
+        await WritePackageEntriesAsync(path, entries, symbolicLinkEntry);
+        return await WorkspaceEvidencePackageService.ValidateAsync(path, TestContext.Current.CancellationToken);
+    }
+
+    private static async Task<Dictionary<string, byte[]>> ReadPackageEntriesAsync(string path)
+    {
+        var entries = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        using var archive = ZipFile.OpenRead(path);
+        foreach (var entry in archive.Entries)
+        {
+            await using var stream = entry.Open();
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer, TestContext.Current.CancellationToken);
+            entries.Add(entry.FullName, buffer.ToArray());
+        }
+        return entries;
+    }
+
+    private static async Task WritePackageEntriesAsync(string path, IReadOnlyDictionary<string, byte[]> entries,
+        string? symbolicLinkEntry = null)
+    {
+        await using var file = new FileStream(path, FileMode.Create, FileAccess.ReadWrite, FileShare.None);
+        using var archive = new ZipArchive(file, ZipArchiveMode.Create, leaveOpen: false);
+        foreach (var (name, bytes) in entries.OrderBy(item => item.Key, StringComparer.Ordinal))
+        {
+            var entry = archive.CreateEntry(name, CompressionLevel.Optimal);
+            entry.LastWriteTime = new DateTimeOffset(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
+            if (name == symbolicLinkEntry) entry.ExternalAttributes = unchecked((int)0xA0000000);
+            await using var stream = entry.Open();
+            await stream.WriteAsync(bytes, TestContext.Current.CancellationToken);
+        }
+    }
+
+    private static string ReadEntryText(ZipArchiveEntry entry)
+    {
+        using var reader = new StreamReader(entry.Open());
+        return reader.ReadToEnd();
+    }
+
+    private static async Task<byte[]> ReadEntryAsync(ZipArchiveEntry entry)
+    {
+        await using var stream = entry.Open();
+        using var buffer = new MemoryStream();
+        await stream.CopyToAsync(buffer, TestContext.Current.CancellationToken);
+        return buffer.ToArray();
+    }
+
     private static async Task<(int ExitCode, string Output, string Error)> RunAsync(params string[] args)
+        => await RunProcessAsync(null, args);
+
+    private static async Task<(int ExitCode, string Output, string Error)> RunWithEnvironmentAsync(
+        string variable,
+        string? value,
+        params string[] args) =>
+        await RunProcessAsync((variable, value), args);
+
+    private static async Task<(int ExitCode, string Output, string Error)> RunProcessAsync(
+        (string Variable, string? Value)? environmentOverride,
+        string[] args)
     {
         var start = new ProcessStartInfo("dotnet")
         {
@@ -930,6 +2159,13 @@ public sealed class AuthoringCliTests
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
+        if (environmentOverride is { } environment)
+        {
+            if (environment.Value is null)
+                start.Environment.Remove(environment.Variable);
+            else
+                start.Environment[environment.Variable] = environment.Value;
+        }
         start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "ProofShift.Cli.dll"));
         foreach (var argument in args) start.ArgumentList.Add(argument);
         using var process = Process.Start(start) ?? throw new InvalidOperationException("CLI process did not start.");
@@ -937,5 +2173,10 @@ public sealed class AuthoringCliTests
         var error = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
         return (process.ExitCode, await output, await error);
+    }
+
+    private sealed class MissingEnvironmentVariableProvider : IEnvironmentVariableProvider
+    {
+        public string? GetValue(string name) => null;
     }
 }

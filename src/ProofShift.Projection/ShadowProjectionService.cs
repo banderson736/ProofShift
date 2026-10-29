@@ -98,7 +98,7 @@ public sealed class ShadowProjectionService
             foreach (var source in sourceNodes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var context = _contextFactory.Create(configuration, source);
+                var context = _contextFactory.Create(configuration, source, resolveEnvironmentReferences: _sourceProvider is null);
                 var connector = _sourceProvider is null ? _sourceConnectors.Resolve(context.Connector) : null;
                 string connectorVersion;
                 if (_sourceProvider is null)

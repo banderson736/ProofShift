@@ -48,13 +48,18 @@ public sealed record SourceInspectionReport
 public sealed class RuntimeConnectorContextFactory
 {
     private readonly IEnvironmentVariableProvider _environment;
+    private readonly string? _baseDirectory;
 
-    public RuntimeConnectorContextFactory(IEnvironmentVariableProvider? environment = null) =>
+    public RuntimeConnectorContextFactory(IEnvironmentVariableProvider? environment = null, string? baseDirectory = null)
+    {
         _environment = environment ?? new ProcessEnvironmentVariableProvider();
+        _baseDirectory = baseDirectory is null ? null : Path.GetFullPath(baseDirectory);
+    }
 
     public ConnectorContext Create(
         LoadedProjectConfiguration configuration,
-        MigrationNode node)
+        MigrationNode node,
+        bool resolveEnvironmentReferences = true)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(node);
@@ -64,7 +69,22 @@ public sealed class RuntimeConnectorContextFactory
         var endpoint = system.StorageEndpoints.FirstOrDefault(candidate => candidate.Id == node.EndpointId)
             ?? throw new ConnectorConfigurationException(ConnectorIssueCodes.MissingConfiguration, "Graph node references an unavailable storage endpoint.");
         var runtimeSettings = endpoint.Configuration.Select(pair =>
-            new KeyValuePair<string, RuntimeSetting>(pair.Key, ResolveSetting(pair.Value)));
+        {
+            var setting = resolveEnvironmentReferences
+                ? ResolveSetting(pair.Value)
+                : RuntimeSetting.FromRuntimeValue(pair.Value, pair.Value.StartsWith("secret:", StringComparison.Ordinal));
+            if (pair.Key == "root" && _baseDirectory is not null &&
+                endpoint.Connector.Value is ("csv" or "files" or "fixed-width" or "json" or "ndjson" or "xml" or "parquet") &&
+                (resolveEnvironmentReferences || !pair.Value.StartsWith("secret:", StringComparison.Ordinal) &&
+                    !pair.Value.StartsWith("env:", StringComparison.Ordinal)))
+            {
+                var root = setting.UseValue(value => value);
+                if (!Path.IsPathRooted(root))
+                    setting = RuntimeSetting.FromRuntimeValue(Path.GetFullPath(root, _baseDirectory), setting.IsSecret);
+            }
+
+            return new KeyValuePair<string, RuntimeSetting>(pair.Key, setting);
+        });
         return new ConnectorContext(
             system.Id.Value,
             endpoint.Id.Value,

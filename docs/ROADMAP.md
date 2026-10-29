@@ -312,9 +312,10 @@ record](PS0_11G_PILOT_READINESS_ACCEPTANCE.md) and
 Out of scope: public release/tag/package publication, signing, self-contained/AOT publishing, installers, new connectors/packs, FHIR Bulk, UI/API/auth, production migration/rollback, AI authoring, assurance-engine/runtime-semantics changes, and unrelated refactoring.
 
 PS-0.11 is complete. PS-1.0A Customer Data Evaluation & Generalized Mapping
-Foundation is Accepted as recorded below. PS-1.0B requires a separate explicit
-planning/start decision. The provisional post-PS-0 roadmap remains provisional
-outside the accepted PS-1.0A scope.
+Foundation is Accepted as recorded below. PS-1.0B Guided Customer Evaluation
+Workspace & Evidence Package is explicitly assigned and in progress. The
+provisional post-PS-0 roadmap remains provisional outside the accepted
+PS-1.0A scope and current PS-1.0B assignment.
 
 ## Commercial validation gate after PS-0 / during PS-0
 
@@ -376,10 +377,48 @@ No production migration or production rollback execution is authorized by
 this acceptance. Windows evidence remains package-only; Linux scenario
 evidence is limited to the packaged Docker evaluation. The [scope](PS1_0A_CUSTOMER_DATA_EVALUATION.md)
 and [acceptance matrix](PS1_0A_ACCEPTANCE_MATRIX.md) record the evidence and
-limitations. PS-1.0B has not started; it requires a separate planning/start
-decision.
+limitations.
 
-Likely areas:
+### PS-1.0B Guided Customer Evaluation Workspace & Evidence Package
+
+Status: **In Progress**, explicitly assigned from PS-1.0A closure merge
+`7f6fbae410f81ad8f015cad380594e88d630468d` on branch
+`ps-1.0b-guided-customer-evaluation`. Workspace initialization and structural
+validation are implemented. The PS-1.0B.2 slice adds offline-by-default
+`workspace preflight`, explicit read-only `--connect` inspection, and a
+deterministic effective `workspace plan`. PS-1.0B.3 adds local guided run
+orchestration with durable run manifests, checkpoint capture/replay, and
+existing Projection, Verification, Recovery, and Evidence services. Local PS-1.0B.4 adds ZIP evidence packaging and offline fail-closed
+validation, including integrity-bound run, effective-plan, Evidence,
+Projection-lineage, Recovery, and required summary artifacts. PS-1.0B.5 adds
+deterministic run-bound summaries, same-workspace run comparison, and
+preview-first cleanup limited to marker-owned run temporary data. The B.6
+extracted-package harness exercises clean and defective runs, checkpoint
+replay, evidence tampering, summaries/comparison, cleanup, and incomplete-run
+diagnostics. Focused local tests use synthetic completed-run fixtures.
+Docker-backed successful execution/replay and exact-candidate acceptance
+evidence remain outstanding.
+
+The workspace wraps, rather than replaces, the existing
+`proofshift.yaml`, configuration fingerprint, discovery/scaffold, checkpoint,
+Projection, Verification, Recovery, Evidence, report, and comparison
+contracts. Static validation and default preflight remain offline. The
+explicit connectivity option performs read-only inspection; preflight and
+planning do not capture checkpoints, project data, run Verification, or write
+evaluation outputs. The run command keeps external Verification read-only,
+does not qualify Recovery for external targets, and leaves incomplete runs
+without disposition. Packages do not include raw checkpoint/source data,
+resolved configuration/secrets, or materialized target rows; Evidence may
+still contain customer-sensitive values. Summaries omit raw Evidence values
+and explanations; comparisons are local to runs in the same workspace; and
+cleanup preserves evidence and targets while removing only ownership-verified
+run scratch. See the [architecture proposal](PS1_0B_GUIDED_CUSTOMER_EVALUATION.md),
+[acceptance matrix](PS1_0B_ACCEPTANCE_MATRIX.md), and
+[ADR-0037](adr/0037-evaluation-workspace-manifest.md). PS-1.0B is not accepted.
+Production migration/rollback remains unauthorized, and PS-1.0C has not
+started.
+
+### Potential future product areas (unassigned)
 
 ### PS-1 generalized reconciliation/mapping
 - composite identity;

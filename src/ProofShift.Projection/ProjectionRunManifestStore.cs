@@ -138,6 +138,53 @@ public static class ProjectionRunManifestStore
         return new ProjectionRunManifest(run, document.ManifestHash);
     }
 
+    public static ProjectionRunManifest ReadAndValidate(ReadOnlySpan<byte> bytes, RunId expectedRunId)
+    {
+        ProjectionRunDocument document;
+        try
+        {
+            document = JsonSerializer.Deserialize<ProjectionRunDocument>(bytes, JsonOptions)
+                ?? throw new ProjectionManifestException("PSPROJ_MANIFEST_INVALID", "Projection run manifest is empty.");
+        }
+        catch (ProjectionManifestException)
+        {
+            throw;
+        }
+        catch (JsonException)
+        {
+            throw new ProjectionManifestException("PSPROJ_MANIFEST_INVALID", "Projection run manifest is not valid JSON.");
+        }
+
+        if (document.Format != ProjectionRunManifest.FormatVersion ||
+            !Guid.TryParseExact(document.RunId, "D", out var parsedRunId) || parsedRunId != expectedRunId.Value)
+            throw new ProjectionManifestException("PSPROJ_MANIFEST_INVALID", "Projection run manifest format or identity is invalid.");
+
+        var actualHash = Hash(JsonSerializer.SerializeToUtf8Bytes(document with { ManifestHash = null }, JsonOptions));
+        if (document.ManifestHash is null || !string.Equals(actualHash, document.ManifestHash, StringComparison.Ordinal))
+            throw new ProjectionManifestException("PSPROJ_MANIFEST_INTEGRITY", "Projection run manifest hash does not match its canonical content.");
+
+        var run = new ProjectionRun(
+            new RunId(parsedRunId),
+            Enum.Parse<ProjectionStatus>(document.Status, ignoreCase: true),
+            document.ProjectId,
+            document.ConfigurationHash,
+            document.GraphHash,
+            DateTimeOffset.ParseExact(document.StartedAt, "O", CultureInfo.InvariantCulture, DateTimeStyles.None),
+            document.CompletedAt is null ? null : DateTimeOffset.ParseExact(document.CompletedAt, "O", CultureInfo.InvariantCulture, DateTimeStyles.None),
+            document.SourceArtifactCount,
+            document.TargetArtifactCount,
+            document.FailureCount,
+            document.FailureCode,
+            document.ProjectionFingerprint,
+            document.ConnectorVersions,
+            document.ShadowDestinations,
+            document.JournalPath,
+            document.CheckpointId,
+            document.CheckpointSourceFingerprint,
+            document.CheckpointManifestHash);
+        return new ProjectionRunManifest(run, document.ManifestHash);
+    }
+
     private static ProjectionRunDocument ToDocument(ProjectionRun run, string? manifestHash) => new(
         ProjectionRunManifest.FormatVersion,
         manifestHash,
