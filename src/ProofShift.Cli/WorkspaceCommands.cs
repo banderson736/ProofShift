@@ -275,7 +275,9 @@ internal static class WorkspaceCommands
                 InvalidOperationException or InvalidDataException or ProjectionManifestException or KeyNotFoundException or
                 FormatException or System.Text.Json.JsonException)
             {
-                Console.Error.WriteLine($"PSWORKPKG099: Evidence package creation failed ({exception.GetType().Name}); no configuration values were included.");
+                var diagnosticCode = exception.Data[WorkspaceEvidencePackageService.DiagnosticCodeDataKey] as string
+                    ?? "PSWORKPKG099";
+                Console.Error.WriteLine($"{diagnosticCode}: Evidence package creation failed ({exception.GetType().Name}); no configuration values were included.");
                 return 1;
             }
         }

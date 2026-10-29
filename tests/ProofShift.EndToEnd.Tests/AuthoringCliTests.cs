@@ -547,6 +547,38 @@ public sealed class AuthoringCliTests
         }
     }
 
+    [Fact]
+    public async Task WorkspaceEvidencePackageReportsSafeDiagnosticWhenRecoveryArtifactIntegrityFails()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-evidence-package-recovery-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var run = await CreatePackageFixtureRunAsync(root, "NOT QUALIFIED", EvidenceResult.Fail);
+            var runDirectory = Path.Combine(root, "runs", run.ToString("D"));
+            var runManifest = await WorkspaceRunManifestStore.ReadAsync(runDirectory,
+                TestContext.Current.CancellationToken);
+            var recoveryManifest = Assert.IsType<string>(runManifest.RecoveryArtifactReference);
+            var recoveryDirectory = Path.GetDirectoryName(Path.Combine(root,
+                recoveryManifest.Replace('/', Path.DirectorySeparatorChar)))!;
+            var recoveryArtifact = Path.Combine(recoveryDirectory, "assessment.json");
+            await File.WriteAllTextAsync(recoveryArtifact, "sensitive recovery fixture",
+                TestContext.Current.CancellationToken);
+            var packagePath = Path.Combine(root, "evidence", "tampered-recovery.zip");
+
+            var result = await RunAsync("workspace", "evidence", "package", root, run.ToString("D"),
+                "--output", packagePath, "--json");
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("PSWORKPKG203", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("sensitive recovery fixture", result.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData("QUALIFIED", EvidenceResult.Pass)]
     [InlineData("NOT QUALIFIED", EvidenceResult.Fail)]

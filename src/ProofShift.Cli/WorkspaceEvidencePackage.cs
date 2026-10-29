@@ -69,6 +69,7 @@ internal sealed record WorkspaceEvidencePackageCreation(
 internal static class WorkspaceEvidencePackageService
 {
     private const string PackageManifestName = "package.json";
+    internal const string DiagnosticCodeDataKey = "ProofShift.WorkspaceEvidencePackageDiagnosticCode";
     private const long MaximumManifestLength = 2 * 1024 * 1024;
     private const int MaximumArtifactCount = 256;
     private const int MaximumArchiveEntryCount = MaximumArtifactCount + 1;
@@ -199,34 +200,44 @@ internal static class WorkspaceEvidencePackageService
 
         if (run.RecoveryArtifactReference is { } recoveryReference)
         {
-            var recoveryManifestPath = ResolveRunReference(root, runDirectory, recoveryReference);
-            var recoveryBytes = await File.ReadAllBytesAsync(recoveryManifestPath, cancellationToken).ConfigureAwait(false);
-            using var recoveryJson = JsonDocument.Parse(recoveryBytes);
-            var recoveryRoot = recoveryJson.RootElement;
-            if (recoveryRoot.GetProperty("format").GetString() != FileSystemRecoveryArtifactStore.StoreFormatVersion ||
-                recoveryRoot.GetProperty("dryRunId").GetString() != run.RecoveryRunId ||
-                recoveryRoot.GetProperty("integrityHash").GetString() != run.RecoveryArtifactIntegrityHash)
-                throw new InvalidDataException("Recovery artifact manifest does not match the run's identity or integrity hash.");
-            var recoveryFiles = recoveryRoot.GetProperty("files");
-            var recoveryNames = recoveryFiles.EnumerateObject().Select(property => property.Name)
-                .Order(StringComparer.Ordinal).ToArray();
-            var expectedRecoveryNames = RecoveryArtifactNames.Order(StringComparer.Ordinal).ToArray();
-            if (!recoveryNames.SequenceEqual(expectedRecoveryNames, StringComparer.Ordinal))
-                throw new InvalidDataException("Recovery manifest has an unsupported artifact set.");
-            foreach (var name in recoveryNames)
+            try
             {
-                var recoveryDirectoryRelative = Path.GetRelativePath(root, Path.GetDirectoryName(recoveryManifestPath)!)
-                    .Replace('\\', '/');
-                var artifactPath = ResolveRunReference(root, runDirectory,
-                    NormalizeWorkspaceReference(runRelative, $"{recoveryDirectoryRelative[(runRelative.Length + 1)..]}/{name}"));
-                var actualHash = await HashFileAsync(artifactPath, cancellationToken).ConfigureAwait(false);
-                if (!string.Equals(actualHash.Hash, recoveryFiles.GetProperty(name).GetString(), StringComparison.Ordinal))
-                    throw new InvalidDataException($"Recovery artifact '{name}' failed its existing integrity hash.");
-                candidates.Add(PackageArtifactSource.FromFile($"recovery-{Path.GetFileNameWithoutExtension(name)}",
-                    $"artifacts/recovery/{name}", artifactPath, "Recovery assessment, rehearsal, qualification, or evidence artifact.", required: true));
+                var recoveryManifestPath = ResolveRunReference(root, runDirectory, recoveryReference);
+                var recoveryBytes = await File.ReadAllBytesAsync(recoveryManifestPath, cancellationToken).ConfigureAwait(false);
+                using var recoveryJson = JsonDocument.Parse(recoveryBytes);
+                var recoveryRoot = recoveryJson.RootElement;
+                if (recoveryRoot.GetProperty("format").GetString() != FileSystemRecoveryArtifactStore.StoreFormatVersion ||
+                    recoveryRoot.GetProperty("dryRunId").GetString() != run.RecoveryRunId ||
+                    recoveryRoot.GetProperty("integrityHash").GetString() != run.RecoveryArtifactIntegrityHash)
+                    throw RecoveryInvalidData("PSWORKPKG201",
+                        "Recovery artifact manifest does not match the run's identity or integrity hash.");
+                var recoveryFiles = recoveryRoot.GetProperty("files");
+                var recoveryNames = recoveryFiles.EnumerateObject().Select(property => property.Name)
+                    .Order(StringComparer.Ordinal).ToArray();
+                var expectedRecoveryNames = RecoveryArtifactNames.Order(StringComparer.Ordinal).ToArray();
+                if (!recoveryNames.SequenceEqual(expectedRecoveryNames, StringComparer.Ordinal))
+                    throw RecoveryInvalidData("PSWORKPKG202", "Recovery manifest has an unsupported artifact set.");
+                foreach (var name in recoveryNames)
+                {
+                    var recoveryDirectoryRelative = Path.GetRelativePath(root, Path.GetDirectoryName(recoveryManifestPath)!)
+                        .Replace('\\', '/');
+                    var artifactPath = ResolveRunReference(root, runDirectory,
+                        NormalizeWorkspaceReference(runRelative, $"{recoveryDirectoryRelative[(runRelative.Length + 1)..]}/{name}"));
+                    var actualHash = await HashFileAsync(artifactPath, cancellationToken).ConfigureAwait(false);
+                    if (!string.Equals(actualHash.Hash, recoveryFiles.GetProperty(name).GetString(), StringComparison.Ordinal))
+                        throw RecoveryInvalidData("PSWORKPKG203",
+                            $"Recovery artifact '{name}' failed its existing integrity hash.");
+                    candidates.Add(PackageArtifactSource.FromFile($"recovery-{Path.GetFileNameWithoutExtension(name)}",
+                        $"artifacts/recovery/{name}", artifactPath, "Recovery assessment, rehearsal, qualification, or evidence artifact.", required: true));
+                }
+                candidates.Add(PackageArtifactSource.FromFile("recovery-manifest", "artifacts/recovery/manifest.json",
+                    recoveryManifestPath, "Existing integrity-verified Recovery artifact index.", required: true));
             }
-            candidates.Add(PackageArtifactSource.FromFile("recovery-manifest", "artifacts/recovery/manifest.json",
-                recoveryManifestPath, "Existing integrity-verified Recovery artifact index.", required: true));
+            catch (InvalidDataException exception) when (exception.Data[DiagnosticCodeDataKey] is not string)
+            {
+                exception.Data[DiagnosticCodeDataKey] = "PSWORKPKG204";
+                throw;
+            }
         }
         else if (completedDisposition && run.RecoveryQualification is not null)
         {
@@ -894,6 +905,13 @@ internal static class WorkspaceEvidencePackageService
 
     private static string Hash(ReadOnlySpan<byte> bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+    private static InvalidDataException RecoveryInvalidData(string diagnosticCode, string message)
+    {
+        var exception = new InvalidDataException(message);
+        exception.Data[DiagnosticCodeDataKey] = diagnosticCode;
+        return exception;
+    }
 
     private static StringComparison PathComparison =>
         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
