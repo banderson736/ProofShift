@@ -206,7 +206,7 @@ internal static class WorkspaceEvidencePackageService
             setDiagnosticCode("PSWORKPKG143");
             if (projection.ManifestHash != run.ProjectionManifestHash ||
                 projection.ProjectionFingerprint != run.ProjectionFingerprint ||
-                projection.CheckpointId != run.CheckpointId ||
+                !SameGuidIdentity(projection.CheckpointId, run.CheckpointId) ||
                 projection.CheckpointManifestHash != run.CheckpointManifestHash)
                 throw new InvalidDataException("Projection manifest does not match the run's bound identities.");
             setDiagnosticCode("PSWORKPKG144");
@@ -670,7 +670,7 @@ internal static class WorkspaceEvidencePackageService
             new ProofShift.Domain.RunId(projectionRunId));
         if (projection.ManifestHash != run.ProjectionManifestHash ||
             projection.ProjectionFingerprint != run.ProjectionFingerprint ||
-            projection.CheckpointId != run.CheckpointId ||
+            !SameGuidIdentity(projection.CheckpointId, run.CheckpointId) ||
             projection.CheckpointManifestHash != run.CheckpointManifestHash)
             failures.Add("Embedded Projection manifest does not match the run's bound identities.");
         if (journalEntry.Length == 0)
@@ -931,6 +931,11 @@ internal static class WorkspaceEvidencePackageService
 
     private static string Hash(ReadOnlySpan<byte> bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+    private static bool SameGuidIdentity(string? left, string? right) =>
+        Guid.TryParse(left, out var leftId) && leftId != Guid.Empty &&
+        Guid.TryParse(right, out var rightId) && rightId != Guid.Empty &&
+        leftId == rightId;
 
     private static InvalidDataException RecoveryInvalidData(string diagnosticCode, string message)
     {

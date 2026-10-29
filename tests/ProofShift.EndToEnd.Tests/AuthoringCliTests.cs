@@ -1993,7 +1993,7 @@ public sealed class AuthoringCliTests
         var projectionRun = new ProofShift.Projection.ProjectionRun(projectionId,
             ProofShift.Projection.ProjectionStatus.Succeeded, "fixture-project", new string('b', 64),
             plan.GraphHash, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch, 1, 2, 0, null,
-            new string('f', 64), [], [], journalPath, checkpointId.ToString("D"), new string('d', 64),
+            new string('f', 64), [], [], journalPath, checkpointId.ToString("N"), new string('d', 64),
             new string('c', 64));
         var projectionManifestHash = await ProofShift.Projection.ProjectionRunManifestStore.WriteAsync(
             runDirectory, projectionRun, TestContext.Current.CancellationToken);
