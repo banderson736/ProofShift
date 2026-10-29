@@ -195,17 +195,21 @@ internal static class WorkspaceEvidencePackageService
         setDiagnosticCode("PSWORKPKG104");
         if (run.ProjectionManifestReference is { } projectionReference)
         {
+            setDiagnosticCode("PSWORKPKG141");
             var projectionPath = ResolveRunReference(root, runDirectory, projectionReference);
             var projectionBytes = await File.ReadAllBytesAsync(projectionPath, cancellationToken).ConfigureAwait(false);
             if (!Guid.TryParse(run.ProjectionRunId, out var projectionRunId))
                 throw new InvalidDataException("Projection reference has no valid Projection run identity.");
+            setDiagnosticCode("PSWORKPKG142");
             var projection = ProjectionRunManifestStore.ReadAndValidate(projectionBytes,
                 new ProofShift.Domain.RunId(projectionRunId));
+            setDiagnosticCode("PSWORKPKG143");
             if (projection.ManifestHash != run.ProjectionManifestHash ||
                 projection.ProjectionFingerprint != run.ProjectionFingerprint ||
                 projection.CheckpointId != run.CheckpointId ||
                 projection.CheckpointManifestHash != run.CheckpointManifestHash)
                 throw new InvalidDataException("Projection manifest does not match the run's bound identities.");
+            setDiagnosticCode("PSWORKPKG144");
             var journalPath = ResolveRunReference(root, runDirectory,
                 NormalizeWorkspaceReference(runRelative, projection.JournalPath));
             candidates.Add(PackageArtifactSource.FromFile("projection-manifest", "artifacts/projection/run.json",
