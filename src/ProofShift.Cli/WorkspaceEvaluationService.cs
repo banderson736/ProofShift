@@ -180,7 +180,7 @@ internal static class WorkspaceEvaluationService
                     CapabilityNames(capability),
                     FingerprintSettings(endpoint.Configuration));
             })
-            .Distinct()
+            .DistinctBy(item => (item.System, item.Endpoint))
             .OrderBy(item => item.System, StringComparer.Ordinal)
             .ThenBy(item => item.Endpoint, StringComparer.Ordinal)
             .ToArray();

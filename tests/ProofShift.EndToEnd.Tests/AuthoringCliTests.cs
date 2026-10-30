@@ -1359,6 +1359,36 @@ public sealed class AuthoringCliTests
     }
 
     [Fact]
+    public async Task WorkspacePlanDeduplicatesSystemsByEndpointIdentityForMultiNodeGraph()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-endpoint-plan-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var scenarioRoot = Path.Combine(DemoScenarioTestPaths.FindRepositoryRoot(),
+                "scenarios", "byom-public-works", "shadow");
+            foreach (var sourcePath in Directory.GetFiles(scenarioRoot, "*", SearchOption.AllDirectories))
+            {
+                var relativePath = Path.GetRelativePath(scenarioRoot, sourcePath);
+                var destinationPath = Path.Combine(root, relativePath);
+                Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+                File.Copy(sourcePath, destinationPath, overwrite: true);
+            }
+
+            var result = await WorkspaceEvaluationService.PlanAsync(root, TestContext.Current.CancellationToken);
+            var plan = Assert.IsType<WorkspaceEvaluationPlan>(result.Plan);
+            Assert.Equal(2, plan.Systems.Count);
+            Assert.Equal(plan.Systems.Count,
+                plan.Systems.Select(system => (system.System, system.Endpoint)).Distinct().Count());
+            Assert.Empty(WorkspaceSemanticDriftService.ComparePlans(plan, plan));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task WorkspacePlanComparesPersistedDiscoveryAndReportsMissingHistoryWithoutLiveDiscovery()
     {
         var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-drift-discovery-{Guid.NewGuid():N}");
