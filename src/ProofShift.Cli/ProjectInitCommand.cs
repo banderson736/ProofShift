@@ -18,13 +18,17 @@ internal static class ProjectInitCommand
             Console.Error.WriteLine("Usage: proofshift init <directory> [--template generic|pension]");
             return 2;
         }
-        var template = args.Length == 4 ? args[3] : "generic";
+        return await InitializeAsync(args[1], args.Length == 4 ? args[3] : "generic", announce: true).ConfigureAwait(false);
+    }
+
+    internal static async Task<int> InitializeAsync(string directoryPath, string template, bool announce)
+    {
         if (template is not ("generic" or "pension"))
         {
             Console.Error.WriteLine("PSAUTHOR010: Template must be generic or pension.");
             return 1;
         }
-        var directory = Path.GetFullPath(args[1]);
+        var directory = Path.GetFullPath(directoryPath);
         if (File.Exists(directory) || (Directory.Exists(directory) && Directory.EnumerateFileSystemEntries(directory).Any()))
         {
             Console.Error.WriteLine("PSAUTHOR011: Initialization requires a new or empty directory; nothing was overwritten.");
@@ -113,7 +117,7 @@ internal static class ProjectInitCommand
         if (!graph.IsValid) throw new InvalidOperationException("Generated project failed graph validation.");
         var definitions = VerificationRuleConfigurationLoader.Load(loaded.Configuration);
         _ = CliComposition.RulesFor(loaded.Configuration, definitions).Resolve(definitions);
-        Console.WriteLine($"Initialized {template} project: {directory}");
+        if (announce) Console.WriteLine($"Initialized {template} project: {directory}");
         return 0;
     }
 

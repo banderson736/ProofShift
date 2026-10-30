@@ -32,6 +32,8 @@ internal static class Program
             return await EffectiveAuthoringCommands.RunAsync(args).ConfigureAwait(false);
         if (args.Length > 0 && args[0] is "discover" or "discovery")
             return await DiscoveryCommands.RunAsync(args).ConfigureAwait(false);
+        if (args.Length > 0 && args[0] == "workspace")
+            return await WorkspaceCommands.RunAsync(args).ConfigureAwait(false);
         if (args.Length > 0 && args[0] == "init")
             return await ProjectInitCommand.RunAsync(args).ConfigureAwait(false);
         if (args.Length > 0 && args[0] is "packs" or "rules" or "capabilities" or "connectors")
@@ -221,8 +223,11 @@ internal static class Program
         return 2;
     }
 
-    private static void WriteUsage() =>
+    private static void WriteUsage()
+    {
         Console.Error.WriteLine("Usage: proofshift validate <config> [--json] | proofshift plan <config> [--json] | proofshift inspect <config> [--json] | proofshift snapshot <config> [--json] | proofshift project <config> [--checkpoint <id-or-path>] [--json] | proofshift verify <config> --checkpoint <id> --projection <run-id> [--json] | proofshift verify-external <config> --checkpoint <id-or-path> --observation <label> [--json] | proofshift evidence <config> --run <verification-run-id> [--json] | proofshift recovery <config> --run <dry-run-id> [--json] | proofshift report <config> --run <dry-run-id> [--json] | proofshift report <config> --verification-run <verification-run-id> [--json] | proofshift report <dry-run-id> [--json, reads current-directory stores] | proofshift compare <config> --before <dry-run-id> --after <dry-run-id> [--json] | proofshift compare <config> --before-verification <verification-run-id> --after-verification <verification-run-id> [--json] | proofshift compare <before-dry-run-id> <after-dry-run-id> [--json, reads current-directory stores] | proofshift demo list | describe <id> | preflight <id> | run <id> | reset <id> | demo generate <output-directory> [--scale fast|large] [--seed <integer>] | demo benchmark [--scale fast|large] [--seed <integer>] | proofshift dry-run <config> [--json]");
+        Console.Error.WriteLine("Workspace: proofshift workspace init <directory> [--template generic|pension] | proofshift workspace validate <directory> [--json] | proofshift workspace preflight <directory> [--connect] [--json] | proofshift workspace plan <directory> [--json] | proofshift workspace run <directory> [--checkpoint <id-or-path>] [--observation <label>] [--json] | proofshift workspace evidence package <workspace> <run-id> [--output <zip>] [--diagnostic] [--json] | proofshift workspace evidence validate-package <zip> [--json] | proofshift workspace summary <workspace> <run-id> [--output <path>] [--json] | proofshift workspace compare <workspace> <run-a> <run-b> [--json] | proofshift workspace cleanup <workspace> <run-id> [--plan|--execute] [--json]");
+    }
 
     private static void WriteHelp()
     {
@@ -234,6 +239,22 @@ internal static class Program
             Commands:
               version                         Show product version and package identity
               init <path>                    Create a starter project
+              workspace init <path>           Create a guided evaluation workspace
+              workspace validate <path>      Validate workspace and project structure
+              workspace preflight <path> [--connect] [--json]
+                                              Assess readiness; connectivity is explicit and read-only
+              workspace plan <path> [--json] Show the effective read-only workspace evaluation plan
+              workspace run <path> [options] Run the guided workspace evaluation
+              workspace evidence package <path> <run-id> [options]
+                                              Create a portable, run-bound Evidence package
+              workspace evidence validate-package <zip> [--json]
+                                              Validate a package offline without extraction
+              workspace summary <path> <run-id> [--output <path>] [--json]
+                                              Write a deterministic, run-bound customer summary
+              workspace compare <path> <before-run> <after-run> [--json]
+                                              Compare two local runs in the same workspace
+              workspace cleanup <path> <run-id> [--plan|--execute] [--json]
+                                              Preview or remove ownership-verified run scratch
               validate <config> [--strict]   Validate a project configuration
               discover <config>              Discover configured source and target systems
               discovery diff <source> <target>

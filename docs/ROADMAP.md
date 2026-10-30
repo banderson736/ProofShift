@@ -312,9 +312,10 @@ record](PS0_11G_PILOT_READINESS_ACCEPTANCE.md) and
 Out of scope: public release/tag/package publication, signing, self-contained/AOT publishing, installers, new connectors/packs, FHIR Bulk, UI/API/auth, production migration/rollback, AI authoring, assurance-engine/runtime-semantics changes, and unrelated refactoring.
 
 PS-0.11 is complete. PS-1.0A Customer Data Evaluation & Generalized Mapping
-Foundation is Accepted as recorded below. PS-1.0B requires a separate explicit
-planning/start decision. The provisional post-PS-0 roadmap remains provisional
-outside the accepted PS-1.0A scope.
+Foundation is Accepted as recorded below. PS-1.0B Guided Customer Evaluation
+Workspace & Evidence Package is explicitly assigned and in progress. The
+provisional post-PS-0 roadmap remains provisional outside the accepted
+PS-1.0A scope and current PS-1.0B assignment.
 
 ## Commercial validation gate after PS-0 / during PS-0
 
@@ -376,10 +377,65 @@ No production migration or production rollback execution is authorized by
 this acceptance. Windows evidence remains package-only; Linux scenario
 evidence is limited to the packaged Docker evaluation. The [scope](PS1_0A_CUSTOMER_DATA_EVALUATION.md)
 and [acceptance matrix](PS1_0A_ACCEPTANCE_MATRIX.md) record the evidence and
-limitations. PS-1.0B has not started; it requires a separate planning/start
-decision.
+limitations.
 
-Likely areas:
+### PS-1.0B Guided Customer Evaluation Workspace & Evidence Package
+
+Status: **In Progress — technical evidence complete on the implementation
+baseline; owner acceptance pending.** Work starts from PS-1.0A closure merge
+`7f6fbae410f81ad8f015cad380594e88d630468d` on branch
+`ps-1.0b-guided-customer-evaluation`. Validated implementation baseline:
+`bc985901fcf6700c532d04b2d6c2ce64079800a5`, tree
+`2bd9d69bac136a511a5c986a23c12ebf73afad35`. Its push CI run `40987616414`
+and PR CI run `40987621659` passed all 11 required jobs; `build-and-test`
+passed 347 tests (0 failed, 0 skipped), with Remote Storage 54, Db2 2, and
+Oracle 2 tests also passing without failures or skips.
+
+The extracted-package Linux evaluation passed the clean scenario (114 source
+records; 12 budget rows totaling `12,780.00`; `QUALIFIED`) and defective
+scenario (`12,781.00`; `NOT QUALIFIED`, with exact findings and
+non-waiving expected-exception evidence). Checkpoint replay completed with
+the source stopped/unreachable and its credential reference unavailable.
+Packaged evidence/tamper validation, summaries, comparisons, cleanup,
+incomplete-run diagnostics, and generated-credential scanning passed. The
+Linux package archive/content SHA-256 values are
+`dfc8d6258b6a609e10ea534230fd016e026cc19cf5aec865aaebc865fef50394` /
+`eaab04e0a2eb5b75f7a40cfd639535d2110faaddc27a3af04781fee300933bae`;
+Windows values are
+`b90f330bc17c1d6faebde767757c8f1e874dc9227c9a2f19b8348b45028f4df2` /
+`38dfcca70f0ecd7bf6fec7aca600f4bfdafa6597d7e10f395685d37b36c26cfb`.
+Independent same-platform builds reproduced the archive and content hashes.
+Windows evidence remains package-only (0 customer scenarios); Linux scenario
+evidence is limited to the packaged Docker evaluation.
+
+The acceptance matrix records 22 PASS, 0 FAIL, 0 NOT YET, and 0 NOT
+APPLICABLE for the validated implementation baseline. Documentation-only
+closure candidate `41397923686f525336e5496a5102865480b9f08e` passed
+exact-head protected CI in push run `40995433210` and PR run `40995438489`,
+with all 11 required jobs passing in both runs. The technical recommendation
+is ready for owner acceptance; this evidence does not constitute owner
+acceptance or approval to merge.
+
+The workspace wraps, rather than replaces, the existing
+`proofshift.yaml`, configuration fingerprint, discovery/scaffold, checkpoint,
+Projection, Verification, Recovery, Evidence, report, and comparison
+contracts. Static validation and default preflight remain offline. The
+explicit connectivity option performs read-only inspection; preflight and
+planning do not capture checkpoints, project data, run Verification, or write
+evaluation outputs. The run command keeps external Verification read-only,
+does not qualify Recovery for external targets, and leaves incomplete runs
+without disposition. Packages do not include raw checkpoint/source data,
+resolved configuration/secrets, or materialized target rows; Evidence may
+still contain customer-sensitive values. Summaries omit raw Evidence values
+and explanations; comparisons are local to runs in the same workspace; and
+cleanup preserves evidence and targets while removing only ownership-verified
+run scratch. See the [architecture proposal](PS1_0B_GUIDED_CUSTOMER_EVALUATION.md),
+[acceptance matrix](PS1_0B_ACCEPTANCE_MATRIX.md), and
+[ADR-0037](adr/0037-evaluation-workspace-manifest.md). PS-1.0B remains
+unaccepted pending explicit owner acceptance. Production migration/rollback
+remains unauthorized, and PS-1.0C has not started.
+
+### Potential future product areas (unassigned)
 
 ### PS-1 generalized reconciliation/mapping
 - composite identity;

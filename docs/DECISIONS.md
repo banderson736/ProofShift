@@ -6,6 +6,8 @@ PS-0.10B authoring contracts: see [ADR-0018](adr/0018-structured-rule-authoring-
 
 PS-1.0A evaluation-scope architecture is recorded in [ADR-0036](adr/0036-deterministic-evaluation-scopes.md). The ADR preserves legacy graph canonicalization for unscoped projects and binds scoped evaluations to deterministic graph/checkpoint/report evidence.
 
+PS-1.0B's workspace, guided-run, package, summary, comparison, and cleanup boundaries are recorded in [ADR-0037](adr/0037-evaluation-workspace-manifest.md): the workspace manifest references the existing project configuration; the run manifest remains authoritative execution state; and the package index binds the portable representation without redefining run semantics. The deterministic summary is a non-authoritative projection of integrity-verified run/Evidence data. Comparison is limited to local runs in one workspace. Cleanup is preview-first and restricted to marker-owned run scratch; it adds no connector deletion contract. Static/package validation is offline; preflight connectivity is read-only; guided execution composes existing runtime services. The package uses existing run/Evidence/Projection/Recovery integrity mechanisms, explicitly classifies external and omitted artifacts, and does not sign packages. ADR-0037 is accepted for this architecture boundary. PS-1.0B remains in progress and unaccepted.
+
 ## Accepted decisions
 
 PS-0.10C's assigned implementation boundary is recorded in [ADR-0019](adr/0019-target-observation-and-connector-capabilities.md): independent read-only target observation, distinct shadow mutation/Recovery authority and connector capability reporting. The milestone remains In Progress; provider and format acceptance gates are not satisfied by compilation.

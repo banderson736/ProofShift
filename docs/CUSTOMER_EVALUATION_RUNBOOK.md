@@ -10,6 +10,119 @@ connecting any customer source.
 Check the [supported source and connector compatibility table](SOURCE_CONNECTOR_COMPATIBILITY.md)
 before selecting endpoints or declaring evaluation capabilities.
 
+## 0. Initialize and validate a workspace
+
+The PS-1.0B workspace commands create a portable directory around the existing
+project configuration. Select `pension` only when the Pension template is
+appropriate; the default is `generic`.
+
+```text
+proofshift workspace init <evaluation-directory> [--template generic|pension]
+proofshift workspace validate <evaluation-directory> --json
+proofshift workspace preflight <evaluation-directory> [--json]
+proofshift workspace plan <evaluation-directory> [--json]
+proofshift workspace run <evaluation-directory> [--checkpoint <id-or-path>] [--observation <label>] [--json]
+```
+
+The workspace manifest references `proofshift.yaml`; it does not replace or
+duplicate it. The initial layout separates `data/`, read-only `discovery/`,
+review-required `generated/` drafts, `runs/`, retained `evidence/`, and
+disposable `.proofshift/tmp/`. Replace the header-only sample input with
+customer-approved representative data and keep resolved credentials outside
+the workspace. `workspace validate` performs local/static validation only; it
+does not connect to customer endpoints. It is not a readiness decision.
+
+`workspace preflight` is offline by default. It checks declared configuration,
+capability, mapping-review, rule, Recovery, credential-reference, and persisted
+discovery conditions. Without `--connect`, it reports live connectivity,
+actual credential validity, and output write permissions as not checked. Only
+use the following option when read-only endpoint inspection is explicitly
+intended:
+
+```text
+proofshift workspace preflight <evaluation-directory> --connect [--json]
+```
+
+`--connect` performs connector inspection and may compare persisted discovery
+with fresh read-only discovery. It does not capture a checkpoint, project
+records, run Verification, or create evaluation outputs. Review the
+human-readable or JSON plan before any separately authorized execution:
+
+```text
+proofshift workspace plan <evaluation-directory> [--json]
+```
+
+The plan describes configured systems, graph scope and mappings, installed
+capabilities, rules, Recovery, checkpoint/replay, output locations, and
+intentionally omitted execution products. It is descriptive only and does not
+assign run identities or execute the evaluation. Credential values and rule
+option values are not rendered.
+
+`workspace run` performs deterministic read-only readiness inspection before
+starting. Without `--checkpoint`, it captures a complete source checkpoint;
+with `--checkpoint`, it replays only the selected complete checkpoint and
+does not inspect or read live source data. Every attempt gets a unique
+`runs/<run-id>/` directory and an integrity-bound `run.json` with stage
+progress and references to existing runtime artifacts. JSON output is
+newline-delimited progress events followed by a final result record.
+
+Shadow-target workspaces run isolated Projection, Verification, Recovery, and
+Evidence. Workspaces with ordinary target roles use external read-only
+Verification and require `--observation <label>`; that path does not run
+Projection or Recovery and makes no qualification claim. Failed or
+interrupted execution has no business disposition. A completed internal
+evaluation can report `QUALIFIED` or `NOT QUALIFIED`; expected-exception
+annotations never waive findings. Generate the human summary, package, and
+run comparison separately; these operations do not rerun evaluation.
+
+## 0.1 Summarize, package, compare, and clean run scratch
+
+After a run, generate a deterministic summary and optionally package its
+authoritative artifacts:
+
+```text
+proofshift workspace summary <evaluation-directory> <run-id> [--json]
+proofshift workspace evidence package <evaluation-directory> <run-id> [--output <zip>] [--json]
+proofshift workspace evidence validate-package <zip> [--json]
+```
+
+The summary is derived from the validated run manifest, effective plan, and
+integrity-verified Evidence. Incomplete runs do not receive a business
+disposition. Sensitive expected/actual values, Evidence explanations, and
+raw artifact identifiers are not rendered. Expected-exception annotations
+remain visible as annotations and do not waive findings. Package validation
+is offline and does not extract the archive or test external-reference
+availability.
+
+Compare two local runs in the same workspace to inspect finding identity,
+disposition, plan/configuration, reconciliation, expected-exception, and
+materialized-state changes:
+
+```text
+proofshift workspace compare <evaluation-directory> <before-run-id> <after-run-id> [--json]
+```
+
+This command compares local workspace runs, not evidence packages. Different
+run IDs alone do not establish semantic change, and equal dispositions do
+not imply equivalence.
+
+Cleanup defaults to a preview. Explicit execution is limited to the exact
+run's marker-owned `temporary` directory:
+
+```text
+proofshift workspace cleanup <evaluation-directory> <run-id> [--plan] [--json]
+proofshift workspace cleanup <evaluation-directory> <run-id> --execute [--json]
+```
+
+Only the fixed run-scoped temporary directory is eligible, and only when its
+workspace/run ownership marker matches and no reparse points are present.
+Cleanup preserves the run manifest, Evidence, Recovery artifacts, summary,
+packages, checkpoints, customer source data, and configured target resources.
+There is no cleanup for PostgreSQL schemas or configured filesystem targets.
+An already-absent temporary directory is an idempotent no-op. Retain all
+artifacts required by customer policy before separately removing a whole
+dedicated evaluation directory.
+
 ## 1. Agree on the evaluation boundary
 
 Record the project owner, source/target owners, read-only access approver,
@@ -102,7 +215,59 @@ NOT AVAILABLE**. It does not establish vendor execution lineage, legal or
 regulatory compliance, production readiness, or completeness outside the
 declared scope.
 
-## 6. Cleanup and retention
+## 6. Package and validate portable evidence
+
+Package a completed internal run by its workspace and run ID. Both
+`QUALIFIED` and `NOT QUALIFIED` completed outcomes are valid evidence
+packages. Incomplete runs and completed external observations without a
+business disposition require the explicit `--diagnostic` option; diagnostic
+packages retain the execution state and do not claim a disposition.
+
+```text
+proofshift workspace evidence package <evaluation-directory> <run-id> [--output <package.zip>] [--json]
+proofshift workspace evidence package <evaluation-directory> <run-id> --diagnostic [--json]
+proofshift workspace evidence validate-package <package.zip> [--json]
+```
+
+By default, the archive is written under the workspace's `evidence/`
+directory. Repackaging does not change the authoritative run manifest.
+Creation regenerates the safe effective plan from the workspace and refuses
+to package if its fingerprint no longer matches the run.
+
+The ordinary ZIP contains `package.json` and an `artifacts/` tree:
+
+- authoritative `run.json` and the matching `effective-plan.json`;
+- integrity-verified Evidence manifest and NDJSON records;
+- for internal shadow runs, the integrity-bound Projection manifest and
+  lineage journal, plus the integrity-verified Recovery manifest and its
+  assessment, plan, rehearsal, recovery Evidence, and qualification records.
+
+The package index classifies each artifact as embedded, external-reference,
+or intentionally omitted. Checkpoint manifests and Verification ledgers are
+referenced by stable identity/fingerprint but are not required for offline
+validation. Raw checkpoint/source rows, binary source payloads, resolved
+configuration/secrets, and materialized target rows are intentionally
+omitted. The safe plan and configuration/graph fingerprints provide
+context; the package does not embed a second execution record.
+
+Package integrity (`VALID`/`INVALID`) is distinct from evaluation disposition
+(`QUALIFIED`/`NOT QUALIFIED`/not established). A valid package may faithfully
+record a failed evaluation. Validation runs offline without the workspace or
+customer systems, does not extract the ZIP, rerun evaluation, or check
+external-reference availability. It rejects changed/deleted required files,
+manifest/run mismatches, unsupported versions, undeclared/duplicate entries,
+artifact roles or classifications outside the v1 policy, unsafe paths, and
+symlink entries.
+
+The logical package identity is deterministic for the same run and artifacts.
+The displayed archive SHA-256 identifies the ZIP bytes and is distinct from
+the logical identity. No signatures or signer identity are provided.
+Evidence, Projection journals, and Recovery artifacts may contain
+customer-sensitive values; packages are not automatically anonymized.
+Review the listed contents and follow the customer's data-classification and
+retention policy before sharing or storing an archive.
+
+## 7. Cleanup and retention
 
 Plan cleanup before the first run. Put only generated evaluation outputs under
 one new, dedicated evaluation directory (for example

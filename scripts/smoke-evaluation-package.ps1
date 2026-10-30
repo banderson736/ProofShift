@@ -226,7 +226,8 @@ foreach ($requiredPath in @(
     (Join-Path $packageRoot "scenarios/byom-public-works/shadow/systems/source.yaml"),
     (Join-Path $packageRoot "scenarios/byom-public-works/shadow/systems/shadow.yaml"),
     (Join-Path $packageRoot "scenarios/byom-public-works/shadow/recovery/policy.yaml"),
-    (Join-Path $packageRoot "scripts/run-byom-evaluation.ps1")
+    (Join-Path $packageRoot "scripts/run-byom-evaluation.ps1"),
+    (Join-Path $packageRoot "scripts/run-guided-workspace-evaluation.ps1")
 )) {
     if (-not (Test-Path -LiteralPath $requiredPath)) { throw "Required packaged resource is missing: $requiredPath" }
 }
@@ -238,6 +239,14 @@ $packagedRunnerErrors = $null
     $packagedByomRunner, [ref]$packagedRunnerTokens, [ref]$packagedRunnerErrors) | Out-Null
 if ($packagedRunnerErrors.Count -gt 0) {
     throw "Packaged BYOM runner contains PowerShell syntax errors: $($packagedRunnerErrors -join '; ')"
+}
+$packagedWorkspaceRunner = Join-Path $packageRoot "scripts/run-guided-workspace-evaluation.ps1"
+$packagedWorkspaceRunnerTokens = $null
+$packagedWorkspaceRunnerErrors = $null
+[System.Management.Automation.Language.Parser]::ParseFile(
+    $packagedWorkspaceRunner, [ref]$packagedWorkspaceRunnerTokens, [ref]$packagedWorkspaceRunnerErrors) | Out-Null
+if ($packagedWorkspaceRunnerErrors.Count -gt 0) {
+    throw "Packaged guided workspace runner contains PowerShell syntax errors: $($packagedWorkspaceRunnerErrors -join '; ')"
 }
 
 $manifestPath = Join-Path $packageRoot "package-manifest.json"
@@ -441,7 +450,7 @@ if ($helpAlias.ExitCode -ne 0 -or -not [string]::IsNullOrEmpty($helpAlias.Error)
 foreach ($requiredCommand in @(
     "version", "validate", "discover", "discovery", "scaffold", "mapping", "explain", "config",
     "snapshot", "project", "verify", "verify-external", "evidence", "recovery", "report",
-    "compare", "dry-run", "demo", "--verification-run", "--before-verification", "--after-verification"
+    "compare", "dry-run", "demo", "workspace", "--verification-run", "--before-verification", "--after-verification"
 )) {
     if ($rootHelp -notmatch [Regex]::Escape($requiredCommand)) {
         throw "Packaged CLI usage is missing '$requiredCommand'."

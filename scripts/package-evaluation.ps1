@@ -262,7 +262,8 @@ try {
         "docs/PILOT_INTAKE_CHECKLIST.md",
         "docs/DEMO_RUNBOOK.md",
         "scenarios",
-        "scripts/run-byom-evaluation.ps1"
+        "scripts/run-byom-evaluation.ps1",
+        "scripts/run-guided-workspace-evaluation.ps1"
     )) {
         Copy-RepositoryPath $relativePath $packageRoot
     }
