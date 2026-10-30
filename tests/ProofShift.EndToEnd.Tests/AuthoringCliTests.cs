@@ -1169,6 +1169,14 @@ public sealed class AuthoringCliTests
                 targetConfiguration.Replace("PROOFSHIFT_TARGET_CONNECTION", "PROOFSHIFT_PRIVATE_SENTINEL",
                     StringComparison.Ordinal), TestContext.Current.CancellationToken);
 
+            var driftPlan = await RunWithEnvironmentAsync("PROOFSHIFT_PRIVATE_SENTINEL",
+                "review-test-secret-must-not-persist", "workspace", "plan", root,
+                "--baseline", baselineId.ToString("D"), "--json");
+            Assert.Equal(0, driftPlan.ExitCode);
+            using (var driftPlanJson = JsonDocument.Parse(driftPlan.Output))
+                Assert.Equal("ReviewRequired", driftPlanJson.RootElement.GetProperty("semanticDrift")
+                    .GetProperty("status").GetString());
+
             var blockedRun = await RunWithEnvironmentAsync("PROOFSHIFT_PRIVATE_SENTINEL",
                 "review-test-secret-must-not-persist", "workspace", "run", root, "--json");
             Assert.Equal(1, blockedRun.ExitCode);
