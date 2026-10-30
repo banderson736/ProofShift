@@ -69,12 +69,16 @@ public sealed class ByomFixtureContractTests
         var packagingScript = File.ReadAllText(Path.Combine(repositoryRoot, "scripts", "package-evaluation.ps1"));
         var smokeScript = File.ReadAllText(Path.Combine(repositoryRoot, "scripts", "smoke-evaluation-package.ps1"));
         var runner = File.ReadAllText(Path.Combine(repositoryRoot, "scripts", "run-byom-evaluation.ps1"));
+        var workspaceRunner = File.ReadAllText(Path.Combine(repositoryRoot, "scripts",
+            "run-guided-workspace-evaluation.ps1"));
         Assert.Contains("scenarios/** including the synthetic BYOM evaluation kit", packagingScript,
             StringComparison.Ordinal);
         Assert.Contains("scenarios/byom-public-works/expectations.json", smokeScript, StringComparison.Ordinal);
         Assert.Contains("scenarios/byom-public-works/database/postgres-shadow-target-schema.sql", smokeScript,
             StringComparison.Ordinal);
         Assert.Contains("run-byom-evaluation.ps1", smokeScript, StringComparison.Ordinal);
+        Assert.Contains("Packaged workspace command '$command' did not return valid JSON; output omitted.",
+            workspaceRunner, StringComparison.Ordinal);
 
         var defectiveVerification = runner.IndexOf("$defectiveShadowVerification = Invoke-ProductJson",
             StringComparison.Ordinal);

@@ -75,7 +75,10 @@ function Invoke-PackagedJson {
 
     $text = Invoke-Packaged $Arguments $ExpectedExitCode
     try { return $text | ConvertFrom-Json }
-    catch { throw "Packaged workspace command did not return valid JSON; output omitted." }
+    catch {
+        $command = $Arguments -join " "
+        throw "Packaged workspace command '$command' did not return valid JSON; output omitted."
+    }
 }
 
 function Invoke-PackagedWorkspaceRun {
