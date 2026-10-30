@@ -409,10 +409,12 @@ Windows evidence remains package-only (0 customer scenarios); Linux scenario
 evidence is limited to the packaged Docker evaluation.
 
 The acceptance matrix records 22 PASS, 0 FAIL, 0 NOT YET, and 0 NOT
-APPLICABLE for the validated implementation baseline. A documentation-only
-acceptance-record commit is being validated as the PR head; its exact-head
-protected CI must pass before a final technical recommendation. This evidence
-does not constitute owner acceptance or approval to merge.
+APPLICABLE for the validated implementation baseline. Documentation-only
+closure candidate `41397923686f525336e5496a5102865480b9f08e` passed
+exact-head protected CI in push run `40995433210` and PR run `40995438489`,
+with all 11 required jobs passing in both runs. The technical recommendation
+is ready for owner acceptance; this evidence does not constitute owner
+acceptance or approval to merge.
 
 The workspace wraps, rather than replaces, the existing
 `proofshift.yaml`, configuration fingerprint, discovery/scaffold, checkpoint,

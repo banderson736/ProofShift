@@ -14,9 +14,11 @@ checkpoint replay, evidence/tamper validation, summaries, comparisons,
 cleanup, incomplete-run diagnostics, and credential scanning. The Windows
 package smoke passed with 0 customer scenarios. The acceptance matrix records
 22 PASS, 0 FAIL, 0 NOT YET, 0 NOT APPLICABLE on the implementation baseline.
-This document records technical evidence, not owner acceptance; exact-head
-CI for the documentation-only closure candidate must pass before a final
-technical recommendation.
+Documentation-only closure candidate
+`41397923686f525336e5496a5102865480b9f08e` passed exact-head protected CI in
+push run `40995433210` and PR run `40995438489`, with all 11 required jobs
+passing in both runs. The technical recommendation is ready for owner
+acceptance; explicit owner acceptance remains pending.
 
 ## Goal and boundaries
 
@@ -287,7 +289,7 @@ run-bound summaries, local run comparison, and bounded cleanup. Default
 preflight performs no endpoint access; guided execution performs
 read-only readiness inspection before capture or projection. The read-only
 plan remains descriptive and assigns no run identity. PS-1.0B remains
-unaccepted pending protected CI on the documentation-only closure candidate
-and explicit owner acceptance. The implementation-baseline evidence and
-remaining boundaries are recorded in the
+unaccepted pending explicit owner acceptance; exact-head protected CI passed
+on the documentation-only closure candidate. The implementation-baseline
+evidence and remaining boundaries are recorded in the
 [acceptance matrix](PS1_0B_ACCEPTANCE_MATRIX.md).

@@ -7,8 +7,10 @@ evidence. The implementation baseline is
 `bc985901fcf6700c532d04b2d6c2ce64079800a5` (tree
 `2bd9d69bac136a511a5c986a23c12ebf73afad35`). This administrative
 acceptance-record update does not change product behavior or redefine that
-validated implementation baseline. The closure-record PR head must also pass
-its own protected CI before a technical recommendation is issued.
+validated implementation baseline. Documentation-only closure candidate
+`41397923686f525336e5496a5102865480b9f08e` passed exact-head protected CI in
+push run `40995433210` and PR run `40995438489`; all 11 required jobs passed
+in both runs.
 
 | # | Acceptance gate | Status | Evidence |
 |---:|---|---|---|
@@ -106,8 +108,11 @@ outputs and packages.
 
 ## Final recommendation gate
 
-The original implementation candidate's technical evidence is complete. A
-technical-readiness recommendation is pending protected CI on the
-documentation-only PR-head candidate and confirmation that the PR
-description and matrix refer to the current evidence. This record does not
-grant owner acceptance, authorize merge, or authorize PS-1.0C.
+The original implementation candidate's technical evidence is complete. The
+documentation-only closure candidate
+`41397923686f525336e5496a5102865480b9f08e` passed exact-head protected CI in
+push run `40995433210` and PR run `40995438489`, with all 11 required jobs
+passing in both runs. The PR description and matrix record the current
+evidence. The technical recommendation is **ready for owner acceptance**;
+owner acceptance remains pending. This record does not authorize merge or
+PS-1.0C.
