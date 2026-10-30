@@ -410,7 +410,8 @@ jobs:
         run: dotnet test --project tests/ProofShift.Connectors.Oracle.Tests/ProofShift.Connectors.Oracle.Tests.csproj --no-restore
 
   db2-integration:
-    runs-on: ubuntu-latest
+    # IBM's Linux Db2 client depends on libxml2.so.2, which is not present on newer Ubuntu images.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
