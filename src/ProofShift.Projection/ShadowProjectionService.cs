@@ -61,6 +61,7 @@ public sealed class ShadowProjectionService
         var failureCount = 0L;
         var status = ProjectionStatus.Running;
         string? failureCode = null;
+        var failureStage = "INITIALIZATION";
         string? fingerprint = null;
         var versions = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var destinationContexts = new List<(MigrationNode Node, IShadowTargetConnector Connector, ShadowTargetContext Context)>();
@@ -69,8 +70,11 @@ public sealed class ShadowProjectionService
 
         try
         {
+            failureStage = "ROLE_VALIDATION";
             ValidateRoles(configuration, graph);
+            failureStage = "EXECUTION_PLAN_VALIDATION";
             ValidateExecutionPlan(graph);
+            failureStage = "SOURCE_DESTINATION_ISOLATION";
             ValidateSourceDestinationIsolation(configuration, graph);
             var sourceNodes = graph.Nodes.Where(node => node.Type == MigrationNodeType.Source)
                 .OrderBy(node => node.Name, StringComparer.Ordinal).ToArray();
@@ -98,6 +102,7 @@ public sealed class ShadowProjectionService
             foreach (var source in sourceNodes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                failureStage = "SOURCE_CONTEXT";
                 var context = _contextFactory.Create(configuration, source, resolveEnvironmentReferences: _sourceProvider is null);
                 var connector = _sourceProvider is null ? _sourceConnectors.Resolve(context.Connector) : null;
                 string connectorVersion;
@@ -117,6 +122,7 @@ public sealed class ShadowProjectionService
                 }
                 else
                 {
+                    failureStage = "SOURCE_CHECKPOINT_VALIDATION";
                     connectorVersion = await _sourceProvider.ValidateAsync(source.Name, context, source.Selector, cancellationToken).ConfigureAwait(false);
                 }
 
@@ -127,7 +133,18 @@ public sealed class ShadowProjectionService
             foreach (var target in targetNodes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var context = _contextFactory.Create(configuration, target);
+                failureStage = "TARGET_CONTEXT";
+                ConnectorContext context;
+                try
+                {
+                    context = _contextFactory.Create(configuration, target);
+                }
+                catch (ConnectorConfigurationException exception)
+                {
+                    throw new ProjectionExecutionException($"PSPROJ_TARGET_CONTEXT_{exception.Code}",
+                        "Shadow target runtime configuration is unavailable.");
+                }
+
                 var system = FindSystem(configuration, target.SystemId);
                 if (system.Role != SystemRole.ShadowTarget)
                 {
@@ -143,6 +160,7 @@ public sealed class ShadowProjectionService
             foreach (var destination in destinationContexts)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                failureStage = "TARGET_PREPARATION";
                 using var prepareStage = performanceRecorder?.StartStage(PerformanceStageKind.Projection,
                     "shadow target prepare", destination.Connector.Id.Value, destination.Node.Name);
                 await destination.Connector.PrepareAsync(destination.Context, destination.Node.Selector, cancellationToken).ConfigureAwait(false);
@@ -166,6 +184,7 @@ public sealed class ShadowProjectionService
             foreach (var edge in OrderEdges(graph))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                failureStage = "EDGE_PROJECTION";
                 using var edgeStage = performanceRecorder?.StartStage(PerformanceStageKind.Projection,
                     "projection edge", edge.Name);
                 var edgeSourceCount = 0L;
@@ -398,6 +417,7 @@ public sealed class ShadowProjectionService
             }
 
             using var readBackStage = performanceRecorder?.StartStage(PerformanceStageKind.Projection, "target read-back");
+            failureStage = "TARGET_READBACK";
             var readBack = await MaterializedTargetFingerprint.ComputeAsync(
                 destinationContexts.Select(destination => new MaterializedTargetReadback(
                     destination.Node.Name,
@@ -430,8 +450,8 @@ public sealed class ShadowProjectionService
         {
             status = ProjectionStatus.Failed;
             failureCode = exception is ConnectorConfigurationException connectorException
-                ? $"PSPROJ_FAILED_CONNECTORCONFIGURATIONEXCEPTION_{connectorException.Code}"
-                : $"PSPROJ_FAILED_{exception.GetType().Name.ToUpperInvariant()}";
+                ? $"PSPROJ_FAILED_{failureStage}_CONNECTORCONFIGURATIONEXCEPTION_{connectorException.Code}"
+                : $"PSPROJ_FAILED_{failureStage}_{exception.GetType().Name.ToUpperInvariant()}";
             failureCount = Math.Max(1, failureCount);
         }
         finally
@@ -578,25 +598,40 @@ public sealed class ShadowProjectionService
         var destinationNodes = graph.Nodes.Where(node => node.Type is MigrationNodeType.Target or MigrationNodeType.Archive).ToArray();
         foreach (var source in sourceNodes)
         {
-            var sourceContext = _contextFactory.Create(configuration, source);
+            var sourceSystem = FindSystem(configuration, source.SystemId);
+            var sourceEndpoint = sourceSystem.StorageEndpoints.SingleOrDefault(endpoint => endpoint.Id == source.EndpointId)
+                ?? throw new ProjectionExecutionException("PSPROJ_ENDPOINT_MISSING",
+                    "Projection graph references an unavailable source endpoint.");
             foreach (var destination in destinationNodes)
             {
-                var destinationContext = _contextFactory.Create(configuration, destination);
-                if (sourceContext.Connector == new ConnectorId("postgres") && destinationContext.Connector == sourceContext.Connector &&
-                    SameRuntimeSetting(sourceContext, destinationContext, "connection"))
+                var destinationSystem = FindSystem(configuration, destination.SystemId);
+                var destinationEndpoint = destinationSystem.StorageEndpoints.SingleOrDefault(endpoint =>
+                    endpoint.Id == destination.EndpointId)
+                    ?? throw new ProjectionExecutionException("PSPROJ_ENDPOINT_MISSING",
+                        "Projection graph references an unavailable destination endpoint.");
+
+                if (sourceEndpoint.Connector == new ConnectorId("postgres") &&
+                    destinationEndpoint.Connector == sourceEndpoint.Connector)
                 {
-                    throw new ProjectionExecutionException("PSPROJ_SOURCE_SHADOW_OVERLAP",
-                        "A PostgreSQL source and shadow destination cannot use the same connection string.");
+                    var sourceContext = _contextFactory.Create(configuration, source);
+                    var destinationContext = _contextFactory.Create(configuration, destination);
+                    if (SameRuntimeSetting(sourceContext, destinationContext, "connection"))
+                    {
+                        throw new ProjectionExecutionException("PSPROJ_SOURCE_SHADOW_OVERLAP",
+                            "A PostgreSQL source and shadow destination cannot use the same connection string.");
+                    }
                 }
 
-                var sourceIsFilesystem = sourceContext.Connector.Value is "files" or "csv";
-                if (destinationContext.Connector != new ConnectorId("files") || !sourceIsFilesystem)
+                var sourceIsFilesystem = sourceEndpoint.Connector.Value is "files" or "csv";
+                if (destinationEndpoint.Connector != new ConnectorId("files") || !sourceIsFilesystem)
                 {
                     continue;
                 }
 
-                var sourceRoot = ConnectorPathUtilities.ResolveRoot(sourceContext);
-                var destinationRoot = ConnectorPathUtilities.ResolveRoot(destinationContext);
+                var filesystemSourceContext = _contextFactory.Create(configuration, source);
+                var filesystemDestinationContext = _contextFactory.Create(configuration, destination);
+                var sourceRoot = ConnectorPathUtilities.ResolveRoot(filesystemSourceContext);
+                var destinationRoot = ConnectorPathUtilities.ResolveRoot(filesystemDestinationContext);
                 if (ConnectorPathUtilities.IsContained(sourceRoot, destinationRoot) ||
                     ConnectorPathUtilities.IsContained(destinationRoot, sourceRoot))
                 {

@@ -111,7 +111,7 @@ public sealed class ProjectionRuntimeTests
     public async Task ProjectionUnexpectedFailureCodeIdentifiesExceptionTypeWithoutMessage()
     {
         var scenario = Scenario(SystemRole.ShadowTarget, CreateSourceRecords());
-        var sourceProvider = new ThrowingSourceArtifactStreamProvider(scenario.Configuration.ConfigurationHash,
+        var sourceProvider = new ConfigurableSourceArtifactStreamProvider(scenario.Configuration.ConfigurationHash,
             scenario.Graph.GraphHash, scenario.SourceNode.Name);
         var targetConnector = new FakeShadowTargetConnector();
         var service = new ShadowProjectionService(
@@ -125,9 +125,67 @@ public sealed class ProjectionRuntimeTests
                 TestContext.Current.CancellationToken);
 
             Assert.Equal(ProjectionStatus.Failed, run.Status);
-            Assert.Equal("PSPROJ_FAILED_CONNECTORCONFIGURATIONEXCEPTION_PSCONN013", run.FailureCode);
+            Assert.Equal("PSPROJ_FAILED_SOURCE_CHECKPOINT_VALIDATION_CONNECTORCONFIGURATIONEXCEPTION_PSCONN013",
+                run.FailureCode);
             Assert.DoesNotContain("sensitive", run.FailureCode, StringComparison.OrdinalIgnoreCase);
             Assert.Equal(0, targetConnector.PrepareCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ProjectionReportsMissingShadowTargetRuntimeConfigurationSafely()
+    {
+        var scenario = Scenario(SystemRole.ShadowTarget, CreateSourceRecords());
+        var configuration = WithMissingTargetCredential(scenario.Configuration);
+        var sourceProvider = new ConfigurableSourceArtifactStreamProvider(configuration.ConfigurationHash,
+            scenario.Graph.GraphHash, scenario.SourceNode.Name, throwOnValidate: false);
+        var targetConnector = new FakeShadowTargetConnector();
+        var service = new ShadowProjectionService(
+            new ConnectorRegistry([]),
+            new ShadowTargetConnectorRegistry([targetConnector]),
+            new RuntimeConnectorContextFactory(new MissingEnvironmentVariableProvider()),
+            sourceProvider);
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var run = await service.ProjectAsync(configuration, scenario.Graph, directory,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(ProjectionStatus.Failed, run.Status);
+            Assert.Equal("PSPROJ_TARGET_CONTEXT_PSCONN013", run.FailureCode);
+            Assert.Equal(0, targetConnector.PrepareCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CheckpointProjectionDoesNotResolveUnusedSourceCredentials()
+    {
+        var scenario = Scenario(SystemRole.ShadowTarget, CreateSourceRecords());
+        var configuration = WithMissingSourceCredential(scenario.Configuration);
+        var sourceProvider = new ConfigurableSourceArtifactStreamProvider(configuration.ConfigurationHash,
+            scenario.Graph.GraphHash, scenario.SourceNode.Name, throwOnValidate: false);
+        var targetConnector = new FakeShadowTargetConnector();
+        var service = new ShadowProjectionService(
+            new ConnectorRegistry([]),
+            new ShadowTargetConnectorRegistry([targetConnector]),
+            new RuntimeConnectorContextFactory(new MissingEnvironmentVariableProvider()),
+            sourceProvider);
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var run = await service.ProjectAsync(configuration, scenario.Graph, directory,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(ProjectionStatus.Succeeded, run.Status);
+            Assert.True(targetConnector.PrepareCount > 0);
         }
         finally
         {
@@ -439,6 +497,46 @@ public sealed class ProjectionRuntimeTests
         return new ScenarioData(loaded, graph, sourceNode);
     }
 
+    private static LoadedProjectConfiguration WithMissingTargetCredential(LoadedProjectConfiguration configuration)
+    {
+        var targetSystem = configuration.Systems.Single(system => system.Role == SystemRole.ShadowTarget);
+        var targetEndpoint = targetSystem.StorageEndpoints.Single();
+        var configuredEndpoint = new StorageEndpointDefinition(targetEndpoint.Id, targetEndpoint.Connector,
+            [new KeyValuePair<string, string>("connection", "secret:MISSING_TARGET_CONNECTION")]);
+        var configuredSystem = new SystemDefinition(targetSystem.Id, targetSystem.Name, targetSystem.Role,
+            [configuredEndpoint]);
+        var systems = configuration.Systems.Select(system => system.Id == targetSystem.Id ? configuredSystem : system);
+        var systemConfigurations = configuration.SystemConfigurations.Select(system =>
+            system.Id == targetSystem.Id.Value
+                ? new SystemConfigurationDto(system.Id, system.Name, system.Role,
+                [new StorageEndpointConfigurationDto(targetEndpoint.Id.Value, targetEndpoint.Connector.Value,
+                    [new KeyValuePair<string, ConfigurationSetting>("connection",
+                        new SecretConfigurationSetting(new EnvironmentVariableReference("MISSING_TARGET_CONNECTION")))])])
+                : system);
+        return new LoadedProjectConfiguration(configuration.Root, systemConfigurations, systems,
+            configuration.ReferencedFiles, configuration.CanonicalConfiguration, configuration.ConfigurationHash);
+    }
+
+    private static LoadedProjectConfiguration WithMissingSourceCredential(LoadedProjectConfiguration configuration)
+    {
+        var sourceSystem = configuration.Systems.Single(system => system.Role == SystemRole.Source);
+        var sourceEndpoint = sourceSystem.StorageEndpoints.Single();
+        var configuredEndpoint = new StorageEndpointDefinition(sourceEndpoint.Id, sourceEndpoint.Connector,
+            [new KeyValuePair<string, string>("connection", "secret:MISSING_SOURCE_CONNECTION")]);
+        var configuredSystem = new SystemDefinition(sourceSystem.Id, sourceSystem.Name, sourceSystem.Role,
+            [configuredEndpoint]);
+        var systems = configuration.Systems.Select(system => system.Id == sourceSystem.Id ? configuredSystem : system);
+        var systemConfigurations = configuration.SystemConfigurations.Select(system =>
+            system.Id == sourceSystem.Id.Value
+                ? new SystemConfigurationDto(system.Id, system.Name, system.Role,
+                [new StorageEndpointConfigurationDto(sourceEndpoint.Id.Value, sourceEndpoint.Connector.Value,
+                    [new KeyValuePair<string, ConfigurationSetting>("connection",
+                        new SecretConfigurationSetting(new EnvironmentVariableReference("MISSING_SOURCE_CONNECTION")))])])
+                : system);
+        return new LoadedProjectConfiguration(configuration.Root, systemConfigurations, systems,
+            configuration.ReferencedFiles, configuration.CanonicalConfiguration, configuration.ConfigurationHash);
+    }
+
     private static RecordEnvelope[] CreateSourceRecords(bool duplicateTargetId = false)
     {
         var system = new SystemId("source-system");
@@ -470,10 +568,11 @@ public sealed class ProjectionRuntimeTests
 
     private sealed record ScenarioData(LoadedProjectConfiguration Configuration, MigrationGraph Graph, MigrationNode SourceNode);
 
-    private sealed class ThrowingSourceArtifactStreamProvider(
+    private sealed class ConfigurableSourceArtifactStreamProvider(
         string configurationHash,
         string graphHash,
-        string sourceNodeKey) : ISourceArtifactStreamProvider
+        string sourceNodeKey,
+        bool throwOnValidate = true) : ISourceArtifactStreamProvider
     {
         public string? CheckpointId => "00000000000000000000000000000001";
         public string? CheckpointSourceFingerprint => new string('a', 64);
@@ -484,8 +583,10 @@ public sealed class ProjectionRuntimeTests
 
         public Task<string> ValidateAsync(string sourceNodeKey, ConnectorContext context, ArtifactSelector selector,
             CancellationToken cancellationToken) =>
-            throw new ConnectorConfigurationException(ConnectorIssueCodes.MissingConfiguration,
-                "sensitive provider message");
+            throwOnValidate
+                ? throw new ConnectorConfigurationException(ConnectorIssueCodes.MissingConfiguration,
+                    "sensitive provider message")
+                : Task.FromResult("fake-source-1");
 
         public async IAsyncEnumerable<RecordEnvelope> ReadAsync(string sourceNodeKey, ConnectorContext context,
             ArtifactSelector selector,
@@ -499,6 +600,11 @@ public sealed class ProjectionRuntimeTests
             ArtifactSelector selector, ArtifactReference artifact, BinaryReferenceValue binaryReference,
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class MissingEnvironmentVariableProvider : IEnvironmentVariableProvider
+    {
+        public string? GetValue(string name) => null;
     }
 
     private sealed class FakeSourceConnector(string nodeName, IReadOnlyCollection<RecordEnvelope> records) : ISourceConnector

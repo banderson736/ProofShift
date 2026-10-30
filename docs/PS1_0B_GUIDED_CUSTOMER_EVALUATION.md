@@ -95,9 +95,11 @@ The PS-1.0B.3 `workspace run` implementation composes the existing checkpoint,
 shadow Projection, Verification, Recovery, reconciliation, and Evidence
 services. It does not shell out to the CLI or implement parallel runtime
 semantics. A fresh run captures a complete checkpoint; replay consumes the
-selected complete checkpoint, skips live source inspection/credential
-resolution, and passes its identity through the existing checkpoint-backed
-services.
+selected complete checkpoint and skips live source inspection. Replay does
+not resolve source configuration that is unnecessary for source/shadow
+physical-overlap checks; connector pairs requiring those checks still resolve
+the relevant settings. The checkpoint identity is passed through the existing
+checkpoint-backed services, which do not fall back to live source reads.
 
 Each attempt receives a unique run ID and directory under the configured
 `runs/` path. Its versioned `run.json` is atomically updated after readiness
