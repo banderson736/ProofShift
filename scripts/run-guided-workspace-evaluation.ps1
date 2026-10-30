@@ -77,7 +77,11 @@ function Invoke-PackagedJson {
     try { return $text | ConvertFrom-Json }
     catch {
         $command = $Arguments -join " "
-        throw "Packaged workspace command '$command' did not return valid JSON; output omitted."
+        $parseExceptionType = $_.Exception.GetType().Name
+        $safeDiagnostic = $text -split '\r?\n' |
+            Where-Object { $_ -match '^\s*PS[A-Z0-9]+:' } | Select-Object -First 1
+        $diagnosticText = if ($safeDiagnostic) { " $($safeDiagnostic.Trim())" } else { "" }
+        throw "Packaged workspace command '$command' did not return valid JSON ($parseExceptionType).$diagnosticText Output omitted."
     }
 }
 

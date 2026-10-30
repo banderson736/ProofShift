@@ -77,8 +77,11 @@ public sealed class ByomFixtureContractTests
         Assert.Contains("scenarios/byom-public-works/database/postgres-shadow-target-schema.sql", smokeScript,
             StringComparison.Ordinal);
         Assert.Contains("run-byom-evaluation.ps1", smokeScript, StringComparison.Ordinal);
-        Assert.Contains("Packaged workspace command '$command' did not return valid JSON; output omitted.",
+        Assert.Contains("Packaged workspace command '$command' did not return valid JSON ($parseExceptionType).",
             workspaceRunner, StringComparison.Ordinal);
+        Assert.Contains("Where-Object { $_ -match '^\\s*PS[A-Z0-9]+:' }", workspaceRunner,
+            StringComparison.Ordinal);
+        Assert.Contains("Output omitted.", workspaceRunner, StringComparison.Ordinal);
 
         var defectiveVerification = runner.IndexOf("$defectiveShadowVerification = Invoke-ProductJson",
             StringComparison.Ordinal);

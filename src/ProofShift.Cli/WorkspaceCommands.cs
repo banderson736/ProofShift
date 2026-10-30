@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ProofShift.Connectors.Abstractions;
@@ -786,7 +787,14 @@ internal static class WorkspaceCommands
             InvalidDataException or InvalidOperationException or VerificationRuleException or RecoveryException or
             System.Text.Json.JsonException)
         {
-            Console.Error.WriteLine($"PSPLAN099: Workspace plan could not be generated ({exception.GetType().Name}); no configuration values were included.");
+            var failureLocation = new StackTrace(exception, false).GetFrames()?
+                .Select(frame => frame.GetMethod())
+                .FirstOrDefault(method => method?.DeclaringType?.Namespace?.StartsWith(
+                    "ProofShift.", StringComparison.Ordinal) == true);
+            var location = failureLocation is null
+                ? "unknown"
+                : $"{failureLocation.DeclaringType?.Name}.{failureLocation.Name}";
+            Console.Error.WriteLine($"PSPLAN099: Workspace plan could not be generated ({exception.GetType().Name} at {location}); no configuration values were included.");
             return 1;
         }
     }
