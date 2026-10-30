@@ -311,11 +311,12 @@ record](PS0_11G_PILOT_READINESS_ACCEPTANCE.md) and
 
 Out of scope: public release/tag/package publication, signing, self-contained/AOT publishing, installers, new connectors/packs, FHIR Bulk, UI/API/auth, production migration/rollback, AI authoring, assurance-engine/runtime-semantics changes, and unrelated refactoring.
 
-PS-0.11 is complete. PS-1.0A Customer Data Evaluation & Generalized Mapping
-Foundation is Accepted as recorded below. PS-1.0B Guided Customer Evaluation
-Workspace & Evidence Package is explicitly assigned and in progress. The
-provisional post-PS-0 roadmap remains provisional outside the accepted
-PS-1.0A scope and current PS-1.0B assignment.
+PS-0.11 is complete. PS-1.0A Customer Data Evaluation & Generalized Mapping Foundation is Accepted
+as recorded below. PS-1.0B Guided Customer Evaluation Workspace & Evidence
+Package is recorded below. The current explicit assignment is limited to
+PS-1.0C.5 repeatable pilot history and re-baselining, preserving the
+accumulated C.1-C.4 work; the provisional post-PS-0 roadmap remains
+provisional outside assigned scope.
 
 ## Commercial validation gate after PS-0 / during PS-0
 
@@ -433,7 +434,106 @@ run scratch. See the [architecture proposal](PS1_0B_GUIDED_CUSTOMER_EVALUATION.m
 [acceptance matrix](PS1_0B_ACCEPTANCE_MATRIX.md), and
 [ADR-0037](adr/0037-evaluation-workspace-manifest.md). PS-1.0B remains
 unaccepted pending explicit owner acceptance. Production migration/rollback
-remains unauthorized, and PS-1.0C has not started.
+remains unauthorized. PS-1.0C.1 baseline promotion/history, C.2 semantic-drift planning,
+C.3 baseline-aware execution/review/outcome comparison, C.4 portable
+governance packages/offline comparison, and assigned C.5 repeatable pilot
+history/re-baselining are complete locally; assigned C.6 final validation is
+in progress on the existing branch. PS-1.0D has not started.
+
+### PS-1.0C Repeatable Pilot Evaluation Baselines
+
+Status: **In Progress — C.1-C.5 implementation complete; assigned C.6 final
+acceptance validation in progress.** Work starts from
+merged PS-1.0B baseline `ef90706638e38bb770af4bb0e880011f67aa04f3`. C.1 adds
+explicit promotion of a completed run with its valid final Evidence package,
+immutable identity-only baseline records, fail-closed validation, inspection
+commands, active-baseline selection, and retained promotion history. It
+preserves `QUALIFIED` and `NOT QUALIFIED` exactly and does not imply that
+promotion endorses either outcome.
+
+C.2 extends `workspace plan` with read-only semantic comparison against the
+active baseline, an explicitly selected historical baseline, or no baseline.
+It reports deterministic categorized drift from the validated package plan
+and verified persisted discovery. Run-only identities and output-root changes
+are not semantic drift; configuration-binding changes are surfaced without
+printing resolved endpoint values. Required capability loss blocks; missing
+or stale persisted discovery is not comparable; other semantic changes
+require operator review. Planning does not execute a run, mutate/promote
+baselines, or persist review decisions.
+
+C.3 binds guided runs to the revalidated selected baseline and an execution-time
+canonical plan/drift recomputation. Immutable review records authorize only
+the exact review-required drift; insufficient historical comparison requires
+a distinct `ComparisonUnavailableAcknowledged` decision, while blocking or
+untrusted state remains non-overridable. Completed runs reuse B.5 comparison
+and persist an integrity-bound outcome record indexed by candidate run ID.
+Local summaries distinguish pre-run drift from post-run results, and
+incomplete runs remain `NotEstablished`. C.3 does not change B.3 runtime
+semantics or auto-promote a baseline.
+
+C.4 packages exact baseline, execution-time drift, review, and post-run
+comparison identities using optional allowlisted roles in the existing
+version-1 Evidence package. Summaries expose baseline-aware outcome deltas.
+Offline package comparison validates supplied packages and enforces the
+candidate's exact baseline binding, or explicitly labels unbound package
+pairs as ad hoc without inventing governance. Legacy packages remain valid.
+
+## C.5 repeatable pilot history and re-baselining
+
+`workspace runs` rebuilds run history from the validated workspace's run
+directories and authoritative manifests on each invocation. It does not
+persist a parallel run index. Manifest trust is distinct from package and
+comparison status; malformed or mismatched run directories are surfaced as
+untrusted entries, and artifact status is reported independently.
+
+Baseline progression records the prior active baseline and, when available,
+the comparison baseline and outcome established for the candidate run.
+Re-promoting the active run is idempotent and does not append another record;
+a run already held by a historical baseline is rejected rather than
+reactivated. Promotion remains explicit, preserves either disposition, and
+does not mutate earlier baseline records or evidence packages.
+
+`workspace init <destination> --from <source-workspace>` creates a new
+workspace from a structurally valid source by copying only the project
+configuration and referenced configuration files. It requires an empty or
+new destination outside the source tree, assigns a new workspace ID, and
+creates empty default runtime paths. Runs, baselines, reviews, Evidence,
+discovery, generated files, customer data, and scratch are not copied.
+Configuration references and secret-reference semantics are preserved
+without resolving secrets or transferring environment-specific execution
+state. Unsafe containment, overlap, runtime-directory references, and
+reparse-point traversal are rejected.
+
+The version-1 workspace manifest, run manifest, and Evidence package remain
+authoritative for their existing concerns. Baselines live in a fixed
+application-owned workspace directory and store fingerprints/references,
+not customer data or resolved secrets. See the [PS-1.0C scope](PS1_0C_EVALUATION_BASELINES.md),
+[acceptance matrix](PS1_0C_ACCEPTANCE_MATRIX.md), and
+[ADR-0038](adr/0038-evaluation-baseline-promotion-and-history.md).
+
+## C.6 final acceptance validation
+
+The assigned final-validation pass uses the extracted Linux package to prove
+the end-to-end baseline-governed operator lifecycle: persisted physical
+discovery, an explicit initial promotion, read-only schema drift detection,
+exact review binding, baseline-aware guided execution, offline package
+comparison, explicit re-baselining/history rules, and isolated
+configuration-only workspace derivation. Preflight validates all persisted
+discovery artifacts and compares only the latest artifact per endpoint with a
+fresh read-only observation, retaining earlier artifacts for historical
+baseline comparison.
+
+The existing CI gates must also prove the source/destination symlink cases on
+a capable runner, the complete test suite, exact candidate SHA/tree identity,
+reproducible Linux and Windows packages, Windows package-only smoke, and all
+Linux packaged Docker demos. Windows evidence remains package-only; Linux
+evidence remains limited to packaged Docker evaluation. The packaged workflow
+uses synthetic data and test containers only.
+
+Status: **In Progress — exact candidate, extracted-package Docker rehearsal,
+reproducible package/CI evidence, and explicit owner acceptance pending.**
+No PS-1.0C acceptance is claimed. PS-1.0D, production migration/rollback,
+publication, tagging, and signing remain unauthorized.
 
 ### Potential future product areas (unassigned)
 

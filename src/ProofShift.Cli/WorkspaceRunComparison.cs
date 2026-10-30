@@ -56,6 +56,51 @@ internal static class WorkspaceRunComparisonService
         if (before.Run.WorkspaceId != after.Run.WorkspaceId)
             throw new InvalidOperationException("Workspace runs must belong to the same workspace.");
 
+        return Compare(before, after);
+    }
+
+    public static async Task<WorkspaceRunComparison> CompareBaselineAsync(string workspaceDirectory,
+        Guid baselineId, string candidateRunReference, CancellationToken cancellationToken)
+    {
+        var root = Path.GetFullPath(workspaceDirectory);
+        var validation = await EvaluationWorkspaceManifestStore.ValidateAsync(root).ConfigureAwait(false);
+        if (!validation.Valid)
+            throw new InvalidDataException("Workspace must pass offline structural validation before comparing runs.");
+        var workspace = await EvaluationWorkspaceManifestStore.ReadAsync(root).ConfigureAwait(false)
+            ?? throw new InvalidDataException("Workspace manifest is unavailable.");
+        var baselinePlan = await WorkspaceBaselineService.ReadPlanAsync(root, baselineId.ToString("D"),
+            cancellationToken).ConfigureAwait(false)
+            ?? throw new FileNotFoundException("The selected baseline does not exist.", baselineId.ToString("D"));
+        var baseline = baselinePlan.Baseline;
+        var manifestRelativePath = baseline.RunManifestRelativePath ??
+            Path.Combine(workspace.Paths.Runs, baseline.RunId.ToString("D"), "run.json")
+                .Replace(Path.DirectorySeparatorChar, '/');
+        var manifestPath = ResolveContained(root, manifestRelativePath);
+        EnsureNoReparsePoints(root, manifestPath);
+        var baselineRunDirectory = Path.GetDirectoryName(manifestPath)
+            ?? throw new InvalidDataException("Baseline run directory is unavailable.");
+        var beforeRun = await WorkspaceRunManifestStore.ReadAsync(baselineRunDirectory, cancellationToken)
+            .ConfigureAwait(false);
+        if (beforeRun.WorkspaceId != workspace.WorkspaceId || beforeRun.RunId != baseline.RunId ||
+            beforeRun.IdentityFingerprint != baseline.RunManifestIdentityFingerprint ||
+            beforeRun.ManifestHash != baseline.RunManifestHash ||
+            beforeRun.Disposition != baseline.Disposition)
+            throw new InvalidDataException("Baseline run no longer matches its retained identity.");
+        var beforeEvidence = await WorkspaceEvaluationSummaryService.ReadEvidenceAsync(baselineRunDirectory,
+            beforeRun, cancellationToken).ConfigureAwait(false);
+        var after = await LoadAsync(root, workspace, candidateRunReference, cancellationToken).ConfigureAwait(false);
+        return Compare(new RunEvidenceSnapshot(beforeRun, beforeEvidence), after);
+    }
+
+    internal static WorkspaceRunComparison ComparePackagedRuns(WorkspaceRunManifest beforeRun,
+        WorkspaceEvaluationEvidence beforeEvidence, WorkspaceRunManifest afterRun,
+        WorkspaceEvaluationEvidence afterEvidence) =>
+        Compare(new RunEvidenceSnapshot(beforeRun, beforeEvidence), new RunEvidenceSnapshot(afterRun, afterEvidence));
+
+    private static WorkspaceRunComparison Compare(RunEvidenceSnapshot before, RunEvidenceSnapshot after)
+    {
+        if (before.Run.WorkspaceId != after.Run.WorkspaceId)
+            throw new InvalidOperationException("Workspace runs must belong to the same workspace.");
         var findingDeltas = CompareFindings(before.Evidence.Findings, after.Evidence.Findings);
         var expectedDeltas = CompareExpectedExceptions(before.Evidence.ExpectedExceptions, after.Evidence.ExpectedExceptions);
         var addedDiscovery = after.Run.DiscoveryFingerprints.Except(before.Run.DiscoveryFingerprints, StringComparer.Ordinal)
@@ -96,6 +141,15 @@ internal static class WorkspaceRunComparisonService
             addedDiscovery, removedDiscovery, findingDeltas, reconciliationAdded, reconciliationResolved,
             expectedDeltas, !materializedBefore && materializedAfter, materializedBefore && !materializedAfter,
             SameDispositionImpliesEquivalent: false, semanticallyEquivalent);
+    }
+
+    private static string ResolveContained(string root, string relative)
+    {
+        var fullRoot = Path.GetFullPath(root);
+        var fullPath = Path.GetFullPath(Path.Combine(fullRoot, relative.Replace('/', Path.DirectorySeparatorChar)));
+        if (!IsContained(fullRoot, fullPath))
+            throw new InvalidDataException("Baseline run manifest is outside the workspace.");
+        return fullPath;
     }
 
     private static async Task<RunEvidenceSnapshot> LoadAsync(string root, EvaluationWorkspaceManifest workspace,

@@ -37,6 +37,7 @@ internal sealed record WorkspaceEvidencePackageManifest
     public string? PlanFingerprint { get; init; }
     public required string ExecutionState { get; init; }
     public string? Disposition { get; init; }
+    public string? GovernanceFormat { get; init; }
     public required IReadOnlyList<WorkspaceEvidencePackageArtifact> Artifacts { get; init; }
     public string PackageIdentity { get; set; } = string.Empty;
     public string ManifestIntegrityHash { get; set; } = string.Empty;
@@ -52,7 +53,20 @@ internal sealed record WorkspaceEvidencePackageValidation(
     int EmbeddedArtifactCount,
     int ExternalReferenceCount,
     int OmittedArtifactCount,
-    IReadOnlyList<string> Failures);
+    IReadOnlyList<string> Failures)
+{
+    [JsonIgnore]
+    public string? RunManifestIdentityFingerprint { get; init; }
+
+    [JsonIgnore]
+    public string? RunManifestHash { get; init; }
+
+    [JsonIgnore]
+    public string? ProductVersion { get; init; }
+
+    [JsonIgnore]
+    public string? PlanFingerprint { get; init; }
+}
 
 internal sealed record WorkspaceEvidencePackageCreation(
     string PackagePath,
@@ -65,6 +79,16 @@ internal sealed record WorkspaceEvidencePackageCreation(
     int EmbeddedArtifactCount,
     int ExternalReferenceCount,
     int OmittedArtifactCount);
+
+internal sealed record WorkspaceEvidencePackageSnapshot(
+    WorkspaceEvidencePackageManifest Manifest,
+    WorkspaceRunManifest Run,
+    WorkspaceEvaluationPlan Plan,
+    WorkspaceEvaluationEvidence Evidence,
+    WorkspaceBaselineRecord? Baseline,
+    WorkspaceSemanticDriftArtifact? SemanticDrift,
+    WorkspacePlanReviewRecord? Review,
+    WorkspaceBaselineComparisonRecord? BaselineComparison);
 
 internal static class WorkspaceEvidencePackageService
 {
@@ -86,6 +110,12 @@ internal static class WorkspaceEvidencePackageService
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+    private static readonly JsonSerializerOptions PlanReadOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
     };
 
     public static async Task<WorkspaceEvidencePackageCreation> CreateAsync(string workspaceDirectory,
@@ -150,8 +180,69 @@ internal static class WorkspaceEvidencePackageService
         candidates.Add(PackageArtifactSource.FromBytes("effective-plan", "artifacts/effective-plan.json",
             JsonSerializer.SerializeToUtf8Bytes(plan, JsonOptions),
             "Safe effective plan regenerated from the workspace and matched to the run fingerprint.", required: true));
+        WorkspaceBaselineRecord? baselineRecord = null;
+        WorkspaceSemanticDriftArtifact? driftArtifact = null;
+        WorkspacePlanReviewRecord? reviewRecord = null;
+        WorkspaceBaselineComparisonRecord? baselineComparison = null;
+        if (run.BaselineId is { } baselineId && run.SemanticDriftArtifactReference is not null)
+        {
+            var baselinePlan = await WorkspaceBaselineService.ReadPlanAsync(root, baselineId.ToString("D"),
+                cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidDataException("Run's selected baseline is unavailable.");
+            baselineRecord = baselinePlan.Baseline;
+            candidates.Add(PackageArtifactSource.FromBytes("baseline-reference",
+                "artifacts/governance/baseline.json",
+                WorkspaceBaselineService.SerializeBaselineRecord(baselineRecord),
+                "Minimal integrity-verified baseline identity and promotion reference; historical Evidence is not copied.",
+                required: true));
+
+            if (run.PreRunSemanticDriftIdentityFingerprint is null ||
+                run.SemanticDriftArtifactIntegrityHash is null)
+                throw new InvalidDataException("Baseline-bound run has an incomplete semantic-drift artifact binding.");
+            driftArtifact = await WorkspaceSemanticDriftArtifactStore.ReadAsync(root,
+                run.SemanticDriftArtifactReference, run.WorkspaceId, run.RunId,
+                run.PreRunSemanticDriftIdentityFingerprint, run.SemanticDriftArtifactIntegrityHash,
+                cancellationToken).ConfigureAwait(false);
+            candidates.Add(PackageArtifactSource.FromBytes("pre-run-semantic-drift",
+                "artifacts/governance/semantic-drift.json",
+                WorkspaceSemanticDriftArtifactStore.Serialize(driftArtifact),
+                "Exact pre-run semantic-drift result used for execution and review.", required: true));
+
+            if (run.ReviewRecordId is not null)
+            {
+                reviewRecord = await WorkspacePlanReviewService.ReadForPackagingAsync(root, run,
+                    cancellationToken).ConfigureAwait(false);
+                candidates.Add(PackageArtifactSource.FromBytes("plan-review",
+                    "artifacts/governance/plan-review.json",
+                    WorkspacePlanReviewService.SerializeRecord(reviewRecord),
+                    "Exact immutable review or comparison-unavailable acknowledgement bound to the run.", required: true));
+            }
+            else if (run.ReviewDecision is "Reviewed" or "ComparisonUnavailableAcknowledged")
+            {
+                throw new InvalidDataException("Run has a review decision but no review-record identity.");
+            }
+
+            if (run.State == "Completed")
+            {
+                baselineComparison = await WorkspaceBaselineComparisonService.ReadAsync(root, run.RunId, run,
+                    cancellationToken).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("Completed baseline-bound run has no authoritative post-run comparison.");
+                candidates.Add(PackageArtifactSource.FromBytes("baseline-outcome-comparison",
+                    "artifacts/governance/outcome-comparison.json",
+                    WorkspaceBaselineComparisonService.Serialize(baselineComparison),
+                    "Authoritative B.5 comparison outcome already persisted for the completed candidate run.",
+                    required: true));
+            }
+        }
+        else if (run.BaselineId is not null && run.State == "Completed" &&
+                 run.Disposition is "QUALIFIED" or "NOT QUALIFIED")
+        {
+            throw new InvalidDataException("Completed baseline-bound run predates persisted C.4 drift evidence and cannot be repackaged as a governed evaluation.");
+        }
+
         var summaryContent = await WorkspaceEvaluationSummaryService.CreateContentAsync(runDirectory, run, plan,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken, includeBaselineOutcome: run.BaselineId is not null,
+            baselineComparison: baselineComparison, baselineRecord: baselineRecord).ConfigureAwait(false);
         var summaryPath = Path.Combine(runDirectory, "summary.md");
         if (File.Exists(summaryPath) &&
             !string.Equals(await File.ReadAllTextAsync(summaryPath, cancellationToken).ConfigureAwait(false),
@@ -300,6 +391,7 @@ internal static class WorkspaceEvidencePackageService
             PlanFingerprint = run.PlanFingerprint,
             ExecutionState = run.State,
             Disposition = run.Disposition,
+            GovernanceFormat = baselineRecord is null ? null : "proofshift-baseline-governance-package-v1",
             Artifacts = artifactDeclarations
                 .OrderBy(item => item.Role, StringComparer.Ordinal)
                 .ThenBy(item => item.Path, StringComparer.Ordinal)
@@ -394,6 +486,7 @@ internal static class WorkspaceEvidencePackageService
 
             if (manifest is null || manifest.Format != WorkspaceEvidencePackageManifest.CurrentFormat ||
                 manifest.RunId == Guid.Empty || manifest.PackageType is not ("final" or "diagnostic") ||
+                manifest.GovernanceFormat is not (null or "proofshift-baseline-governance-package-v1") ||
                 manifest.Artifacts is null || manifest.ManifestIntegrityHash is null ||
                 manifest.PackageIdentity is null || manifest.ManifestIntegrityHash.Length != 64 ||
                 manifest.PackageIdentity.Length != 64 || manifest.Artifacts.Count > MaximumArtifactCount ||
@@ -485,7 +578,13 @@ internal static class WorkspaceEvidencePackageService
                 manifest.RunId, manifest.PackageType, manifest.ExecutionState, manifest.Disposition,
                 manifest.Artifacts.Count(item => item.Classification == "embedded"),
                 manifest.Artifacts.Count(item => item.Classification == "external-reference"),
-                manifest.Artifacts.Count(item => item.Classification == "omitted"), failures);
+                manifest.Artifacts.Count(item => item.Classification == "omitted"), failures)
+            {
+                RunManifestIdentityFingerprint = manifest.RunManifestIdentityFingerprint,
+                RunManifestHash = manifest.RunManifestHash,
+                ProductVersion = manifest.ProductVersion,
+                PlanFingerprint = manifest.PlanFingerprint
+            };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -508,6 +607,96 @@ internal static class WorkspaceEvidencePackageService
                 artifacts.Count(item => item?.Classification == "external-reference"),
                 artifacts.Count(item => item?.Classification == "omitted"), issues);
         }
+    }
+
+    public static async Task<WorkspaceEvaluationPlan> ReadValidatedEffectivePlanAsync(string packagePath,
+        CancellationToken cancellationToken)
+    {
+        var validation = await ValidateAsync(packagePath, cancellationToken).ConfigureAwait(false);
+        if (!validation.Valid || validation.PackageType != "final")
+            throw new InvalidDataException("A valid final evidence package is required to read its effective plan.");
+
+        await using var package = new FileStream(Path.GetFullPath(packagePath), FileMode.Open, FileAccess.Read,
+            FileShare.Read, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var zip = new ZipArchive(package, ZipArchiveMode.Read, leaveOpen: false);
+        var manifestEntry = zip.GetEntry(PackageManifestName)
+            ?? throw new InvalidDataException("Evidence package manifest is missing.");
+        var manifestBytes = await ReadEntryAsync(manifestEntry, MaximumManifestLength, cancellationToken)
+            .ConfigureAwait(false);
+        var manifest = JsonSerializer.Deserialize<WorkspaceEvidencePackageManifest>(manifestBytes, JsonOptions)
+            ?? throw new InvalidDataException("Evidence package manifest is empty.");
+        var planArtifact = manifest.Artifacts.SingleOrDefault(item => item.Role == "effective-plan");
+        if (planArtifact?.Path is null)
+            throw new InvalidDataException("Evidence package has no embedded effective plan.");
+        var planEntry = zip.GetEntry(planArtifact.Path)
+            ?? throw new InvalidDataException("Evidence package effective plan is missing.");
+        return JsonSerializer.Deserialize<WorkspaceEvaluationPlan>(
+                   await ReadEntryAsync(planEntry, MaximumManifestLength, cancellationToken).ConfigureAwait(false),
+                   PlanReadOptions)
+               ?? throw new InvalidDataException("Evidence package effective plan is empty.");
+    }
+
+    internal static async Task<WorkspaceEvidencePackageSnapshot> ReadValidatedSnapshotAsync(string packagePath,
+        CancellationToken cancellationToken)
+    {
+        var validation = await ValidateAsync(packagePath, cancellationToken).ConfigureAwait(false);
+        if (!validation.Valid || validation.PackageType != "final")
+            throw new InvalidDataException("Offline package comparison requires an integrity-valid final Evidence package.");
+
+        await using var package = new FileStream(Path.GetFullPath(packagePath), FileMode.Open, FileAccess.Read,
+            FileShare.Read, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var zip = new ZipArchive(package, ZipArchiveMode.Read, leaveOpen: false);
+        var manifestEntry = zip.GetEntry(PackageManifestName)
+            ?? throw new InvalidDataException("Evidence package manifest is missing.");
+        var manifest = JsonSerializer.Deserialize<WorkspaceEvidencePackageManifest>(
+            await ReadEntryAsync(manifestEntry, MaximumManifestLength, cancellationToken).ConfigureAwait(false),
+            JsonOptions) ?? throw new InvalidDataException("Evidence package manifest is empty.");
+
+        async Task<byte[]> ReadArtifactAsync(string role)
+        {
+            var artifact = manifest.Artifacts.SingleOrDefault(item => item.Role == role)
+                ?? throw new InvalidDataException($"Evidence package is missing required artifact: {role}.");
+            var entry = zip.GetEntry(artifact.Path!)
+                ?? throw new InvalidDataException($"Evidence package artifact is missing: {role}.");
+            return await ReadEntryAsync(entry, MaximumManifestLength, cancellationToken).ConfigureAwait(false);
+        }
+
+        var run = WorkspaceRunManifestStore.ReadAndValidate(await ReadArtifactAsync("run-manifest")
+            .ConfigureAwait(false));
+        var plan = JsonSerializer.Deserialize<WorkspaceEvaluationPlan>(
+            await ReadArtifactAsync("effective-plan").ConfigureAwait(false), PlanReadOptions)
+            ?? throw new InvalidDataException("Evidence package effective plan is empty.");
+        WorkspaceEvaluationEvidence evidence;
+        if (manifest.Artifacts.SingleOrDefault(item => item.Role == "evidence-records") is { Path: { } evidencePath })
+        {
+            var evidenceEntry = zip.GetEntry(evidencePath)
+                ?? throw new InvalidDataException("Evidence records are missing.");
+            await using var evidenceStream = evidenceEntry.Open();
+            evidence = await WorkspaceEvaluationSummaryService.ReadPackagedEvidenceAsync(evidenceStream, run,
+                cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            evidence = new([], [], null);
+        }
+
+        var baseline = manifest.GovernanceFormat is null ? null :
+            WorkspaceBaselineService.ValidatePackagedBaselineRecord(await ReadArtifactAsync("baseline-reference")
+                .ConfigureAwait(false), run);
+        var drift = manifest.GovernanceFormat is null ? null :
+            WorkspaceSemanticDriftArtifactStore.ValidatePackagedArtifact(
+                await ReadArtifactAsync("pre-run-semantic-drift").ConfigureAwait(false), run);
+        var review = manifest.Artifacts.Any(item => item.Role == "plan-review")
+            ? WorkspacePlanReviewService.ValidatePackagedReviewRecord(
+                await ReadArtifactAsync("plan-review").ConfigureAwait(false), run)
+            : null;
+        var comparison = manifest.Artifacts.Any(item => item.Role == "baseline-outcome-comparison")
+            ? WorkspaceBaselineComparisonService.ValidatePackagedRecord(
+                await ReadArtifactAsync("baseline-outcome-comparison").ConfigureAwait(false), run,
+                baseline ?? throw new InvalidDataException("Baseline comparison has no governance baseline reference."))
+            : null;
+        return new WorkspaceEvidencePackageSnapshot(manifest, run, plan, evidence, baseline, drift, review,
+            comparison);
     }
 
     private static async Task ValidateEmbeddedSemanticsAsync(WorkspaceEvidencePackageManifest package,
@@ -645,6 +834,104 @@ internal static class WorkspaceEvidencePackageService
 
         await ValidateProjectionAsync(run, package, entries, failures, cancellationToken).ConfigureAwait(false);
         await ValidateRecoveryAsync(run, package, entries, failures, cancellationToken).ConfigureAwait(false);
+        await ValidateGovernanceArtifactsAsync(run, package, entries, failures, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task ValidateGovernanceArtifactsAsync(WorkspaceRunManifest run,
+        WorkspaceEvidencePackageManifest package, Dictionary<string, ZipArchiveEntry> entries,
+        List<string> failures, CancellationToken cancellationToken)
+    {
+        var governanceRoles = package.Artifacts.Where(item => item.Role is "baseline-reference" or
+            "pre-run-semantic-drift" or "plan-review" or "baseline-outcome-comparison").ToArray();
+        if (package.GovernanceFormat is null)
+        {
+            if (governanceRoles.Length > 0 || run.SemanticDriftArtifactReference is not null)
+                failures.Add("Baseline governance artifacts are present without the supported governance package format.");
+            return;
+        }
+        if (package.GovernanceFormat != "proofshift-baseline-governance-package-v1" ||
+            run.BaselineId is null || run.SemanticDriftArtifactReference is null)
+        {
+            failures.Add("Baseline governance package format does not match the candidate run.");
+            return;
+        }
+
+        var baselineBytes = await ReadGovernanceArtifactAsync("baseline-reference",
+            "artifacts/governance/baseline.json").ConfigureAwait(false);
+        var baseline = WorkspaceBaselineService.ValidatePackagedBaselineRecord(baselineBytes, run);
+        var driftBytes = await ReadGovernanceArtifactAsync("pre-run-semantic-drift",
+            "artifacts/governance/semantic-drift.json").ConfigureAwait(false);
+        var drift = WorkspaceSemanticDriftArtifactStore.ValidatePackagedArtifact(driftBytes, run);
+        if (drift.IntegrityHash != run.SemanticDriftArtifactIntegrityHash ||
+            drift.DriftIdentityFingerprint != run.PreRunSemanticDriftIdentityFingerprint)
+            failures.Add("Packaged semantic-drift identity does not match the run manifest.");
+
+        var reviewArtifact = package.Artifacts.SingleOrDefault(item => item.Role == "plan-review");
+        if (run.ReviewRecordId is null)
+        {
+            if (reviewArtifact is not null || run.ReviewDecision is "Reviewed" or "ComparisonUnavailableAcknowledged")
+                failures.Add("Run review state has no matching packaged review record.");
+        }
+        else
+        {
+            var reviewBytes = await ReadGovernanceArtifactAsync("plan-review",
+                "artifacts/governance/plan-review.json").ConfigureAwait(false);
+            WorkspacePlanReviewService.ValidatePackagedReviewRecord(reviewBytes, run);
+        }
+
+        var comparisonArtifact = package.Artifacts.SingleOrDefault(item =>
+            item.Role == "baseline-outcome-comparison");
+        if (run.State == "Completed")
+        {
+            if (comparisonArtifact is null)
+            {
+                failures.Add("Completed baseline-bound run has no packaged post-run comparison.");
+                return;
+            }
+            var comparisonBytes = await ReadGovernanceArtifactAsync("baseline-outcome-comparison",
+                "artifacts/governance/outcome-comparison.json").ConfigureAwait(false);
+            var comparison = WorkspaceBaselineComparisonService.ValidatePackagedRecord(comparisonBytes, run, baseline);
+            var summary = await ReadSummaryTextAsync().ConfigureAwait(false);
+            var summaryOutcome = run.PreRunSemanticDriftStatus == WorkspaceSemanticDriftStatus.NotComparable.ToString()
+                ? "NotComparable"
+                : comparison.OutcomeClassification;
+            if (!summary.Contains($"- Post-run outcome: **{summaryOutcome}**.", StringComparison.Ordinal) ||
+                !summary.Contains($"- Baseline: `{baseline.BaselineId:D}`;", StringComparison.Ordinal))
+                failures.Add("Packaged summary baseline outcome or identity does not match the governance artifacts.");
+            if (summaryOutcome == "NotComparable" &&
+                !summary.Contains("Baseline comparison was not fully available", StringComparison.Ordinal))
+                failures.Add("Packaged summary omits the unavailable-comparison boundary.");
+        }
+        else if (comparisonArtifact is not null)
+        {
+            failures.Add("Incomplete diagnostic run must not claim a post-run business comparison.");
+        }
+        else
+        {
+            var summary = await ReadSummaryTextAsync().ConfigureAwait(false);
+            if (!summary.Contains("- Final business disposition: **not established**.", StringComparison.Ordinal) ||
+                !summary.Contains("- Post-run outcome: **NotEstablished**.", StringComparison.Ordinal))
+                failures.Add("Incomplete diagnostic package summary claims a business disposition or outcome.");
+        }
+
+        async Task<byte[]> ReadGovernanceArtifactAsync(string role, string expectedPath)
+        {
+            var artifact = package.Artifacts.SingleOrDefault(item => item.Role == role);
+            if (artifact?.Path != expectedPath || !entries.TryGetValue(expectedPath, out var entry))
+                throw new InvalidDataException($"Required packaged governance artifact is missing or misplaced: {role}.");
+            return await ReadEntryAsync(entry, MaximumManifestLength, cancellationToken).ConfigureAwait(false);
+        }
+
+        async Task<string> ReadSummaryTextAsync()
+        {
+            var summaryArtifact = package.Artifacts.SingleOrDefault(item =>
+                item.Role == WorkspaceEvaluationSummaryService.SummaryRole);
+            if (summaryArtifact?.Path is null || !entries.TryGetValue(summaryArtifact.Path, out var entry))
+                throw new InvalidDataException("Packaged governance summary is missing.");
+            return Encoding.UTF8.GetString(await ReadEntryAsync(entry, MaximumManifestLength, cancellationToken)
+                .ConfigureAwait(false));
+        }
     }
 
     private static async Task ValidateProjectionAsync(WorkspaceRunManifest run, WorkspaceEvidencePackageManifest package,
@@ -728,6 +1015,9 @@ internal static class WorkspaceEvidencePackageService
             return new("embedded", true);
         if (role == WorkspaceEvaluationSummaryService.SummaryRole)
             return new("embedded", true);
+        if (role is "baseline-reference" or "pre-run-semantic-drift" or "plan-review" or
+            "baseline-outcome-comparison")
+            return new("embedded", true);
         if (RecoveryArtifactNames.Any(name =>
                 role == $"recovery-{Path.GetFileNameWithoutExtension(name)}"))
             return new("embedded", true);
@@ -770,7 +1060,8 @@ internal static class WorkspaceEvidencePackageService
         var identity = new PackageIdentityInput(manifest.Format, manifest.PackageType, manifest.RunId,
             manifest.RunManifestIdentityFingerprint, manifest.RunManifestHash, manifest.ProductVersion,
             manifest.SourceRevision, manifest.SourceTree, manifest.PlanFingerprint, manifest.ExecutionState,
-            manifest.Disposition, manifest.Artifacts.OrderBy(item => item.Role, StringComparer.Ordinal)
+            manifest.Disposition, manifest.GovernanceFormat,
+            manifest.Artifacts.OrderBy(item => item.Role, StringComparer.Ordinal)
                 .ThenBy(item => item.Path, StringComparer.Ordinal).ToArray());
         return Hash(JsonSerializer.SerializeToUtf8Bytes(identity, JsonOptions));
     }
@@ -959,6 +1250,7 @@ internal static class WorkspaceEvidencePackageService
         string? PlanFingerprint,
         string ExecutionState,
         string? Disposition,
+        string? GovernanceFormat,
         IReadOnlyList<WorkspaceEvidencePackageArtifact> Artifacts);
 
     private sealed record RecoveryManifestIdentity(string Format, string DryRunId, JsonElement Files, string? IntegrityHash);

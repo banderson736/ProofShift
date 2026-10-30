@@ -890,6 +890,16 @@ if (-not $PackageOnly -and $ExpectedPlatform -eq "linux-x64") {
     if ($scenarioResults.Count -ne 5 -or $null -eq $byomEvaluation -or $byomEvaluation.status -ne "PASS") {
         throw "Pilot rehearsal result requires all five packaged demos and a passed BYOM rehearsal."
     }
+    $guidedWorkspaceEvaluation = $byomEvaluation.guidedWorkspaceEvaluation
+    if ($null -eq $guidedWorkspaceEvaluation -or $guidedWorkspaceEvaluation.status -ne "PASS" -or
+        $guidedWorkspaceEvaluation.baselineGovernedCandidateOutcome -ne "ChangedStillQualified" -or
+        $guidedWorkspaceEvaluation.offlineBaselineGovernedComparison -ne "BaselineGoverned" -or
+        $guidedWorkspaceEvaluation.baselineHistoryCount -ne 2 -or
+        -not $guidedWorkspaceEvaluation.physicalSchemaDriftReviewed -or
+        -not $guidedWorkspaceEvaluation.derivedWorkspaceConfigurationReused -or
+        $guidedWorkspaceEvaluation.derivedWorkspaceRuntimeStateCopied) {
+        throw "Packaged pilot result does not prove baseline-governed drift review, comparison, progression, and isolated derivation."
+    }
     if (-not $byomEvaluation.sourceOfflineProven -or -not $byomEvaluation.readOnlyTargetProven -or
         $byomEvaluation.targetMutationDetected -or $byomEvaluation.projectionArtifactsDetected -or
         $byomEvaluation.recoveryArtifactsDetected) {
@@ -935,6 +945,7 @@ if (-not $PackageOnly -and $ExpectedPlatform -eq "linux-x64") {
         documentedCommandsValidated = $true
         byom = [ordered]@{
             sourceArtifacts = $byomEvaluation.sourceArtifacts
+            guidedWorkspaceEvaluation = $guidedWorkspaceEvaluation
             shadowSourceArtifacts = $byomEvaluation.shadowSourceArtifacts
             shadowCheckpointId = $byomEvaluation.shadowCheckpointId
             shadowCheckpointSourceFingerprint = $byomEvaluation.shadowCheckpointSourceFingerprint

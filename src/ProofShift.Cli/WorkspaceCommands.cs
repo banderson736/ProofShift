@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ProofShift.Connectors.Abstractions;
 using ProofShift.Projection;
 using ProofShift.Recovery;
@@ -33,13 +34,236 @@ internal static class WorkspaceCommands
             "validate" => await ValidateAsync(args).ConfigureAwait(false),
             "preflight" => await PreflightAsync(args).ConfigureAwait(false),
             "plan" => await PlanAsync(args).ConfigureAwait(false),
+            "review-plan" => await ReviewPlanAsync(args).ConfigureAwait(false),
             "run" => await RunEvaluationAsync(args).ConfigureAwait(false),
             "evidence" => await EvidenceAsync(args).ConfigureAwait(false),
+            "baseline" => await BaselineAsync(args).ConfigureAwait(false),
             "summary" => await SummaryAsync(args).ConfigureAwait(false),
             "compare" => await CompareAsync(args).ConfigureAwait(false),
             "cleanup" => await CleanupAsync(args).ConfigureAwait(false),
+            "runs" => await RunsAsync(args).ConfigureAwait(false),
             _ => WriteUsageAndReturn()
         };
+    }
+
+    private static async Task<int> BaselineAsync(string[] args)
+    {
+        if (args.Length < 4)
+        {
+            WriteUsage();
+            return 2;
+        }
+
+        var operation = args[2];
+        var minimumLength = operation is "promote" or "show" ? 5 : 4;
+        var maximumLength = minimumLength + 1;
+        if (args.Length < minimumLength || args.Length > maximumLength ||
+            (args.Length == maximumLength && args[^1] != "--json"))
+        {
+            WriteUsage();
+            return 2;
+        }
+
+        try
+        {
+            switch (operation)
+            {
+                case "promote":
+                {
+                    var promotion = await WorkspaceBaselineService.PromoteAsync(args[3], args[4],
+                        CancellationToken.None).ConfigureAwait(false);
+                    WriteBaseline(promotion.Baseline, args.Length == maximumLength,
+                        promotion.Created ? "Baseline promoted" : "Baseline already active",
+                        promotion.Created ? "Promoted" : "AlreadyActive");
+                    return 0;
+                }
+                case "list":
+                {
+                    var baselines = await WorkspaceBaselineService.ListAsync(args[3], CancellationToken.None)
+                        .ConfigureAwait(false);
+                    Guid? activeBaselineId = baselines.Count == 0
+                        ? null
+                        : baselines[baselines.Count - 1].BaselineId;
+                    if (args.Length == maximumLength)
+                    {
+                        var history = new JsonArray();
+                        foreach (var baseline in baselines)
+                        {
+                            var item = JsonSerializer.SerializeToNode(baseline, JsonOptions)?.AsObject()
+                                ?? throw new InvalidDataException("Baseline history record could not be serialized.");
+                            item["isActive"] = baseline.BaselineId == activeBaselineId;
+                            history.Add(item);
+                        }
+                        Console.WriteLine(history.ToJsonString(JsonOptions));
+                    }
+                    else
+                    {
+                        Console.WriteLine("ProofShift Evaluation Baseline History");
+                        if (baselines.Count == 0)
+                            Console.WriteLine("No baselines have been promoted.");
+                        foreach (var baseline in baselines)
+                            Console.WriteLine($"{baseline.BaselineId:D} run={baseline.RunId:D} disposition={baseline.Disposition} " +
+                                $"promoted={baseline.PromotedAt:O} previous={baseline.PreviousActiveBaselineId?.ToString("D") ?? "none"} " +
+                                $"comparison={baseline.PromotionComparisonOutcomeClassification ?? "not recorded"} " +
+                                $"status={(baseline.BaselineId == activeBaselineId ? "active" : "historical")}");
+                    }
+                    return 0;
+                }
+                case "show":
+                {
+                    var baseline = await WorkspaceBaselineService.ShowAsync(args[3], args[4],
+                        CancellationToken.None).ConfigureAwait(false);
+                    WriteBaseline(baseline, args.Length == maximumLength, "Baseline");
+                    return 0;
+                }
+                case "active":
+                {
+                    var baseline = await WorkspaceBaselineService.ActiveAsync(args[3], CancellationToken.None)
+                        .ConfigureAwait(false);
+                    if (args.Length == maximumLength)
+                        Console.WriteLine(JsonSerializer.Serialize(baseline, JsonOptions));
+                    else if (baseline is null)
+                        Console.WriteLine("No active baseline is selected.");
+                    else
+                        WriteBaseline(baseline, jsonOutput: false, "Active baseline");
+                    return 0;
+                }
+                default:
+                    WriteUsage();
+                    return 2;
+            }
+        }
+        catch (WorkspaceBaselineAlreadyPromotedException exception)
+        {
+            Console.Error.WriteLine($"PSWORKBASE098: {exception.Message}");
+            return 1;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+            ArgumentException or InvalidOperationException or InvalidDataException or JsonException)
+        {
+            Console.Error.WriteLine($"PSWORKBASE099: Baseline operation failed ({exception.GetType().Name}).");
+            return 1;
+        }
+    }
+
+    private static void WriteBaseline(WorkspaceBaselineRecord baseline, bool jsonOutput, string heading,
+        string? promotionStatus = null)
+    {
+        if (jsonOutput)
+        {
+            var value = JsonSerializer.SerializeToNode(baseline, JsonOptions)?.AsObject()
+                ?? throw new InvalidDataException("Baseline record could not be serialized.");
+            if (promotionStatus is not null)
+                value["promotionStatus"] = promotionStatus;
+            Console.WriteLine(value.ToJsonString(JsonOptions));
+            return;
+        }
+        Console.WriteLine($"ProofShift {heading}");
+        Console.WriteLine($"Baseline: {baseline.BaselineId:D}");
+        Console.WriteLine($"Run: {baseline.RunId:D}");
+        Console.WriteLine($"Disposition: {baseline.Disposition}");
+        Console.WriteLine($"Promoted: {baseline.PromotedAt:O}");
+        Console.WriteLine($"Plan fingerprint: {baseline.EffectivePlanFingerprint}");
+        Console.WriteLine($"Evidence package identity: {baseline.EvidencePackageIdentity}");
+        Console.WriteLine($"Previous active baseline: {baseline.PreviousActiveBaselineId?.ToString("D") ?? "none"}");
+        if (baseline.PromotionComparisonBaselineId is { } comparisonBaseline)
+            Console.WriteLine($"Outcome before promotion: {baseline.PromotionComparisonOutcomeClassification} vs {comparisonBaseline:D}");
+        Console.WriteLine("Promotion records the run outcome; it does not change or endorse that disposition.");
+    }
+
+    private static async Task<int> RunsAsync(string[] args)
+    {
+        if (args.Length is not (3 or 4) ||
+            args.Length == 4 && !string.Equals(args[3], "--json", StringComparison.OrdinalIgnoreCase))
+        {
+            WriteUsage();
+            return 2;
+        }
+
+        try
+        {
+            var runs = await WorkspaceRunHistoryService.ListAsync(args[2], CancellationToken.None)
+                .ConfigureAwait(false);
+            if (args.Length == 4)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(runs, JsonOptions));
+                return 0;
+            }
+
+            Console.WriteLine("ProofShift Workspace Run History");
+            if (runs.Count == 0)
+                Console.WriteLine("No workspace runs were found.");
+            foreach (var run in runs)
+            {
+                Console.WriteLine($"{run.DirectoryName} trust={run.ValidationStatus} state={run.State ?? "unknown"} " +
+                    $"disposition={run.Disposition ?? "not established"} baseline={run.BaselineId?.ToString("D") ?? "none"} " +
+                    $"replay={(run.ReplayedCheckpoint is null ? "unknown" : run.ReplayedCheckpoint.Value ? "replay" : "fresh")} " +
+                    $"outcome={run.OutcomeClassification ?? run.ComparisonStatus} package={run.PackageStatus}");
+                if (run.ValidationIssue is not null)
+                    Console.WriteLine($"  Issue: {run.ValidationIssue}");
+            }
+            return 0;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+            ArgumentException or InvalidOperationException or InvalidDataException or JsonException)
+        {
+            Console.Error.WriteLine($"PSWORKHISTORY099: Run history could not be listed ({exception.GetType().Name}).");
+            return 1;
+        }
+    }
+
+    private static async Task<int> ReviewPlanAsync(string[] args)
+    {
+        var baselineReference = "active";
+        var jsonOutput = false;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var index = 3; index < args.Length; index++)
+        {
+            if (args[index] == "--json" && seen.Add(args[index]))
+                jsonOutput = true;
+            else if (args[index] == "--baseline" && index + 1 < args.Length &&
+                     !args[index + 1].StartsWith("--", StringComparison.Ordinal) && seen.Add(args[index]))
+                baselineReference = args[++index];
+            else
+            {
+                WriteUsage();
+                return 2;
+            }
+        }
+        if (args.Length < 3 || baselineReference != "active" && baselineReference != "none" &&
+            (!Guid.TryParse(baselineReference, out var baselineId) || baselineId == Guid.Empty))
+        {
+            WriteUsage();
+            return 2;
+        }
+
+        try
+        {
+            var result = await WorkspacePlanReviewService.ReviewAsync(args[2], baselineReference,
+                CancellationToken.None).ConfigureAwait(false);
+            if (jsonOutput)
+                Console.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            else
+            {
+                Console.WriteLine("ProofShift Exact Plan Review");
+                Console.WriteLine($"Review: {result.Review.ReviewId:D}");
+                Console.WriteLine($"Baseline: {result.Review.BaselineId:D}");
+                Console.WriteLine($"Baseline plan: {result.Review.BaselinePlanFingerprint}");
+                Console.WriteLine($"Current plan: {result.Review.CurrentPlanFingerprint}");
+                Console.WriteLine($"Comparison: {result.Drift.Status}");
+                Console.WriteLine($"Decision: {result.Review.Decision}");
+                foreach (var change in result.Drift.Changes)
+                    Console.WriteLine($"{change.Classification}: {change.Category}/{change.Kind} {change.Subject} - {change.Detail}");
+                Console.WriteLine("This record acknowledges review of these exact evaluation semantics only; it is not production or migration approval.");
+            }
+            return 0;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or
+            InvalidOperationException or InvalidDataException or System.Text.Json.JsonException)
+        {
+            Console.Error.WriteLine($"PSWORKREV099: Plan review could not be recorded ({exception.GetType().Name}); no configuration values were included.");
+            return 1;
+        }
     }
 
     private static async Task<int> SummaryAsync(string[] args)
@@ -79,6 +303,16 @@ internal static class WorkspaceCommands
                 Console.WriteLine($"Disposition: {result.Disposition ?? "not established"}");
                 Console.WriteLine($"Failed findings: {result.FailedFindingCount}");
                 Console.WriteLine($"Report identity: {result.ReportIdentity}");
+                if (result.BaselineId is { } baselineId)
+                {
+                    Console.WriteLine($"Baseline: {baselineId:D} ({result.BaselineDisposition ?? "disposition unavailable"})");
+                    Console.WriteLine($"Pre-run semantic drift: {result.PreRunSemanticDriftStatus ?? "unavailable"}");
+                    Console.WriteLine($"Review: {result.ReviewDecision ?? "NotRequired"}");
+                    Console.WriteLine($"Post-run outcome: {result.OutcomeClassification ?? "NotEstablished"}");
+                    Console.WriteLine($"New/resolved findings: {result.NewFindings.Count}/{result.ResolvedFindings.Count}");
+                    Console.WriteLine($"Reconciliation failures added/resolved: {result.ReconciliationFailuresAdded.Count}/{result.ReconciliationFailuresResolved.Count}");
+                    Console.WriteLine($"Materialized-state finding added/resolved: {result.MaterializedStateFindingAdded}/{result.MaterializedStateFindingResolved}");
+                }
                 Console.WriteLine($"Summary: {result.SummaryPath}");
             }
             return 0;
@@ -200,6 +434,56 @@ internal static class WorkspaceCommands
             return 2;
         }
 
+        if (args[2] == "compare-packages")
+        {
+            if (args.Length is not (5 or 6) || (args.Length == 6 && args[5] != "--json"))
+            {
+                WriteUsage();
+                return 2;
+            }
+
+            try
+            {
+                var result = await WorkspacePackageComparisonService.CompareAsync(args[3], args[4],
+                    CancellationToken.None).ConfigureAwait(false);
+                if (args.Length == 6)
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+                }
+                else
+                {
+                    Console.WriteLine("ProofShift Offline Evidence Package Comparison");
+                    Console.WriteLine($"Package integrity: VALID (both packages)");
+                    Console.WriteLine($"Comparison: {result.ComparisonMode}");
+                    Console.WriteLine($"Baseline run/package: {result.BaselineRunId:D} / {result.BaselinePackageIdentity}");
+                    Console.WriteLine($"Candidate run/package: {result.CandidateRunId:D} / {result.CandidatePackageIdentity}");
+                    Console.WriteLine($"Governance binding: {(result.BaselineGovernanceBindingValid == true ? "VALID" : "not asserted (ad hoc comparison)")}");
+                    Console.WriteLine($"Disposition: {result.BaselineDisposition ?? "not established"} -> {result.CandidateDisposition ?? "not established"}");
+                    Console.WriteLine($"Pre-run semantic drift: {result.SemanticDriftStatus ?? "not recorded"}; review: {result.ReviewDecision ?? "not applicable"}");
+                    Console.WriteLine($"Post-run outcome: {result.OutcomeClassification ?? "not classified (ad hoc comparison)"}");
+                    Console.WriteLine($"Replay ancestry changed: {result.ReplayAncestryChanged}");
+                    foreach (var finding in result.DetailedComparison.Findings.Where(item => item.Category != "Persisting"))
+                        Console.WriteLine($"Finding {finding.Category}: {finding.RuleId}; target {finding.TargetIdentity}; count {finding.Count}");
+                    foreach (var annotation in result.DetailedComparison.ExpectedExceptions.Where(item => item.Category != "Persisting"))
+                        Console.WriteLine($"Expected-exception annotation {annotation.Category}: count {annotation.Count}; annotations never waive findings.");
+                    foreach (var rule in result.DetailedComparison.ReconciliationFailuresAdded)
+                        Console.WriteLine($"Reconciliation failure added: {rule}");
+                    foreach (var rule in result.DetailedComparison.ReconciliationFailuresResolved)
+                        Console.WriteLine($"Reconciliation failure resolved: {rule}");
+                    Console.WriteLine($"Materialized-state finding added/resolved: {result.MaterializedStateFindingAdded}/{result.MaterializedStateFindingResolved}");
+                    Console.WriteLine("Offline comparison uses embedded package data only; it does not connect to a workspace or customer system.");
+                }
+                return 0;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+                InvalidDataException or ArgumentException or InvalidOperationException or
+                System.Text.Json.JsonException or FormatException or KeyNotFoundException)
+            {
+                Console.Error.WriteLine($"PSWORKPKGCMP099: Offline package comparison failed closed ({exception.GetType().Name}).");
+                return 1;
+            }
+        }
+
         if (args[2] == "package")
         {
             if (args.Length < 5)
@@ -319,14 +603,18 @@ internal static class WorkspaceCommands
     private static async Task<int> InitializeAsync(string[] args)
     {
         if (args.Length is not (3 or 5) ||
-            (args.Length == 5 && !string.Equals(args[3], "--template", StringComparison.OrdinalIgnoreCase)))
+            args.Length == 5 && !string.Equals(args[3], "--template", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(args[3], "--from", StringComparison.OrdinalIgnoreCase))
         {
             WriteUsage();
             return 2;
         }
 
-        var template = args.Length == 5 ? args[4] : "generic";
-        if (template is not ("generic" or "pension"))
+        var sourceWorkspace = args.Length == 5 &&
+            string.Equals(args[3], "--from", StringComparison.OrdinalIgnoreCase) ? args[4] : null;
+        var template = args.Length == 5 &&
+            string.Equals(args[3], "--template", StringComparison.OrdinalIgnoreCase) ? args[4] : "generic";
+        if (sourceWorkspace is null && template is not ("generic" or "pension"))
         {
             Console.Error.WriteLine("PSWORK015: Template must be generic or pension.");
             return 1;
@@ -335,6 +623,17 @@ internal static class WorkspaceCommands
         try
         {
             var directory = Path.GetFullPath(args[2]);
+            if (sourceWorkspace is not null)
+            {
+                var workspaceId = await WorkspaceDerivationService.InitializeFromAsync(sourceWorkspace, directory,
+                    CancellationToken.None).ConfigureAwait(false);
+                Console.WriteLine($"Initialized derived evaluation workspace: {directory}");
+                Console.WriteLine($"Source workspace: {Path.GetFullPath(sourceWorkspace)}");
+                Console.WriteLine($"Workspace ID: {workspaceId:D}");
+                Console.WriteLine("Configuration references were reused; run history, baselines, reviews, Evidence, discovery, and customer data were not copied.");
+                return 0;
+            }
+
             var projectResult = await ProjectInitCommand.InitializeAsync(directory, template, announce: false).ConfigureAwait(false);
             if (projectResult != 0) return projectResult;
 
@@ -367,7 +666,8 @@ internal static class WorkspaceCommands
             Console.WriteLine($"Workspace ID: {manifest.WorkspaceId:D}");
             return 0;
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or
+            InvalidOperationException or InvalidDataException or System.Text.Json.JsonException)
         {
             Console.Error.WriteLine($"PSWORK017: Workspace initialization failed ({exception.GetType().Name}); inspect the destination before retrying.");
             return 1;
@@ -440,7 +740,30 @@ internal static class WorkspaceCommands
 
     private static async Task<int> PlanAsync(string[] args)
     {
-        if (args.Length is not (3 or 4) || (args.Length == 4 && args[3] != "--json"))
+        if (args.Length < 3)
+        {
+            WriteUsage();
+            return 2;
+        }
+
+        var jsonOutput = false;
+        var baselineReference = "active";
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var index = 3; index < args.Length; index++)
+        {
+            if (args[index] == "--json" && seen.Add(args[index]))
+                jsonOutput = true;
+            else if (args[index] == "--baseline" && index + 1 < args.Length &&
+                     !args[index + 1].StartsWith("--", StringComparison.Ordinal) && seen.Add(args[index]))
+                baselineReference = args[++index];
+            else
+            {
+                WriteUsage();
+                return 2;
+            }
+        }
+        if (baselineReference != "active" && baselineReference != "none" &&
+            (!Guid.TryParse(baselineReference, out var selectedBaseline) || selectedBaseline == Guid.Empty))
         {
             WriteUsage();
             return 2;
@@ -449,14 +772,19 @@ internal static class WorkspaceCommands
         try
         {
             var result = await WorkspaceEvaluationService.PlanAsync(args[2], CancellationToken.None).ConfigureAwait(false);
-            if (args.Length == 4)
+            var drift = await WorkspaceSemanticDriftService.CompareAsync(args[2], result, baselineReference,
+                CancellationToken.None).ConfigureAwait(false);
+            result = result with { SemanticDrift = drift };
+            if (jsonOutput)
                 Console.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
             else
                 WritePlan(result);
-            return result.Status == "READY" ? 0 : 1;
+            return result.Status == "READY" &&
+                drift.Status != WorkspaceSemanticDriftStatus.Blocking ? 0 : 1;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or
-            InvalidOperationException or VerificationRuleException or RecoveryException or System.Text.Json.JsonException)
+            InvalidDataException or InvalidOperationException or VerificationRuleException or RecoveryException or
+            System.Text.Json.JsonException)
         {
             Console.Error.WriteLine($"PSPLAN099: Workspace plan could not be generated ({exception.GetType().Name}); no configuration values were included.");
             return 1;
@@ -467,6 +795,8 @@ internal static class WorkspaceCommands
     {
         string? checkpoint = null;
         string? observation = null;
+        string? review = null;
+        var baseline = "active";
         var jsonOutput = false;
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         for (var index = 3; index < args.Length; index++)
@@ -481,7 +811,7 @@ internal static class WorkspaceCommands
                 }
                 jsonOutput = true;
             }
-            else if (option is ("--checkpoint" or "--observation") &&
+            else if (option is ("--checkpoint" or "--observation" or "--review" or "--baseline") &&
                 index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal))
             {
                 var value = args[++index];
@@ -492,7 +822,9 @@ internal static class WorkspaceCommands
                 }
 
                 if (option == "--checkpoint") checkpoint = value;
-                else observation = value;
+                else if (option == "--observation") observation = value;
+                else if (option == "--review") review = value;
+                else baseline = value;
             }
             else
             {
@@ -502,6 +834,12 @@ internal static class WorkspaceCommands
         }
 
         if (args.Length < 3)
+        {
+            WriteUsage();
+            return 2;
+        }
+        if (baseline != "active" && baseline != "none" &&
+            (!Guid.TryParse(baseline, out var selectedBaseline) || selectedBaseline == Guid.Empty))
         {
             WriteUsage();
             return 2;
@@ -523,7 +861,7 @@ internal static class WorkspaceCommands
                         Console.WriteLine(JsonSerializer.Serialize(new WorkspaceRunProgressEvent("progress", item), JsonLineOptions));
                     else
                         Console.Error.WriteLine($"[{item.Stage}] {item.Status}");
-                }).ConfigureAwait(false);
+                }, baseline, review).ConfigureAwait(false);
             if (jsonOutput)
             {
                 Console.WriteLine(JsonSerializer.Serialize(new
@@ -532,6 +870,7 @@ internal static class WorkspaceCommands
                     runPath = result.RunDirectory,
                     state = result.Manifest?.State ?? "Blocked",
                     run = result.Manifest,
+                    baselineComparison = result.BaselineComparison,
                     readinessChecks = result.ReadinessChecks
                 }, JsonLineOptions));
             }
@@ -587,6 +926,22 @@ internal static class WorkspaceCommands
         if (result.Manifest.RecoveryQualification is not null)
             Console.WriteLine($"Recovery qualification: {result.Manifest.RecoveryQualification}");
         Console.WriteLine($"Disposition: {result.Manifest.Disposition ?? "not claimed"}");
+        if (result.Manifest.BaselineId is { } baselineId)
+        {
+            Console.WriteLine($"Baseline: {baselineId:D} ({result.Manifest.BaselineRunId:D})");
+            Console.WriteLine($"Pre-run semantic drift: {result.Manifest.PreRunSemanticDriftStatus} ({result.Manifest.PreRunSemanticDriftIdentityFingerprint})");
+            Console.WriteLine($"Review: {result.Manifest.ReviewDecision ?? "NotRequired"}{(result.Manifest.ReviewRecordId is { } reviewId ? $" ({reviewId:D})" : string.Empty)}");
+            Console.WriteLine($"Post-run outcome: {result.BaselineComparison?.OutcomeClassification ?? "NotEstablished"}");
+            if (result.BaselineComparison is { } comparison)
+            {
+                foreach (var finding in comparison.DetailedComparison.Findings.Where(item => item.Category != "Persisting"))
+                    Console.WriteLine($"Finding {finding.Category}: {finding.RuleId}, target {finding.TargetIdentity}, count {finding.Count}");
+                foreach (var rule in comparison.DetailedComparison.ReconciliationFailuresAdded)
+                    Console.WriteLine($"Reconciliation failure added: {rule}");
+                foreach (var rule in comparison.DetailedComparison.ReconciliationFailuresResolved)
+                    Console.WriteLine($"Reconciliation failure resolved: {rule}");
+            }
+        }
         if (result.Manifest.FailureCode is not null) Console.WriteLine($"Failure: {result.Manifest.FailureCode}");
     }
 
@@ -613,10 +968,11 @@ internal static class WorkspaceCommands
     private static void WritePlan(WorkspacePlanResult result)
     {
         Console.WriteLine("ProofShift Effective Workspace Evaluation Plan");
-        Console.WriteLine($"Readiness: {result.Status} (no known blockers; review NOT_CHECKED items)");
+        Console.WriteLine($"Readiness: {result.Status}");
         if (result.Plan is null)
         {
             Console.WriteLine("No plan is available because the workspace or project configuration is invalid.");
+            WriteSemanticDrift(result.SemanticDrift);
             WritePlanChecks(result.Preflight.Checks);
             return;
         }
@@ -627,6 +983,7 @@ internal static class WorkspaceCommands
         Console.WriteLine($"Graph: {result.Plan.GraphHash} (canonicalization {result.Plan.GraphCanonicalizationVersion})");
         Console.WriteLine($"Verification rule-set fingerprint: {result.Plan.VerificationRuleSetFingerprint}");
         Console.WriteLine($"Expected-exception fingerprint: {result.Plan.ExpectedExceptionsFingerprint}");
+        WriteSemanticDrift(result.SemanticDrift);
         Console.WriteLine("Packs:");
         if (result.Plan.Packs.Count == 0)
             Console.WriteLine("  (none explicitly configured)");
@@ -681,6 +1038,24 @@ internal static class WorkspaceCommands
         Console.WriteLine("This plan is read-only and does not execute the evaluation.");
     }
 
+    private static void WriteSemanticDrift(WorkspaceSemanticDrift? drift)
+    {
+        Console.WriteLine("Baseline semantic comparison:");
+        if (drift is null)
+        {
+            Console.WriteLine("  Not requested.");
+            return;
+        }
+        Console.WriteLine($"  Status: {drift.Status}");
+        if (drift.BaselineId is { } baselineId)
+            Console.WriteLine($"  Baseline: {baselineId:D} (run {drift.BaselineRunId:D})");
+        Console.WriteLine($"  Review required: {(drift.ReviewRequired ? "yes" : "no")}");
+        foreach (var condition in drift.BlockingConditions)
+            Console.WriteLine($"  BLOCKING: {condition}");
+        foreach (var change in drift.Changes)
+            Console.WriteLine($"  {change.Classification} {change.Category}/{change.Kind} {change.Subject}: {change.Detail}");
+    }
+
     private static void WritePlanChecks(IEnumerable<WorkspacePreflightCheck> checks)
     {
         foreach (var check in checks)
@@ -714,5 +1089,5 @@ internal static class WorkspaceCommands
     }
 
     private static void WriteUsage() =>
-        Console.Error.WriteLine("Usage: proofshift workspace init <directory> [--template generic|pension] | proofshift workspace validate <directory> [--json] | proofshift workspace preflight <directory> [--connect] [--json] | proofshift workspace plan <directory> [--json] | proofshift workspace run <directory> [--checkpoint <id-or-path>] [--observation <label>] [--json] | proofshift workspace evidence package <workspace> <run-id> [--output <zip>] [--diagnostic] [--json] | proofshift workspace evidence validate-package <zip> [--json] | proofshift workspace summary <workspace> <run-id> [--output <path>] [--json] | proofshift workspace compare <workspace> <run-a> <run-b> [--json] | proofshift workspace cleanup <workspace> <run-id> [--plan|--execute] [--json]");
+        Console.Error.WriteLine("Usage: proofshift workspace init <directory> [--template generic|pension|--from <workspace>] | proofshift workspace validate <directory> [--json] | proofshift workspace runs <workspace> [--json] | proofshift workspace preflight <directory> [--connect] [--json] | proofshift workspace plan <directory> [--baseline active|<baseline-id>|none] [--json] | proofshift workspace review-plan <directory> [--baseline active|<baseline-id>] [--json] | proofshift workspace run <directory> [--baseline active|<baseline-id>|none] [--review <review-id>] [--checkpoint <id-or-path>] [--observation <label>] [--json] | proofshift workspace evidence package <workspace> <run-id> [--output <zip>] [--diagnostic] [--json] | proofshift workspace evidence validate-package <zip> [--json] | proofshift workspace evidence compare-packages <baseline.zip> <candidate.zip> [--json] | proofshift workspace baseline promote <workspace> <run-id> [--json] | proofshift workspace baseline list <workspace> [--json] | proofshift workspace baseline show <workspace> <baseline-id> [--json] | proofshift workspace baseline active <workspace> [--json] | proofshift workspace summary <workspace> <run-id> [--output <path>] [--json] | proofshift workspace compare <workspace> <run-a> <run-b> [--json] | proofshift workspace cleanup <workspace> <run-id> [--plan|--execute] [--json]");
 }

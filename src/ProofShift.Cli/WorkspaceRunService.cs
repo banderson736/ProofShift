@@ -17,9 +17,17 @@ namespace ProofShift.Cli;
 internal static class WorkspaceRunService
 {
     public static async Task<WorkspaceRunResult> RunAsync(string workspaceDirectory, string? checkpointReference,
-        string? observationId, CancellationToken cancellationToken, Action<WorkspaceRunProgress>? progress = null)
+        string? observationId, CancellationToken cancellationToken, Action<WorkspaceRunProgress>? progress = null,
+        string baselineReference = "active", string? reviewReference = null)
     {
         var root = Path.GetFullPath(workspaceDirectory);
+        var planned = await WorkspaceEvaluationService.PlanAsync(root, cancellationToken).ConfigureAwait(false);
+        if (planned.Plan is null)
+            return new(null, null, planned.Preflight.Checks);
+        var plannedDrift = await WorkspaceSemanticDriftService.CompareAsync(root, planned, baselineReference,
+            cancellationToken).ConfigureAwait(false);
+        ValidateDriftCanRun(plannedDrift);
+
         var analysis = await WorkspaceEvaluationService.AnalyzeAsync(root, connect: true, cancellationToken,
             replayCheckpoint: checkpointReference is not null).ConfigureAwait(false);
         if (analysis.Manifest is null)
@@ -28,6 +36,35 @@ internal static class WorkspaceRunService
         var plan = WorkspaceEvaluationService.CreatePlan(analysis);
         if (plan.Plan is null)
             return new(null, null, analysis.Preflight.Checks);
+        var executionDrift = await WorkspaceSemanticDriftService.CompareAsync(root, plan, baselineReference,
+            cancellationToken).ConfigureAwait(false);
+        ValidateDriftCanRun(executionDrift);
+        var selectedBaseline = baselineReference == "none"
+            ? null
+            : await WorkspaceBaselineService.ReadPlanAsync(root, baselineReference, cancellationToken)
+                .ConfigureAwait(false);
+        if (selectedBaseline?.Baseline.BaselineId != executionDrift.BaselineId)
+            throw new InvalidOperationException("The selected baseline changed while preparing the run; plan again before execution.");
+        if (!string.Equals(WorkspacePlanReviewService.IdentityFingerprint(plannedDrift),
+                WorkspacePlanReviewService.IdentityFingerprint(executionDrift), StringComparison.Ordinal))
+            throw new InvalidOperationException("The selected baseline or effective plan changed after planning; review the current plan before execution.");
+
+        WorkspacePlanReviewRecord? review = null;
+        if (executionDrift.Status is WorkspaceSemanticDriftStatus.ReviewRequired or
+            WorkspaceSemanticDriftStatus.NotComparable)
+        {
+            if (reviewReference is null)
+                throw new InvalidOperationException(executionDrift.Status == WorkspaceSemanticDriftStatus.NotComparable
+                    ? "Baseline comparison is unavailable; explicitly acknowledge this exact comparison with workspace review-plan before execution."
+                    : "Semantic drift requires an exact plan review before execution.");
+            review = await WorkspacePlanReviewService.ValidateForExecutionAsync(root, reviewReference,
+                executionDrift, cancellationToken).ConfigureAwait(false);
+        }
+        else if (reviewReference is not null)
+        {
+            review = await WorkspacePlanReviewService.ValidateForExecutionAsync(root, reviewReference,
+                executionDrift, cancellationToken).ConfigureAwait(false);
+        }
 
         var manifest = analysis.Manifest;
         var configuration = analysis.Configuration
@@ -36,6 +73,10 @@ internal static class WorkspaceRunService
             ?? throw new InvalidOperationException("Validated workspace has no compiled migration graph.");
         var now = DateTimeOffset.UtcNow;
         var runId = Guid.NewGuid();
+        var driftArtifact = executionDrift.BaselineId is null
+            ? default
+            : await WorkspaceSemanticDriftArtifactStore.WriteAsync(root, manifest.WorkspaceId, runId,
+                executionDrift, cancellationToken).ConfigureAwait(false);
         var runDirectory = Path.GetFullPath(Path.Combine(root,
             manifest.Paths.Runs.Replace('/', Path.DirectorySeparatorChar),
             runId.ToString("D")));
@@ -56,6 +97,18 @@ internal static class WorkspaceRunService
             ProductVersion = VersionCommands.GetProductVersion(),
             SourceRevision = VersionCommands.GetAssemblyMetadata("ProofShiftSourceRevision"),
             SourceTree = VersionCommands.GetAssemblyMetadata("ProofShiftSourceTree"),
+            BaselineId = executionDrift.BaselineId,
+            BaselineRunId = executionDrift.BaselineRunId,
+            BaselineRunManifestIdentityFingerprint = selectedBaseline?.Baseline.RunManifestIdentityFingerprint,
+            BaselinePlanFingerprint = executionDrift.BaselinePlanFingerprint,
+            BaselineEvidencePackageIdentity = selectedBaseline?.Baseline.EvidencePackageIdentity,
+            PreRunSemanticDriftIdentityFingerprint = WorkspacePlanReviewService.IdentityFingerprint(executionDrift),
+            PreRunSemanticDriftStatus = executionDrift.Status.ToString(),
+            SemanticDriftArtifactReference = driftArtifact.Reference,
+            SemanticDriftArtifactIntegrityHash = driftArtifact.IntegrityHash,
+            ReviewRecordId = review?.ReviewId,
+            ReviewRecordIntegrityHash = review?.IntegrityHash,
+            ReviewDecision = review?.Decision ?? "NotRequired",
             StartedAt = now,
             UpdatedAt = now,
             State = "Created",
@@ -222,10 +275,27 @@ internal static class WorkspaceRunService
             return Result();
         }
 
+        if (record.State == "Completed" && record.BaselineId is not null)
+        {
+            record = await WorkspaceRunManifestStore.ReadAsync(runDirectory, cancellationToken)
+                .ConfigureAwait(false);
+            var baselineComparison = await WorkspaceBaselineComparisonService.CompareAndPersistAsync(root, record,
+                cancellationToken).ConfigureAwait(false);
+            return Result() with { BaselineComparison = baselineComparison };
+        }
+
         return Result();
 
         WorkspaceRunResult Result() => new(record, Path.GetRelativePath(root, runDirectory)
             .Replace(Path.DirectorySeparatorChar, '/'), record.ReadinessChecks);
+    }
+
+    internal static void ValidateDriftCanRun(WorkspaceSemanticDrift drift)
+    {
+        if (drift.Status == WorkspaceSemanticDriftStatus.Blocking || drift.BlockingConditions.Count > 0)
+            throw new InvalidOperationException("Blocking plan conditions cannot be overridden by review.");
+        if (drift.BaselineId is null && drift.Status is not WorkspaceSemanticDriftStatus.NoBaseline)
+            throw new InvalidDataException("Baseline comparison did not resolve to a valid baseline or an explicit no-baseline selection.");
     }
 
     private static async Task ExecuteShadowRunAsync(string root, string runDirectory,

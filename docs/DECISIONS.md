@@ -8,6 +8,32 @@ PS-1.0A evaluation-scope architecture is recorded in [ADR-0036](adr/0036-determi
 
 PS-1.0B's workspace, guided-run, package, summary, comparison, and cleanup boundaries are recorded in [ADR-0037](adr/0037-evaluation-workspace-manifest.md): the workspace manifest references the existing project configuration; the run manifest remains authoritative execution state; and the package index binds the portable representation without redefining run semantics. The deterministic summary is a non-authoritative projection of integrity-verified run/Evidence data. Comparison is limited to local runs in one workspace. Cleanup is preview-first and restricted to marker-owned run scratch; it adds no connector deletion contract. Static/package validation is offline; preflight connectivity is read-only; guided execution composes existing runtime services. The package uses existing run/Evidence/Projection/Recovery integrity mechanisms, explicitly classifies external and omitted artifacts, and does not sign packages. ADR-0037 is accepted for this architecture boundary. PS-1.0B remains in progress and unaccepted.
 
+PS-1.0C.1 baseline promotion/history, C.2 read-only semantic-drift planning,
+C.3 baseline-aware run/review/outcome comparison, C.4 portable governance
+packages/offline comparison, and assigned C.5 repeatable pilot
+history/re-baselining are recorded in
+[ADR-0038](adr/0038-evaluation-baseline-promotion-and-history.md). Baselines
+are immutable identity-only records separate from authoritative run and
+Evidence package formats; an integrity-bound catalog retains promotion
+history and identifies the latest promotion as active. Promotion is explicit
+and preserves either final disposition without endorsing it. C.3 adds
+immutable exact-plan review records, baseline identities in guided-run
+manifests, and a B.5-based outcome artifact indexed by candidate run ID.
+Review acknowledges only evaluation semantics; `NotComparable` acknowledgement
+is distinct from semantic review, blocking drift is non-overridable, and
+promotion remains explicit and manual. C.4 packages exact governance
+identities and reuses B.5 comparison offline; legacy packages remain valid,
+and unbound pairs are labeled ad hoc. C.5 rebuilds run history from
+authoritative manifests, keeps baseline progression explicit with idempotent
+active-run promotion and rejects historical re-promotion, and derives
+configuration-only workspaces without copying execution/history/data outputs.
+C.1-C.5 implementation is complete locally; assigned C.6 validates the
+packaged baseline-governed pilot lifecycle. Connected preflight validates all
+persisted discovery artifacts but compares only the newest artifact per
+endpoint with a fresh read-only observation, retaining earlier records for
+historical drift comparison. Exact-candidate CI and owner acceptance remain
+pending; PS-1.0C is not accepted.
+
 ## Accepted decisions
 
 PS-0.10C's assigned implementation boundary is recorded in [ADR-0019](adr/0019-target-observation-and-connector-capabilities.md): independent read-only target observation, distinct shadow mutation/Recovery authority and connector capability reporting. The milestone remains In Progress; provider and format acceptance gates are not satisfied by compilation.
