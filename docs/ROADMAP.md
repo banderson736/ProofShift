@@ -381,23 +381,38 @@ limitations.
 
 ### PS-1.0B Guided Customer Evaluation Workspace & Evidence Package
 
-Status: **In Progress**, explicitly assigned from PS-1.0A closure merge
+Status: **In Progress — technical evidence complete on the implementation
+baseline; owner acceptance pending.** Work starts from PS-1.0A closure merge
 `7f6fbae410f81ad8f015cad380594e88d630468d` on branch
-`ps-1.0b-guided-customer-evaluation`. Workspace initialization and structural
-validation are implemented. The PS-1.0B.2 slice adds offline-by-default
-`workspace preflight`, explicit read-only `--connect` inspection, and a
-deterministic effective `workspace plan`. PS-1.0B.3 adds local guided run
-orchestration with durable run manifests, checkpoint capture/replay, and
-existing Projection, Verification, Recovery, and Evidence services. Local PS-1.0B.4 adds ZIP evidence packaging and offline fail-closed
-validation, including integrity-bound run, effective-plan, Evidence,
-Projection-lineage, Recovery, and required summary artifacts. PS-1.0B.5 adds
-deterministic run-bound summaries, same-workspace run comparison, and
-preview-first cleanup limited to marker-owned run temporary data. The B.6
-extracted-package harness exercises clean and defective runs, checkpoint
-replay, evidence tampering, summaries/comparison, cleanup, and incomplete-run
-diagnostics. Focused local tests use synthetic completed-run fixtures.
-Docker-backed successful execution/replay and exact-candidate acceptance
-evidence remain outstanding.
+`ps-1.0b-guided-customer-evaluation`. Validated implementation baseline:
+`bc985901fcf6700c532d04b2d6c2ce64079800a5`, tree
+`2bd9d69bac136a511a5c986a23c12ebf73afad35`. Its push CI run `40987616414`
+and PR CI run `40987621659` passed all 11 required jobs; `build-and-test`
+passed 347 tests (0 failed, 0 skipped), with Remote Storage 54, Db2 2, and
+Oracle 2 tests also passing without failures or skips.
+
+The extracted-package Linux evaluation passed the clean scenario (114 source
+records; 12 budget rows totaling `12,780.00`; `QUALIFIED`) and defective
+scenario (`12,781.00`; `NOT QUALIFIED`, with exact findings and
+non-waiving expected-exception evidence). Checkpoint replay completed with
+the source stopped/unreachable and its credential reference unavailable.
+Packaged evidence/tamper validation, summaries, comparisons, cleanup,
+incomplete-run diagnostics, and generated-credential scanning passed. The
+Linux package archive/content SHA-256 values are
+`dfc8d6258b6a609e10ea534230fd016e026cc19cf5aec865aaebc865fef50394` /
+`eaab04e0a2eb5b75f7a40cfd639535d2110faaddc27a3af04781fee300933bae`;
+Windows values are
+`b90f330bc17c1d6faebde767757c8f1e874dc9227c9a2f19b8348b45028f4df2` /
+`38dfcca70f0ecd7bf6fec7aca600f4bfdafa6597d7e10f395685d37b36c26cfb`.
+Independent same-platform builds reproduced the archive and content hashes.
+Windows evidence remains package-only (0 customer scenarios); Linux scenario
+evidence is limited to the packaged Docker evaluation.
+
+The acceptance matrix records 22 PASS, 0 FAIL, 0 NOT YET, and 0 NOT
+APPLICABLE for the validated implementation baseline. A documentation-only
+acceptance-record commit is being validated as the PR head; its exact-head
+protected CI must pass before a final technical recommendation. This evidence
+does not constitute owner acceptance or approval to merge.
 
 The workspace wraps, rather than replaces, the existing
 `proofshift.yaml`, configuration fingerprint, discovery/scaffold, checkpoint,
@@ -414,9 +429,9 @@ and explanations; comparisons are local to runs in the same workspace; and
 cleanup preserves evidence and targets while removing only ownership-verified
 run scratch. See the [architecture proposal](PS1_0B_GUIDED_CUSTOMER_EVALUATION.md),
 [acceptance matrix](PS1_0B_ACCEPTANCE_MATRIX.md), and
-[ADR-0037](adr/0037-evaluation-workspace-manifest.md). PS-1.0B is not accepted.
-Production migration/rollback remains unauthorized, and PS-1.0C has not
-started.
+[ADR-0037](adr/0037-evaluation-workspace-manifest.md). PS-1.0B remains
+unaccepted pending explicit owner acceptance. Production migration/rollback
+remains unauthorized, and PS-1.0C has not started.
 
 ### Potential future product areas (unassigned)
 

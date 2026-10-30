@@ -2,17 +2,21 @@
 
 ## Status
 
-**In Progress.** Work starts from the PS-1.0A acceptance-closure merge
+**In Progress — implementation evidence complete; owner acceptance pending.**
+Work starts from the PS-1.0A acceptance-closure merge
 `7f6fbae410f81ad8f015cad380594e88d630468d` on branch
-`ps-1.0b-guided-customer-evaluation`. PS-1.0A remains accepted and unchanged.
-Workspace initialization/validation, the PS-1.0B.2 preflight/effective-plan
-slice, PS-1.0B.3 guided execution, the PS-1.0B.4 portable evidence-package
-slice, and the local PS-1.0B.5 summary/comparison/cleanup lifecycle are
-implemented. A bounded PS-1.0B.6 extracted-package acceptance harness is
-implemented but has not run in a Docker-capable environment. Provider-backed
-successful execution/replay, packaged customer evaluation, and exact-candidate
-milestone evidence remain outstanding. This is not a PS-1.0B acceptance
-record.
+`ps-1.0b-guided-customer-evaluation`. The validated implementation baseline
+is `bc985901fcf6700c532d04b2d6c2ce64079800a5` (tree
+`2bd9d69bac136a511a5c986a23c12ebf73afad35`). Exact-candidate push run
+`40987616414` and PR run `40987621659` passed all 11 required jobs. The
+packaged Linux workflow validated clean/defective evaluations, source-offline
+checkpoint replay, evidence/tamper validation, summaries, comparisons,
+cleanup, incomplete-run diagnostics, and credential scanning. The Windows
+package smoke passed with 0 customer scenarios. The acceptance matrix records
+22 PASS, 0 FAIL, 0 NOT YET, 0 NOT APPLICABLE on the implementation baseline.
+This document records technical evidence, not owner acceptance; exact-head
+CI for the documentation-only closure candidate must pass before a final
+technical recommendation.
 
 ## Goal and boundaries
 
@@ -169,9 +173,9 @@ tree contains no reparse points. It preserves manifests, Evidence, Recovery,
 summaries, packages, and checkpoints. It never deletes configured
 PostgreSQL schemas, filesystem targets, customer data, or other target
 resources because no connector-owned deletion contract exists. Already
-absent scratch is an idempotent no-op. These local synthetic-fixture tests
-are implementation evidence only; packaged workflows and exact-candidate
-acceptance remain outstanding.
+absent scratch is an idempotent no-op. The local synthetic-fixture tests are
+implementation evidence; the packaged cleanup workflow and exact-candidate
+CI evidence are recorded in the [acceptance matrix](PS1_0B_ACCEPTANCE_MATRIX.md).
 
 ## Existing components to reuse
 
@@ -249,23 +253,21 @@ summary rather than treating it as a new authority.
 
 ## Implementation sequence
 
-1. **Workspace model and initialization** — implemented locally; manifest,
-   safe layout, and package-safe initialization/validation. Extracted-package
-   acceptance remains outstanding.
-2. **Preflight and effective plan** — implemented locally; offline readiness,
-   explicit read-only connectivity, and deterministic explanation of
-   configured operations. Provider-backed packaged acceptance remains
-   outstanding.
-3. **Guided execution** — implemented locally; durable lifecycle and manifest,
-   effective-plan binding, checkpoint capture/replay, shadow or external
-   read-only Verification, Recovery/reconciliation, and Evidence references.
-   Provider-backed and packaged acceptance remains outstanding.
-4. **Evidence package and integrity validation** — implemented locally;
-   ZIP manifest, explicit artifact inclusion/reference policy, deterministic
-   logical identity, offline validation, and tamper/path regression coverage.
-   Provider-backed/package acceptance remains outstanding.
-5. **Customer summary, comparison, and cleanup** — implemented locally;
-   provider-backed and packaged acceptance remains outstanding.
+1. **Workspace model and initialization** — implemented and exercised from
+   the extracted Linux package; structural validation and safe workspace
+   layout passed.
+2. **Preflight and effective plan** — implemented and exercised from the
+   extracted package; offline default, connected read-only readiness,
+   unavailable-endpoint blocking, and deterministic plan identity passed.
+3. **Guided execution** — implemented and exercised from the extracted
+   package; clean/defective runs and checkpoint replay passed with durable
+   manifest and lineage bindings.
+4. **Evidence package and integrity validation** — implemented and exercised
+   from the extracted package; clean, replay, defective, and diagnostic
+   packages validated, and tamper cases were rejected.
+5. **Customer summary, comparison, and cleanup** — implemented and exercised
+   from the extracted package; summary/comparison assertions and
+   preview-first, ownership-verified cleanup passed.
 6. **Packaged customer workflow and acceptance** — extracted-package
    clean/defective scenarios, replay, interruption and tamper cases, platform
    evidence, and exact-candidate CI. The bounded Linux harness is implemented
@@ -273,8 +275,9 @@ summary rather than treating it as a new authority.
    packaged BYOM runner. It asserts exact synthetic fixture counts and
    aggregates, keeps out-of-band mutation within the run-isolated shadow
    schema, stops the SQL Server source before replay, and never treats
-   configured targets as cleanup resources. The harness has not yet run in a
-   Docker-capable environment; its implementation is not acceptance evidence.
+   configured targets as cleanup resources. The exact-candidate Linux
+   packaged evaluation passed; its scope and results are recorded in the
+   [acceptance matrix](PS1_0B_ACCEPTANCE_MATRIX.md).
 
 ## Current slice limitations
 
@@ -284,5 +287,7 @@ run-bound summaries, local run comparison, and bounded cleanup. Default
 preflight performs no endpoint access; guided execution performs
 read-only readiness inspection before capture or projection. The read-only
 plan remains descriptive and assigns no run identity. PS-1.0B remains
-unaccepted until all applicable gates in the
-[acceptance matrix](PS1_0B_ACCEPTANCE_MATRIX.md) pass on an exact candidate.
+unaccepted pending protected CI on the documentation-only closure candidate
+and explicit owner acceptance. The implementation-baseline evidence and
+remaining boundaries are recorded in the
+[acceptance matrix](PS1_0B_ACCEPTANCE_MATRIX.md).
