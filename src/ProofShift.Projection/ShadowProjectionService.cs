@@ -429,7 +429,9 @@ public sealed class ShadowProjectionService
         catch (Exception exception)
         {
             status = ProjectionStatus.Failed;
-            failureCode = $"PSPROJ_FAILED_{exception.GetType().Name.ToUpperInvariant()}";
+            failureCode = exception is ConnectorConfigurationException connectorException
+                ? $"PSPROJ_FAILED_CONNECTORCONFIGURATIONEXCEPTION_{connectorException.Code}"
+                : $"PSPROJ_FAILED_{exception.GetType().Name.ToUpperInvariant()}";
             failureCount = Math.Max(1, failureCount);
         }
         finally

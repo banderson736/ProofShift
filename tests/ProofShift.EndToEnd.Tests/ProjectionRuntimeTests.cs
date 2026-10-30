@@ -125,7 +125,7 @@ public sealed class ProjectionRuntimeTests
                 TestContext.Current.CancellationToken);
 
             Assert.Equal(ProjectionStatus.Failed, run.Status);
-            Assert.Equal("PSPROJ_FAILED_INVALIDOPERATIONEXCEPTION", run.FailureCode);
+            Assert.Equal("PSPROJ_FAILED_CONNECTORCONFIGURATIONEXCEPTION_PSCONN013", run.FailureCode);
             Assert.DoesNotContain("sensitive", run.FailureCode, StringComparison.OrdinalIgnoreCase);
             Assert.Equal(0, targetConnector.PrepareCount);
         }
@@ -484,7 +484,8 @@ public sealed class ProjectionRuntimeTests
 
         public Task<string> ValidateAsync(string sourceNodeKey, ConnectorContext context, ArtifactSelector selector,
             CancellationToken cancellationToken) =>
-            throw new InvalidOperationException("sensitive provider message");
+            throw new ConnectorConfigurationException(ConnectorIssueCodes.MissingConfiguration,
+                "sensitive provider message");
 
         public async IAsyncEnumerable<RecordEnvelope> ReadAsync(string sourceNodeKey, ConnectorContext context,
             ArtifactSelector selector,
