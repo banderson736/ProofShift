@@ -27,12 +27,14 @@ and unbound pairs are labeled ad hoc. C.5 rebuilds run history from
 authoritative manifests, keeps baseline progression explicit with idempotent
 active-run promotion and rejects historical re-promotion, and derives
 configuration-only workspaces without copying execution/history/data outputs.
-C.1-C.5 implementation is complete locally; assigned C.6 validates the
-packaged baseline-governed pilot lifecycle. Connected preflight validates all
-persisted discovery artifacts but compares only the newest artifact per
-endpoint with a fresh read-only observation, retaining earlier records for
-historical drift comparison. Exact-candidate CI and owner acceptance remain
-pending; PS-1.0C is not accepted.
+C.1-C.6 technical validation is complete on candidate
+`5062a6a317c2bcd8b1c0d09e1d221635210568e4`; push run `41169254780` and PR run
+`41169259744` passed all 11 required jobs, and `build-and-test` passed 362
+tests with 0 failures and 0 skips. Connected preflight validates all persisted
+discovery artifacts but compares only the newest artifact per endpoint with a
+fresh read-only observation, retaining earlier records for historical drift
+comparison. Explicit owner acceptance remains pending; PS-1.0C is not
+accepted.
 
 ## Accepted decisions
 

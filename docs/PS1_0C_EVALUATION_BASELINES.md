@@ -2,8 +2,11 @@
 
 ## Status
 
-**In Progress — C.1-C.5 implementation is complete; assigned C.6 final
-acceptance validation is in progress.** Work starts from merged PS-1.0B baseline
+**Technical validation complete; explicit owner acceptance remains pending.**
+Candidate `5062a6a317c2bcd8b1c0d09e1d221635210568e4` passed exact-head push CI
+run `41169254780` and PR CI run `41169259744`, with all 11 required jobs
+passing in each; `build-and-test` passed 362 tests with 0 failures and 0 skips.
+Work starts from merged PS-1.0B baseline
 `ef90706638e38bb770af4bb0e880011f67aa04f3`. It adds explicit promotion of
 completed, evidence-packaged workspace runs, integrity-checked inspection,
 retained baseline history, and a read-only comparison of the current
@@ -13,8 +16,10 @@ configuration-only workspace reuse. C.1-C.5 local implementation and
 validation do not claim PS-1.0C acceptance. C.6 validates the complete
 baseline-governed workflow using the extracted product package, provider-backed
 discovery and schema drift, cross-platform package evidence, and an exact
-candidate in protected CI. See the [acceptance matrix](PS1_0C_ACCEPTANCE_MATRIX.md)
-for evidence and gates; exact-candidate CI and owner acceptance remain pending.
+candidate in protected CI. Technical evidence is complete; owner acceptance
+and merge remain separate and pending. See the
+[acceptance matrix](PS1_0C_ACCEPTANCE_MATRIX.md) for the detailed evidence and
+scope boundaries. This status is not an acceptance claim.
 
 ## Goal
 
@@ -327,5 +332,6 @@ separate explicit choice. Review is not production approval.
   not classified as a qualified outcome.
 - A `QUALIFIED` candidate is not automatically promoted; promotion remains a
   separate explicit C.1 operation.
-- Exact-candidate CI and owner acceptance remain pending. PS-1.0C remains
-  unaccepted; PS-1.0D has not started.
+- Exact-candidate technical validation is complete, but explicit owner
+  acceptance remains pending. PS-1.0C remains unaccepted; PS-1.0D has not
+  started.

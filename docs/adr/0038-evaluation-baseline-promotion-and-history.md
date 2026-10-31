@@ -1,6 +1,6 @@
 # ADR-0038: Evaluation Baseline Promotion and History
 
-- Status: Accepted architecture for PS-1.0C.1-C.5; C.6 acceptance validation in progress
+- Status: Accepted architecture for PS-1.0C.1-C.5; C.6 technical validation complete, owner acceptance pending
 - Date: 2026-10-30
 
 ## Context
@@ -190,10 +190,11 @@ authorize production migration or rollback.
    candidate-run-ID-indexed comparison artifact provides lookup while
    retaining immutable final identity.
 
-C.1-C.5 implementation is complete locally. Assigned C.6 packaged-pilot,
-cross-platform package, exact-candidate CI, and explicit owner-acceptance
-gates remain in progress. This ADR records architecture decisions and does
-not claim PS-1.0C acceptance.
+C.1-C.5 implementation and C.6 technical validation are complete. The exact
+candidate passed push CI run `41169254780` and PR CI run `41169259744`, with
+all 11 required jobs passing in each; `build-and-test` passed 362 tests with
+0 failures and 0 skips. Explicit owner acceptance remains pending. This ADR
+records architecture decisions and does not claim PS-1.0C acceptance.
 
 ## C.4 portable governance packages and offline comparison addendum
 
@@ -244,10 +245,10 @@ discovery, or customer-system access.
 5. **Replace the v1 package format.** Rejected because optional allowlisted
    roles preserve existing package validation and legacy package compatibility.
 
-C.4 implementation and local validation are recorded in the acceptance
-matrix. C.1-C.5 implementation is complete locally; assigned C.6 validation,
-exact-candidate CI, and explicit owner acceptance remain pending. This ADR
-does not claim PS-1.0C acceptance or authorize production migration/rollback.
+C.4 implementation and validation are recorded in the acceptance matrix.
+C.1-C.6 technical validation is complete; explicit owner acceptance remains
+pending. This ADR does not claim PS-1.0C acceptance or authorize production
+migration/rollback.
 
 ## C.5 repeatable pilot history and re-baselining addendum
 
@@ -298,10 +299,10 @@ configuration; derivation does not interpret or normalize them.
    observations must remain local to the new workspace; copied configuration
    references do not establish that the new environment has been observed.
 
-C.5 local implementation and validation are recorded in the acceptance
-matrix. C.6 validates the complete packaged lifecycle, including physical
-schema drift and latest-per-endpoint connected discovery, baseline-governed
-review and execution, offline comparison, explicit progression, and isolated
-workspace derivation. The exact-candidate package/CI evidence and explicit
-owner acceptance remain pending. This ADR does not claim PS-1.0C acceptance
-or authorize production migration/rollback.
+C.5 implementation and validation are recorded in the acceptance matrix.
+C.6 validated the complete packaged lifecycle, including physical schema
+drift and latest-per-endpoint connected discovery, baseline-governed review
+and execution, offline comparison, explicit progression, and isolated
+workspace derivation. Exact-candidate push and PR CI passed all 11 required
+jobs; explicit owner acceptance remains pending. This ADR does not claim
+PS-1.0C acceptance or authorize production migration/rollback.
