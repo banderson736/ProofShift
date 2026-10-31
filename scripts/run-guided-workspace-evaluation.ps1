@@ -523,6 +523,61 @@ try {
     $candidateManifest = Get-RunManifest $workspace $candidateResult.runPath
     Assert-Equal $candidateManifest.preRunSemanticDriftStatus "ReviewRequired" "Candidate pre-run physical drift status"
     Assert-Equal $candidateManifest.reviewRecordId $planReview.review.reviewId "Candidate exact review binding"
+    $reviewPath = Join-Path (Join-Path $workspace ".proofshift/reviews") `
+        "$($candidateManifest.reviewRecordId).json"
+    if (-not (Test-Path -LiteralPath $reviewPath -PathType Leaf)) {
+        throw "Candidate review record was not persisted."
+    }
+    $reviewRecord = Get-Content -LiteralPath $reviewPath -Raw | ConvertFrom-Json
+    Assert-Equal $reviewRecord.reviewId $candidateManifest.reviewRecordId "Persisted review record identity"
+    Assert-Equal $reviewRecord.workspaceId $candidateManifest.workspaceId "Persisted review workspace binding"
+    Assert-Equal $reviewRecord.baselineId $candidateManifest.baselineId "Persisted review baseline binding"
+    Assert-Equal $reviewRecord.baselinePlanFingerprint $candidateManifest.baselinePlanFingerprint `
+        "Persisted review baseline plan binding"
+    Assert-Equal $reviewRecord.currentPlanFingerprint $candidateManifest.planFingerprint `
+        "Persisted review candidate plan binding"
+    Assert-Equal $reviewRecord.semanticDriftIdentityFingerprint `
+        $candidateManifest.preRunSemanticDriftIdentityFingerprint "Persisted review drift binding"
+    Assert-Equal $reviewRecord.decision $candidateManifest.reviewDecision "Persisted review decision binding"
+    Assert-Equal $reviewRecord.integrityHash $candidateManifest.reviewRecordIntegrityHash `
+        "Persisted review integrity binding"
+    if ($reviewRecord.integrityHash -notmatch '^[0-9a-f]{64}$') {
+        throw "Persisted review record did not expose a SHA-256 integrity identity."
+    }
+
+    $comparisonPath = Join-Path (Join-Path $workspace ".proofshift/comparisons") `
+        "$($candidateManifest.runId).json"
+    if (-not (Test-Path -LiteralPath $comparisonPath -PathType Leaf)) {
+        throw "Candidate post-run comparison record was not persisted."
+    }
+    $comparisonRecord = Get-Content -LiteralPath $comparisonPath -Raw | ConvertFrom-Json
+    Assert-Equal $comparisonRecord.format "proofshift-baseline-outcome-comparison-v1" `
+        "Persisted post-run comparison format"
+    Assert-Equal $comparisonRecord.baselineId $candidateManifest.baselineId `
+        "Persisted post-run comparison baseline binding"
+    Assert-Equal $comparisonRecord.candidateRunId $candidateManifest.runId `
+        "Persisted post-run comparison candidate binding"
+    Assert-Equal $comparisonRecord.candidateRunManifestIdentityFingerprint $candidateManifest.identityFingerprint `
+        "Persisted post-run comparison manifest binding"
+    Assert-Equal $comparisonRecord.preRunSemanticDriftIdentityFingerprint `
+        $candidateManifest.preRunSemanticDriftIdentityFingerprint "Persisted post-run comparison drift binding"
+    Assert-Equal $comparisonRecord.outcomeClassification "ChangedStillQualified" `
+        "Persisted post-run comparison outcome"
+    Assert-Equal $comparisonRecord.detailedComparison.beforeRunId $candidateManifest.baselineRunId `
+        "Persisted post-run comparison baseline run"
+    Assert-Equal $comparisonRecord.detailedComparison.afterRunId $candidateManifest.runId `
+        "Persisted post-run comparison candidate run"
+    Assert-Equal $comparisonRecord.integrityHash $candidateResult.baselineComparison.integrityHash `
+        "Returned post-run comparison integrity identity"
+    Assert-Equal $comparisonRecord.detailedComparisonIdentityFingerprint `
+        $candidateResult.baselineComparison.detailedComparisonIdentityFingerprint `
+        "Returned detailed-comparison identity"
+    foreach ($comparisonHash in @($comparisonRecord.integrityHash,
+        $comparisonRecord.detailedComparisonIdentityFingerprint)) {
+        if ($comparisonHash -notmatch '^[0-9a-f]{64}$') {
+            throw "Persisted post-run comparison did not expose a SHA-256 identity."
+        }
+    }
     $candidatePackage = Join-Path (Join-Path $workspace "evidence") "$($candidateManifest.runId).zip"
     $candidatePackageResult = Invoke-PackagedJson @("workspace", "evidence", "package", $workspace,
         $candidateManifest.runId, "--json")
@@ -862,8 +917,15 @@ try {
         physicalSchemaDriftFingerprint = $updatedShadowArtifact.fingerprint
         physicalSchemaDriftReviewed = $planReview.review.driftStatus -eq "ReviewRequired"
         baselineGovernedCandidateRunId = $candidateManifest.runId
+        baselineGovernedCandidateReviewRecordId = $candidateManifest.reviewRecordId
+        baselineGovernedCandidateReviewRecordIntegrityHash = $reviewRecord.integrityHash
+        baselineGovernedCandidateReviewDriftIdentityFingerprint = $reviewRecord.semanticDriftIdentityFingerprint
         baselineGovernedCandidateDisposition = $candidateManifest.disposition
         baselineGovernedCandidateOutcome = $candidateSummary.outcomeClassification
+        postRunComparisonId = $comparisonRecord.candidateRunId
+        postRunComparisonIntegrityHash = $comparisonRecord.integrityHash
+        postRunComparisonIdentityFingerprint = $comparisonRecord.detailedComparisonIdentityFingerprint
+        postRunComparisonOutcomeClassification = $comparisonRecord.outcomeClassification
         baselineGovernedCandidatePackageValidation = $candidateValidation.valid
         offlineBaselineGovernedComparison = $governedPackageComparison.comparisonMode
         offlineBaselineComparisonOutcome = $governedPackageComparison.outcomeClassification

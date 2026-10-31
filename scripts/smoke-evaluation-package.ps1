@@ -900,6 +900,14 @@ if (-not $PackageOnly -and $ExpectedPlatform -eq "linux-x64") {
         $guidedWorkspaceEvaluation.derivedWorkspaceRuntimeStateCopied) {
         throw "Packaged pilot result does not prove baseline-governed drift review, comparison, progression, and isolated derivation."
     }
+    if ([string]::IsNullOrWhiteSpace($guidedWorkspaceEvaluation.baselineGovernedCandidateReviewRecordId) -or
+        [string]::IsNullOrWhiteSpace($guidedWorkspaceEvaluation.baselineGovernedCandidateReviewRecordIntegrityHash) -or
+        [string]::IsNullOrWhiteSpace($guidedWorkspaceEvaluation.postRunComparisonId) -or
+        $guidedWorkspaceEvaluation.postRunComparisonId -ne $guidedWorkspaceEvaluation.baselineGovernedCandidateRunId -or
+        $guidedWorkspaceEvaluation.postRunComparisonIntegrityHash -notmatch '^[0-9a-f]{64}$' -or
+        $guidedWorkspaceEvaluation.postRunComparisonIdentityFingerprint -notmatch '^[0-9a-f]{64}$') {
+        throw "Packaged pilot result omitted the authoritative review or post-run comparison identities."
+    }
     if (-not $byomEvaluation.sourceOfflineProven -or -not $byomEvaluation.readOnlyTargetProven -or
         $byomEvaluation.targetMutationDetected -or $byomEvaluation.projectionArtifactsDetected -or
         $byomEvaluation.recoveryArtifactsDetected) {
