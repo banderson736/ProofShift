@@ -137,14 +137,14 @@ function Invoke-PackagedWorkspaceRun {
                 $blockedChecks = @($runResult.readinessChecks | Where-Object {
                     $_.status -eq "BLOCKED"
                 } | ForEach-Object {
-                    "$($_.id)/$($_.category)"
+                    "$($_.id)/$($_.category): $($_.message)"
                 } | Sort-Object -Unique) -join ","
             }
             catch [System.Management.Automation.RuntimeException] {
                 $runState = "result-json-invalid"
             }
         }
-        $blockedChecksSummary = if ($blockedChecks) { " blockedChecks=$blockedChecks" } else { "" }
+        $blockedChecksSummary = if ($blockedChecks) { " blockedChecks=[$blockedChecks]" } else { "" }
         throw "Packaged $Purpose guided workspace run returned exit code $exitCode (expected $ExpectedExitCode); state=$runState disposition=$disposition failureCode=$failureCode verification=$verificationOutcome recovery=$recoveryQualification$blockedChecksSummary; output omitted."
     }
     $script:CommandOutputs.Add(($output -join [Environment]::NewLine))
