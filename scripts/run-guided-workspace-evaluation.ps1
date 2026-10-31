@@ -578,6 +578,9 @@ try {
     Assert-Equal $selectedBaseline.Count 1 "Active baseline history selection count"
     Assert-Equal $selectedBaseline[0].baselineId $newBaseline.baselineId "Latest baseline selection"
 
+    $shadowBeforeReplayDiscovery = Join-Path (Join-Path $workspace "discovery") "shadow-before-replay"
+    $null = Invoke-Packaged @("discover", (Join-Path $workspace "proofshift.yaml"), "--system", "shadow",
+        "--endpoint", "records", "--output", $shadowBeforeReplayDiscovery, "--json")
     $derivedWorkspace = Join-Path $script:WorkRoot "derived-workspace"
     $null = Invoke-Packaged @("workspace", "init", $derivedWorkspace, "--from", $workspace)
     $derivedValidation = Invoke-PackagedJson @("workspace", "validate", $derivedWorkspace, "--json")
@@ -801,9 +804,13 @@ try {
     Remove-Item -LiteralPath $unownedFile -Force
     Remove-Item -LiteralPath $unownedTemporary -Recurse -Force
 
+    $shadowBeforeUnavailableSourceDiscovery = Join-Path (Join-Path $workspace "discovery") `
+        "shadow-before-unavailable-source"
+    $null = Invoke-Packaged @("discover", (Join-Path $workspace "proofshift.yaml"), "--system", "shadow",
+        "--endpoint", "records", "--output", $shadowBeforeUnavailableSourceDiscovery, "--json")
     [Environment]::SetEnvironmentVariable($sourceConnectionName, $unavailableSourceConnection, "Process")
     $incomplete = Invoke-PackagedWorkspaceRun -Workspace $workspace -CheckpointId $null `
-        -Purpose "unavailable-source" -ExpectedExitCode 1
+        -Purpose "unavailable-source" -Baseline "none" -ExpectedExitCode 1
     if ($incomplete.state -notin @("PreflightBlocked", "Failed", "Interrupted") -or $incomplete.run.disposition) {
         throw "Unavailable-source run fabricated a final business disposition."
     }
