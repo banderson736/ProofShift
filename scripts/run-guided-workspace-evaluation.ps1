@@ -275,7 +275,7 @@ function Start-DefectiveWorkspaceReplay {
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
     $quotedArguments = @($script:CliPath, "workspace", "run", $Workspace,
-        "--checkpoint", $CheckpointId, "--json") | ForEach-Object {
+        "--checkpoint", $CheckpointId, "--baseline", "none", "--json") | ForEach-Object {
         '"' + $_.Replace('"', '\"') + '"'
     }
     $startInfo.Arguments = $quotedArguments -join " "
@@ -666,6 +666,10 @@ try {
     Assert-Equal $cleanReplayComparison.semanticallyEquivalent $false `
         "Fresh-capture/replay equivalence boundary"
 
+    $shadowBeforeDefectiveReplayDiscovery = Join-Path (Join-Path $workspace "discovery") `
+        "shadow-before-defective-replay"
+    $null = Invoke-Packaged @("discover", (Join-Path $workspace "proofshift.yaml"), "--system", "shadow",
+        "--endpoint", "records", "--output", $shadowBeforeDefectiveReplayDiscovery, "--json")
     $defectiveExecution = Start-DefectiveWorkspaceReplay $workspace $checkpoint
     $defectiveResult = $defectiveExecution.Result
     Assert-Equal $defectiveResult.state "Completed" "Defective guided run execution state"
