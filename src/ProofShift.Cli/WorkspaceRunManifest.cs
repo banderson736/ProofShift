@@ -16,6 +16,18 @@ internal sealed record WorkspaceRunManifest
     public string ProductVersion { get; init; } = string.Empty;
     public string? SourceRevision { get; init; }
     public string? SourceTree { get; init; }
+    public Guid? BaselineId { get; init; }
+    public Guid? BaselineRunId { get; init; }
+    public string? BaselineRunManifestIdentityFingerprint { get; init; }
+    public string? BaselinePlanFingerprint { get; init; }
+    public string? BaselineEvidencePackageIdentity { get; init; }
+    public string? PreRunSemanticDriftIdentityFingerprint { get; init; }
+    public string? PreRunSemanticDriftStatus { get; init; }
+    public string? SemanticDriftArtifactReference { get; init; }
+    public string? SemanticDriftArtifactIntegrityHash { get; init; }
+    public Guid? ReviewRecordId { get; init; }
+    public string? ReviewRecordIntegrityHash { get; init; }
+    public string? ReviewDecision { get; init; }
     public DateTimeOffset StartedAt { get; init; }
     public DateTimeOffset UpdatedAt { get; init; }
     public string State { get; init; } = "Created";
@@ -58,7 +70,10 @@ internal sealed record WorkspaceRunProgressEvent(string Type, WorkspaceRunProgre
 internal sealed record WorkspaceRunResult(
     WorkspaceRunManifest? Manifest,
     string? RunDirectory,
-    IReadOnlyList<WorkspacePreflightCheck> ReadinessChecks);
+    IReadOnlyList<WorkspacePreflightCheck> ReadinessChecks)
+{
+    public WorkspaceBaselineComparisonRecord? BaselineComparison { get; init; }
+}
 
 internal static class WorkspaceRunManifestStore
 {
@@ -135,6 +150,18 @@ internal static class WorkspaceRunManifestStore
             manifest.ProductVersion,
             manifest.SourceRevision,
             manifest.SourceTree,
+            manifest.BaselineId,
+            manifest.BaselineRunId,
+            manifest.BaselineRunManifestIdentityFingerprint,
+            manifest.BaselinePlanFingerprint,
+            manifest.BaselineEvidencePackageIdentity,
+            manifest.PreRunSemanticDriftIdentityFingerprint,
+            manifest.PreRunSemanticDriftStatus,
+            manifest.SemanticDriftArtifactReference,
+            manifest.SemanticDriftArtifactIntegrityHash,
+            manifest.ReviewRecordId,
+            manifest.ReviewRecordIntegrityHash,
+            manifest.ReviewDecision,
             manifest.PlanFingerprint,
             manifest.ConfigurationHash,
             manifest.GraphHash,
@@ -176,6 +203,18 @@ internal static class WorkspaceRunManifestStore
         string ProductVersion,
         string? SourceRevision,
         string? SourceTree,
+        Guid? BaselineId,
+        Guid? BaselineRunId,
+        string? BaselineRunManifestIdentityFingerprint,
+        string? BaselinePlanFingerprint,
+        string? BaselineEvidencePackageIdentity,
+        string? PreRunSemanticDriftIdentityFingerprint,
+        string? PreRunSemanticDriftStatus,
+        string? SemanticDriftArtifactReference,
+        string? SemanticDriftArtifactIntegrityHash,
+        Guid? ReviewRecordId,
+        string? ReviewRecordIntegrityHash,
+        string? ReviewDecision,
         string? PlanFingerprint,
         string? ConfigurationHash,
         string? GraphHash,

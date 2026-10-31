@@ -226,7 +226,7 @@ internal static class Program
     private static void WriteUsage()
     {
         Console.Error.WriteLine("Usage: proofshift validate <config> [--json] | proofshift plan <config> [--json] | proofshift inspect <config> [--json] | proofshift snapshot <config> [--json] | proofshift project <config> [--checkpoint <id-or-path>] [--json] | proofshift verify <config> --checkpoint <id> --projection <run-id> [--json] | proofshift verify-external <config> --checkpoint <id-or-path> --observation <label> [--json] | proofshift evidence <config> --run <verification-run-id> [--json] | proofshift recovery <config> --run <dry-run-id> [--json] | proofshift report <config> --run <dry-run-id> [--json] | proofshift report <config> --verification-run <verification-run-id> [--json] | proofshift report <dry-run-id> [--json, reads current-directory stores] | proofshift compare <config> --before <dry-run-id> --after <dry-run-id> [--json] | proofshift compare <config> --before-verification <verification-run-id> --after-verification <verification-run-id> [--json] | proofshift compare <before-dry-run-id> <after-dry-run-id> [--json, reads current-directory stores] | proofshift demo list | describe <id> | preflight <id> | run <id> | reset <id> | demo generate <output-directory> [--scale fast|large] [--seed <integer>] | demo benchmark [--scale fast|large] [--seed <integer>] | proofshift dry-run <config> [--json]");
-        Console.Error.WriteLine("Workspace: proofshift workspace init <directory> [--template generic|pension] | proofshift workspace validate <directory> [--json] | proofshift workspace preflight <directory> [--connect] [--json] | proofshift workspace plan <directory> [--json] | proofshift workspace run <directory> [--checkpoint <id-or-path>] [--observation <label>] [--json] | proofshift workspace evidence package <workspace> <run-id> [--output <zip>] [--diagnostic] [--json] | proofshift workspace evidence validate-package <zip> [--json] | proofshift workspace summary <workspace> <run-id> [--output <path>] [--json] | proofshift workspace compare <workspace> <run-a> <run-b> [--json] | proofshift workspace cleanup <workspace> <run-id> [--plan|--execute] [--json]");
+        Console.Error.WriteLine("Workspace: proofshift workspace init <directory> [--template generic|pension] | proofshift workspace validate <directory> [--json] | proofshift workspace preflight <directory> [--connect] [--json] | proofshift workspace plan <directory> [--baseline active|<baseline-id>|none] [--json] | proofshift workspace run <directory> [--checkpoint <id-or-path>] [--observation <label>] [--json] | proofshift workspace evidence package <workspace> <run-id> [--output <zip>] [--diagnostic] [--json] | proofshift workspace evidence validate-package <zip> [--json] | proofshift workspace baseline promote <workspace> <run-id> [--json] | proofshift workspace baseline list <workspace> [--json] | proofshift workspace baseline show <workspace> <baseline-id> [--json] | proofshift workspace baseline active <workspace> [--json] | proofshift workspace summary <workspace> <run-id> [--output <path>] [--json] | proofshift workspace compare <workspace> <run-a> <run-b> [--json] | proofshift workspace cleanup <workspace> <run-id> [--plan|--execute] [--json]");
     }
 
     private static void WriteHelp()
@@ -243,12 +243,23 @@ internal static class Program
               workspace validate <path>      Validate workspace and project structure
               workspace preflight <path> [--connect] [--json]
                                               Assess readiness; connectivity is explicit and read-only
-              workspace plan <path> [--json] Show the effective read-only workspace evaluation plan
+              workspace plan <path> [--baseline active|<baseline-id>|none] [--json]
+                                              Show the effective plan and semantic baseline drift
               workspace run <path> [options] Run the guided workspace evaluation
               workspace evidence package <path> <run-id> [options]
                                               Create a portable, run-bound Evidence package
               workspace evidence validate-package <zip> [--json]
                                               Validate a package offline without extraction
+              workspace evidence compare-packages <baseline.zip> <candidate.zip> [--json]
+                                              Compare integrity-valid packages offline
+              workspace baseline promote <path> <run-id> [--json]
+                                              Promote an integrity-verified completed run
+              workspace baseline list <path> [--json]
+                                              List immutable baseline history
+              workspace baseline show <path> <baseline-id> [--json]
+                                              Inspect a retained baseline
+              workspace baseline active <path> [--json]
+                                              Inspect the active baseline
               workspace summary <path> <run-id> [--output <path>] [--json]
                                               Write a deterministic, run-bound customer summary
               workspace compare <path> <before-run> <after-run> [--json]

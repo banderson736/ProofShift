@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ProofShift.Cli;
 using ProofShift.Configuration;
 using ProofShift.Connectors.Abstractions;
@@ -84,7 +85,7 @@ public sealed class AuthoringCliTests
         var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-{Guid.NewGuid():N}");
         try
         {
-            var init = await RunAsync("workspace", "init", root, "--template", template);
+            var init = await RunAsync("workspace", "init", root, "--TEMPLATE", template);
             Assert.Equal(0, init.ExitCode);
             Assert.Contains("Customer data: data/", init.Output, StringComparison.Ordinal);
             Assert.Contains("Evidence packages: evidence/", init.Output, StringComparison.Ordinal);
@@ -140,7 +141,12 @@ public sealed class AuthoringCliTests
             {
                 Assert.Equal("BLOCKED", invalidPlanJson.RootElement.GetProperty("status").GetString());
                 Assert.Equal(JsonValueKind.Null, invalidPlanJson.RootElement.GetProperty("plan").ValueKind);
+                Assert.Equal("Blocking", invalidPlanJson.RootElement.GetProperty("semanticDrift")
+                    .GetProperty("status").GetString());
             }
+            var invalidPlanText = await RunAsync("workspace", "plan", root);
+            Assert.Equal(1, invalidPlanText.ExitCode);
+            Assert.Contains("Status: Blocking", invalidPlanText.Output, StringComparison.Ordinal);
 
             var overlappingPaths = manifestText.Replace("\"evidence\": \"evidence\"", "\"evidence\": \"data\"", StringComparison.Ordinal);
             await File.WriteAllTextAsync(manifestPath, overlappingPaths, TestContext.Current.CancellationToken);
@@ -161,6 +167,159 @@ public sealed class AuthoringCliTests
         finally
         {
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceInitFromReusesConfigurationWithoutCopyingHistoryDataOrSecrets()
+    {
+        var sourceRoot = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-reuse-source-{Guid.NewGuid():N}");
+        var derivedRoot = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-reuse-derived-{Guid.NewGuid():N}");
+        var occupiedRoot = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-reuse-occupied-{Guid.NewGuid():N}");
+        const string resolvedSecret = "Password=C5-private-test-secret;User ID=operator";
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", sourceRoot, "--template", "generic")).ExitCode);
+            var sourceRunId = await CreatePackageFixtureRunAsync(sourceRoot, "QUALIFIED", EvidenceResult.Pass);
+            await WorkspaceEvidencePackageService.CreateAsync(sourceRoot, sourceRunId.ToString("D"), null,
+                diagnostic: false, TestContext.Current.CancellationToken);
+            var promotion = await RunAsync("workspace", "baseline", "promote", sourceRoot,
+                sourceRunId.ToString("D"), "--json");
+            Assert.Equal(0, promotion.ExitCode);
+            await File.WriteAllTextAsync(Path.Combine(sourceRoot, "data", "private-source.csv"),
+                "private-customer-record", TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(Path.Combine(sourceRoot, "discovery", "old-schema.json"),
+                "historical discovery", TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(Path.Combine(sourceRoot, "generated", "review.json"),
+                "old configuration review", TestContext.Current.CancellationToken);
+
+            var graphPath = Path.Combine(sourceRoot, "migration", "graph.yaml");
+            var rulePath = Path.Combine(sourceRoot, "rules", "rules.yaml");
+            var graphBefore = await File.ReadAllBytesAsync(graphPath, TestContext.Current.CancellationToken);
+            var rulesBefore = await File.ReadAllBytesAsync(rulePath, TestContext.Current.CancellationToken);
+            var sourceManifest = await EvaluationWorkspaceManifestStore.ReadAsync(sourceRoot)
+                ?? throw new InvalidDataException("Source workspace manifest is missing.");
+
+            var derived = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION", resolvedSecret,
+                "workspace", "init", derivedRoot, "--FROM", sourceRoot);
+            Assert.Equal(0, derived.ExitCode);
+            Assert.Contains("run history, baselines, reviews, Evidence, discovery, and customer data were not copied.",
+                derived.Output, StringComparison.Ordinal);
+            var destinationManifest = await EvaluationWorkspaceManifestStore.ReadAsync(derivedRoot)
+                ?? throw new InvalidDataException("Derived workspace manifest is missing.");
+            Assert.NotEqual(sourceManifest.WorkspaceId, destinationManifest.WorkspaceId);
+            Assert.Equal(sourceManifest.ProjectConfiguration, destinationManifest.ProjectConfiguration);
+            Assert.True((await EvaluationWorkspaceManifestStore.ValidateAsync(derivedRoot)).Valid);
+            Assert.Equal(graphBefore, await File.ReadAllBytesAsync(Path.Combine(derivedRoot, "migration", "graph.yaml"),
+                TestContext.Current.CancellationToken));
+            Assert.Equal(rulesBefore, await File.ReadAllBytesAsync(Path.Combine(derivedRoot, "rules", "rules.yaml"),
+                TestContext.Current.CancellationToken));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(Path.Combine(derivedRoot, "runs")));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(Path.Combine(derivedRoot, "evidence")));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(Path.Combine(derivedRoot, "discovery")));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(Path.Combine(derivedRoot, "generated")));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(Path.Combine(derivedRoot, "data")));
+            Assert.False(File.Exists(Path.Combine(derivedRoot, ".proofshift", "baselines", "catalog.json")));
+            Assert.False(Directory.Exists(Path.Combine(derivedRoot, ".proofshift", "reviews")));
+            var derivedRunHistory = await RunAsync("workspace", "runs", derivedRoot, "--json");
+            Assert.Equal(0, derivedRunHistory.ExitCode);
+            Assert.Empty(JsonDocument.Parse(derivedRunHistory.Output).RootElement.EnumerateArray());
+            foreach (var file in Directory.EnumerateFiles(derivedRoot, "*", SearchOption.AllDirectories))
+                Assert.DoesNotContain(resolvedSecret,
+                    await File.ReadAllTextAsync(file, TestContext.Current.CancellationToken),
+                    StringComparison.Ordinal);
+            Assert.True(File.Exists(Path.Combine(sourceRoot, "data", "private-source.csv")));
+
+            var overlappingRoot = Path.Combine(sourceRoot, "nested-destination");
+            var overlap = await RunAsync("workspace", "init", overlappingRoot, "--from", sourceRoot);
+            Assert.Equal(1, overlap.ExitCode);
+            Assert.Contains("PSWORK017", overlap.Error, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(overlappingRoot));
+
+            Directory.CreateDirectory(occupiedRoot);
+            var protectedFile = Path.Combine(occupiedRoot, "keep.txt");
+            await File.WriteAllTextAsync(protectedFile, "preserve", TestContext.Current.CancellationToken);
+            var occupied = await RunAsync("workspace", "init", occupiedRoot, "--from", sourceRoot);
+            Assert.Equal(1, occupied.ExitCode);
+            Assert.Contains("PSWORK017", occupied.Error, StringComparison.Ordinal);
+            Assert.Equal("preserve", await File.ReadAllTextAsync(protectedFile,
+                TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            if (Directory.Exists(sourceRoot)) Directory.Delete(sourceRoot, recursive: true);
+            if (Directory.Exists(derivedRoot)) Directory.Delete(derivedRoot, recursive: true);
+            if (Directory.Exists(occupiedRoot)) Directory.Delete(occupiedRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceInitFromRejectsDestinationSymlink()
+    {
+        var sourceRoot = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-reuse-link-source-{Guid.NewGuid():N}");
+        var destinationRoot = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-reuse-link-target-{Guid.NewGuid():N}");
+        var destinationLink = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-reuse-link-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", sourceRoot)).ExitCode);
+            Directory.CreateDirectory(destinationRoot);
+            try
+            {
+                Directory.CreateSymbolicLink(destinationLink, destinationRoot);
+            }
+            catch (Exception exception) when (exception is UnauthorizedAccessException or
+                PlatformNotSupportedException or IOException)
+            {
+                Assert.Skip("Host does not permit symlink creation for workspace derivation coverage.");
+            }
+
+            var result = await RunAsync("workspace", "init", destinationLink, "--from", sourceRoot);
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("PSWORK017", result.Error, StringComparison.Ordinal);
+            Assert.Empty(Directory.EnumerateFileSystemEntries(destinationRoot));
+        }
+        finally
+        {
+            if (Directory.Exists(sourceRoot)) Directory.Delete(sourceRoot, recursive: true);
+            if (Directory.Exists(destinationLink)) Directory.Delete(destinationLink);
+            if (Directory.Exists(destinationRoot)) Directory.Delete(destinationRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceInitFromRejectsConfigurationSymlinkTraversal()
+    {
+        var sourceRoot = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-reuse-source-link-{Guid.NewGuid():N}");
+        var destinationRoot = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-reuse-dest-link-{Guid.NewGuid():N}");
+        var outsideConfiguration = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-outside-{Guid.NewGuid():N}.yaml");
+        var graphPath = Path.Combine(sourceRoot, "migration", "graph.yaml");
+        var linkCreated = false;
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", sourceRoot)).ExitCode);
+            File.Move(graphPath, outsideConfiguration);
+            try
+            {
+                File.CreateSymbolicLink(graphPath, outsideConfiguration);
+                linkCreated = true;
+            }
+            catch (Exception exception) when (exception is UnauthorizedAccessException or
+                PlatformNotSupportedException or IOException)
+            {
+                Assert.Skip("Host does not permit symlink creation for workspace derivation coverage.");
+            }
+
+            var result = await RunAsync("workspace", "init", destinationRoot, "--from", sourceRoot);
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("PSWORK017", result.Error, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(destinationRoot));
+        }
+        finally
+        {
+            if (linkCreated && File.Exists(graphPath)) File.Delete(graphPath);
+            if (Directory.Exists(sourceRoot)) Directory.Delete(sourceRoot, recursive: true);
+            if (Directory.Exists(destinationRoot)) Directory.Delete(destinationRoot, recursive: true);
+            if (File.Exists(outsideConfiguration)) File.Delete(outsideConfiguration);
         }
     }
 
@@ -548,6 +707,882 @@ public sealed class AuthoringCliTests
     }
 
     [Fact]
+    public async Task WorkspaceBaselinePromotionRetainsImmutableHistoryAndExposesActiveBaseline()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-baseline-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var emptyHistory = await RunAsync("workspace", "baseline", "list", root, "--json");
+            Assert.Equal(0, emptyHistory.ExitCode);
+            Assert.Empty(JsonDocument.Parse(emptyHistory.Output).RootElement.EnumerateArray());
+            var emptyActive = await RunAsync("workspace", "baseline", "active", root, "--json");
+            Assert.Equal(0, emptyActive.ExitCode);
+            Assert.Equal(JsonValueKind.Null, JsonDocument.Parse(emptyActive.Output).RootElement.ValueKind);
+
+            var qualifiedRun = await CreatePackageFixtureRunAsync(root, "QUALIFIED", EvidenceResult.Pass);
+            await WorkspaceEvidencePackageService.CreateAsync(root, qualifiedRun.ToString("D"), null,
+                diagnostic: false, TestContext.Current.CancellationToken);
+            var firstPromotion = await RunAsync("workspace", "baseline", "promote", root,
+                qualifiedRun.ToString("D"), "--json");
+            Assert.Equal(0, firstPromotion.ExitCode);
+            using var firstJson = JsonDocument.Parse(firstPromotion.Output);
+            var firstBaselineId = firstJson.RootElement.GetProperty("baselineId").GetGuid();
+            Assert.Equal("QUALIFIED", firstJson.RootElement.GetProperty("disposition").GetString());
+            Assert.Equal(64, firstJson.RootElement.GetProperty("runManifestIdentityFingerprint").GetString()!.Length);
+            Assert.Equal(64, firstJson.RootElement.GetProperty("runManifestHash").GetString()!.Length);
+            Assert.Equal(64, firstJson.RootElement.GetProperty("effectivePlanFingerprint").GetString()!.Length);
+            Assert.Equal(64, firstJson.RootElement.GetProperty("configurationHash").GetString()!.Length);
+            Assert.Equal(64, firstJson.RootElement.GetProperty("graphHash").GetString()!.Length);
+            Assert.Equal(64, firstJson.RootElement.GetProperty("evidencePackageIdentity").GetString()!.Length);
+            Assert.Equal(64, firstJson.RootElement.GetProperty("recordHash").GetString()!.Length);
+            Assert.Equal("0.1.0-preview.1", firstJson.RootElement.GetProperty("productVersion").GetString());
+            Assert.Equal(64, firstJson.RootElement.GetProperty("reconciliationFingerprint").GetString()!.Length);
+            Assert.False(string.IsNullOrWhiteSpace(firstJson.RootElement.GetProperty("checkpointId").GetString()));
+            Assert.Equal(64, firstJson.RootElement.GetProperty("checkpointManifestHash").GetString()!.Length);
+            Assert.Equal(64, firstJson.RootElement.GetProperty("checkpointSourceFingerprint").GetString()!.Length);
+            Assert.False(string.IsNullOrWhiteSpace(firstJson.RootElement.GetProperty("verificationRunId").GetString()));
+            Assert.False(string.IsNullOrWhiteSpace(firstJson.RootElement.GetProperty("verificationOutcome").GetString()));
+            Assert.Equal(64, firstJson.RootElement.GetProperty("verificationEvidenceFingerprint").GetString()!.Length);
+            Assert.Equal(64, firstJson.RootElement.GetProperty("verificationLedgerFingerprint").GetString()!.Length);
+            Assert.Equal(Path.Combine("evidence", $"{qualifiedRun:D}.zip").Replace('\\', '/'),
+                firstJson.RootElement.GetProperty("evidencePackageRelativePath").GetString());
+            Assert.Equal(JsonValueKind.Array,
+                firstJson.RootElement.GetProperty("discoveryFingerprints").ValueKind);
+            var firstBaselinePath = Path.Combine(root, ".proofshift", "baselines",
+                $"{firstBaselineId:D}.json");
+            var originalFirstRecord = await File.ReadAllBytesAsync(firstBaselinePath,
+                TestContext.Current.CancellationToken);
+
+            var notQualifiedRun = await CreatePackageFixtureRunAsync(root, "NOT QUALIFIED",
+                EvidenceResult.Fail, detailedFindings: true, evidenceValue: "sensitive-fixture-value",
+                exceptionReason: "sensitive-fixture-reason");
+            await WorkspaceEvidencePackageService.CreateAsync(root, notQualifiedRun.ToString("D"), null,
+                diagnostic: false, TestContext.Current.CancellationToken);
+            var secondPromotion = await RunAsync("workspace", "baseline", "promote", root,
+                notQualifiedRun.ToString("D"), "--json");
+            Assert.Equal(0, secondPromotion.ExitCode);
+            using var secondJson = JsonDocument.Parse(secondPromotion.Output);
+            var secondBaselineId = secondJson.RootElement.GetProperty("baselineId").GetGuid();
+            Assert.Equal("NOT QUALIFIED", secondJson.RootElement.GetProperty("disposition").GetString());
+            Assert.Equal(firstBaselineId,
+                secondJson.RootElement.GetProperty("previousActiveBaselineId").GetGuid());
+
+            Assert.Equal(originalFirstRecord, await File.ReadAllBytesAsync(firstBaselinePath,
+                TestContext.Current.CancellationToken));
+            var secondBaselineText = await File.ReadAllTextAsync(
+                Path.Combine(root, ".proofshift", "baselines", $"{secondBaselineId:D}.json"),
+                TestContext.Current.CancellationToken);
+            Assert.DoesNotContain("sensitive-fixture-value", secondBaselineText, StringComparison.Ordinal);
+            Assert.DoesNotContain("sensitive-fixture-reason", secondBaselineText, StringComparison.Ordinal);
+
+            var history = await RunAsync("workspace", "baseline", "list", root, "--json");
+            Assert.Equal(0, history.ExitCode);
+            using (var historyJson = JsonDocument.Parse(history.Output))
+            {
+                var records = historyJson.RootElement.EnumerateArray().ToArray();
+                Assert.Equal(2, records.Length);
+                Assert.Equal(firstBaselineId, records[0].GetProperty("baselineId").GetGuid());
+                Assert.Equal(secondBaselineId, records[1].GetProperty("baselineId").GetGuid());
+            }
+
+            var shown = await RunAsync("workspace", "baseline", "show", root,
+                firstBaselineId.ToString("D"), "--json");
+            Assert.Equal(0, shown.ExitCode);
+            using var shownJson = JsonDocument.Parse(shown.Output);
+            Assert.Equal("QUALIFIED", shownJson.RootElement.GetProperty("disposition").GetString());
+
+            var active = await RunAsync("workspace", "baseline", "active", root, "--json");
+            Assert.Equal(0, active.ExitCode);
+            using var activeJson = JsonDocument.Parse(active.Output);
+            Assert.Equal(secondBaselineId, activeJson.RootElement.GetProperty("baselineId").GetGuid());
+            Assert.Equal("NOT QUALIFIED", activeJson.RootElement.GetProperty("disposition").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspacePilotHistorySupportsExplicitNotQualifiedProgressionAndRebuildableRunListing()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-pilot-history-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var baselineARunId = await CreatePackageFixtureRunAsync(root, "NOT QUALIFIED",
+                EvidenceResult.Fail, detailedFindings: true);
+            var baselineAPackage = await WorkspaceEvidencePackageService.CreateAsync(root,
+                baselineARunId.ToString("D"), null, diagnostic: false, TestContext.Current.CancellationToken);
+            var baselineAPackageHash = SHA256.HashData(
+                await File.ReadAllBytesAsync(baselineAPackage.PackagePath, TestContext.Current.CancellationToken));
+            var promotionA = await RunAsync("workspace", "baseline", "promote", root,
+                baselineARunId.ToString("D"), "--json");
+            Assert.Equal(0, promotionA.ExitCode);
+            var baselineAId = JsonDocument.Parse(promotionA.Output).RootElement.GetProperty("baselineId").GetGuid();
+            var baselineABytes = await File.ReadAllBytesAsync(
+                WorkspaceBaselineService.GetBaselineRecordPath(root, baselineAId),
+                TestContext.Current.CancellationToken);
+            var baselineA = await WorkspaceBaselineService.ShowAsync(root, baselineAId.ToString("D"),
+                TestContext.Current.CancellationToken);
+
+            var candidateB = await CreateBoundCandidateAsync(baselineA, "NOT QUALIFIED", EvidenceResult.Fail,
+                detailedFindings: false);
+            Assert.Equal("StillNotQualified", candidateB.Comparison.OutcomeClassification);
+            Assert.Contains(candidateB.Comparison.DetailedComparison.Findings,
+                item => item.Category == "Resolved");
+            var summaryB = await WorkspaceEvaluationSummaryService.CreateAsync(root,
+                candidateB.RunId.ToString("D"), null, TestContext.Current.CancellationToken);
+            var summaryTextB = await File.ReadAllTextAsync(summaryB.SummaryPath,
+                TestContext.Current.CancellationToken);
+            Assert.Contains("Post-run outcome: **StillNotQualified**", summaryTextB, StringComparison.Ordinal);
+            Assert.Contains("Finding resolved:", summaryTextB, StringComparison.Ordinal);
+
+            var candidateBPackage = Path.Combine(root, "evidence", $"{candidateB.RunId:D}.zip");
+            var candidateBPackageHash = SHA256.HashData(
+                await File.ReadAllBytesAsync(candidateBPackage, TestContext.Current.CancellationToken));
+            var promotionB = await RunAsync("workspace", "baseline", "promote", root,
+                candidateB.RunId.ToString("D"), "--json");
+            Assert.Equal(0, promotionB.ExitCode);
+            using (var promotionBJson = JsonDocument.Parse(promotionB.Output))
+            {
+                var record = promotionBJson.RootElement;
+                Assert.Equal(baselineAId, record.GetProperty("previousActiveBaselineId").GetGuid());
+                Assert.Equal(baselineAId, record.GetProperty("promotionComparisonBaselineId").GetGuid());
+                Assert.Equal("StillNotQualified",
+                    record.GetProperty("promotionComparisonOutcomeClassification").GetString());
+                Assert.Equal("NOT QUALIFIED", record.GetProperty("disposition").GetString());
+            }
+            var baselineBId = JsonDocument.Parse(promotionB.Output).RootElement.GetProperty("baselineId").GetGuid();
+            Assert.Equal(baselineABytes, await File.ReadAllBytesAsync(
+                WorkspaceBaselineService.GetBaselineRecordPath(root, baselineAId),
+                TestContext.Current.CancellationToken));
+            Assert.Equal(baselineAPackageHash, SHA256.HashData(await File.ReadAllBytesAsync(
+                baselineAPackage.PackagePath, TestContext.Current.CancellationToken)));
+            Assert.Equal(candidateBPackageHash, SHA256.HashData(await File.ReadAllBytesAsync(
+                candidateBPackage, TestContext.Current.CancellationToken)));
+
+            var duplicateActive = await RunAsync("workspace", "baseline", "promote", root,
+                candidateB.RunId.ToString("D"), "--json");
+            Assert.Equal(0, duplicateActive.ExitCode);
+            Assert.Equal("AlreadyActive",
+                JsonDocument.Parse(duplicateActive.Output).RootElement.GetProperty("promotionStatus").GetString());
+            var duplicateHistorical = await RunAsync("workspace", "baseline", "promote", root,
+                baselineARunId.ToString("D"), "--json");
+            Assert.Equal(1, duplicateHistorical.ExitCode);
+            Assert.Contains("PSWORKBASE098", duplicateHistorical.Error, StringComparison.Ordinal);
+            Assert.Contains("already represented by a historical baseline", duplicateHistorical.Error,
+                StringComparison.Ordinal);
+            Assert.Equal(2, (await WorkspaceBaselineService.ListAsync(root,
+                TestContext.Current.CancellationToken)).Count);
+
+            var baselineB = await WorkspaceBaselineService.ShowAsync(root, baselineBId.ToString("D"),
+                TestContext.Current.CancellationToken);
+            var candidateC = await CreateBoundCandidateAsync(baselineB, "QUALIFIED", EvidenceResult.Pass,
+                detailedFindings: false);
+            Assert.Equal("Improved", candidateC.Comparison.OutcomeClassification);
+            Assert.Contains(candidateC.Comparison.DetailedComparison.Findings,
+                item => item.Category == "Resolved");
+
+            var runs = await RunAsync("workspace", "runs", root, "--json");
+            Assert.Equal(0, runs.ExitCode);
+            using (var runHistory = JsonDocument.Parse(runs.Output))
+            {
+                var records = runHistory.RootElement.EnumerateArray().ToArray();
+                var historicalCandidate = records.Single(item =>
+                    item.GetProperty("runId").GetGuid() == candidateB.RunId);
+                Assert.True(historicalCandidate.GetProperty("trusted").GetBoolean());
+                Assert.Equal(baselineAId, historicalCandidate.GetProperty("baselineId").GetGuid());
+                Assert.Equal("StillNotQualified",
+                    historicalCandidate.GetProperty("outcomeClassification").GetString());
+                Assert.Equal("Valid", historicalCandidate.GetProperty("packageStatus").GetString());
+                Assert.Equal("Valid", historicalCandidate.GetProperty("comparisonStatus").GetString());
+                Assert.True(records.Single(item => item.GetProperty("runId").GetGuid() == candidateC.RunId)
+                    .GetProperty("trusted").GetBoolean());
+            }
+
+            var corruptRunDirectory = Path.Combine(root, "runs", Guid.NewGuid().ToString("D"));
+            Directory.CreateDirectory(corruptRunDirectory);
+            await File.WriteAllTextAsync(Path.Combine(corruptRunDirectory, "run.json"), "{}",
+                TestContext.Current.CancellationToken);
+            var historyWithInvalid = await RunAsync("workspace", "runs", root, "--json");
+            Assert.Equal(0, historyWithInvalid.ExitCode);
+            using var invalidRows = JsonDocument.Parse(historyWithInvalid.Output);
+            var invalid = invalidRows.RootElement.EnumerateArray().Single(item =>
+                item.GetProperty("directoryName").GetString() == Path.GetFileName(corruptRunDirectory));
+            Assert.False(invalid.GetProperty("trusted").GetBoolean());
+            Assert.Equal("Invalid", invalid.GetProperty("validationStatus").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+
+        async Task<(Guid RunId, WorkspaceBaselineComparisonRecord Comparison)> CreateBoundCandidateAsync(
+            WorkspaceBaselineRecord baseline, string disposition, EvidenceResult evidenceResult,
+            bool detailedFindings, IReadOnlyList<string>? discoveryFingerprints = null)
+        {
+            var runId = await CreatePackageFixtureRunAsync(root, disposition, evidenceResult, detailedFindings,
+                discoveryFingerprints: discoveryFingerprints);
+            var plan = await WorkspaceEvaluationService.PlanAsync(root, TestContext.Current.CancellationToken);
+            var drift = await WorkspaceSemanticDriftService.CompareAsync(root, plan,
+                baseline.BaselineId.ToString("D"), TestContext.Current.CancellationToken);
+            var workspace = await EvaluationWorkspaceManifestStore.ReadAsync(root)
+                ?? throw new InvalidDataException("Test workspace manifest is missing.");
+            var artifact = await WorkspaceSemanticDriftArtifactStore.WriteAsync(root, workspace.WorkspaceId,
+                runId, drift, TestContext.Current.CancellationToken);
+            var runDirectory = Path.Combine(root, "runs", runId.ToString("D"));
+            var run = await WorkspaceRunManifestStore.ReadAsync(runDirectory, TestContext.Current.CancellationToken);
+            run = run with
+            {
+                BaselineId = baseline.BaselineId,
+                BaselineRunId = baseline.RunId,
+                BaselineRunManifestIdentityFingerprint = baseline.RunManifestIdentityFingerprint,
+                BaselinePlanFingerprint = baseline.EffectivePlanFingerprint,
+                BaselineEvidencePackageIdentity = baseline.EvidencePackageIdentity,
+                PreRunSemanticDriftIdentityFingerprint = WorkspacePlanReviewService.IdentityFingerprint(drift),
+                PreRunSemanticDriftStatus = drift.Status.ToString(),
+                SemanticDriftArtifactReference = artifact.Reference,
+                SemanticDriftArtifactIntegrityHash = artifact.IntegrityHash,
+                ReviewDecision = "NotRequired"
+            };
+            await WorkspaceRunManifestStore.WriteAsync(runDirectory, run, createNew: false,
+                TestContext.Current.CancellationToken);
+            run = await WorkspaceRunManifestStore.ReadAsync(runDirectory, TestContext.Current.CancellationToken);
+            var comparison = await WorkspaceBaselineComparisonService.CompareAndPersistAsync(root, run,
+                TestContext.Current.CancellationToken)
+                ?? throw new InvalidDataException("Expected a candidate outcome comparison.");
+            await WorkspaceEvidencePackageService.CreateAsync(root, runId.ToString("D"), null,
+                diagnostic: false, TestContext.Current.CancellationToken);
+            return (runId, comparison);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspacePilotHistoryPromotesChangedQualifiedCandidatesOnlyExplicitly()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-qualified-history-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var baselineRunId = await CreatePackageFixtureRunAsync(root, "QUALIFIED", EvidenceResult.Pass);
+            await WorkspaceEvidencePackageService.CreateAsync(root, baselineRunId.ToString("D"), null,
+                diagnostic: false, TestContext.Current.CancellationToken);
+            var firstPromotion = await RunAsync("workspace", "baseline", "promote", root,
+                baselineRunId.ToString("D"), "--json");
+            Assert.Equal(0, firstPromotion.ExitCode);
+            var baselineId = JsonDocument.Parse(firstPromotion.Output).RootElement.GetProperty("baselineId").GetGuid();
+            var baseline = await WorkspaceBaselineService.ShowAsync(root, baselineId.ToString("D"),
+                TestContext.Current.CancellationToken);
+
+            var runId = await CreatePackageFixtureRunAsync(root, "QUALIFIED", EvidenceResult.Pass,
+                discoveryFingerprints: ["new-physical-schema"]);
+            var plan = await WorkspaceEvaluationService.PlanAsync(root, TestContext.Current.CancellationToken);
+            var drift = await WorkspaceSemanticDriftService.CompareAsync(root, plan,
+                baselineId.ToString("D"), TestContext.Current.CancellationToken);
+            var workspace = await EvaluationWorkspaceManifestStore.ReadAsync(root)
+                ?? throw new InvalidDataException("Test workspace manifest is missing.");
+            var artifact = await WorkspaceSemanticDriftArtifactStore.WriteAsync(root, workspace.WorkspaceId,
+                runId, drift, TestContext.Current.CancellationToken);
+            var runDirectory = Path.Combine(root, "runs", runId.ToString("D"));
+            var run = await WorkspaceRunManifestStore.ReadAsync(runDirectory, TestContext.Current.CancellationToken);
+            run = run with
+            {
+                BaselineId = baseline.BaselineId,
+                BaselineRunId = baseline.RunId,
+                BaselineRunManifestIdentityFingerprint = baseline.RunManifestIdentityFingerprint,
+                BaselinePlanFingerprint = baseline.EffectivePlanFingerprint,
+                BaselineEvidencePackageIdentity = baseline.EvidencePackageIdentity,
+                PreRunSemanticDriftIdentityFingerprint = WorkspacePlanReviewService.IdentityFingerprint(drift),
+                PreRunSemanticDriftStatus = drift.Status.ToString(),
+                SemanticDriftArtifactReference = artifact.Reference,
+                SemanticDriftArtifactIntegrityHash = artifact.IntegrityHash,
+                ReviewDecision = "NotRequired"
+            };
+            await WorkspaceRunManifestStore.WriteAsync(runDirectory, run, createNew: false,
+                TestContext.Current.CancellationToken);
+            run = await WorkspaceRunManifestStore.ReadAsync(runDirectory, TestContext.Current.CancellationToken);
+            var comparison = await WorkspaceBaselineComparisonService.CompareAndPersistAsync(root, run,
+                TestContext.Current.CancellationToken);
+            Assert.Equal("ChangedStillQualified", comparison!.OutcomeClassification);
+            var candidatePackage = await WorkspaceEvidencePackageService.CreateAsync(root, runId.ToString("D"),
+                null, diagnostic: false, TestContext.Current.CancellationToken);
+            var packageBytes = await File.ReadAllBytesAsync(candidatePackage.PackagePath,
+                TestContext.Current.CancellationToken);
+            var activeBeforePromotion = await WorkspaceBaselineService.ActiveAsync(root,
+                TestContext.Current.CancellationToken);
+            Assert.Equal(baselineId, activeBeforePromotion!.BaselineId);
+
+            var promotion = await RunAsync("workspace", "baseline", "promote", root,
+                runId.ToString("D"), "--json");
+            Assert.Equal(0, promotion.ExitCode);
+            using var promoted = JsonDocument.Parse(promotion.Output);
+            Assert.Equal("ChangedStillQualified",
+                promoted.RootElement.GetProperty("promotionComparisonOutcomeClassification").GetString());
+            Assert.Equal(baselineId,
+                promoted.RootElement.GetProperty("promotionComparisonBaselineId").GetGuid());
+            Assert.Equal(packageBytes, await File.ReadAllBytesAsync(candidatePackage.PackagePath,
+                TestContext.Current.CancellationToken));
+            Assert.NotEqual(baselineId, (await WorkspaceBaselineService.ActiveAsync(root,
+                TestContext.Current.CancellationToken))!.BaselineId);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspacePlanReportsNoBaselineAndIgnoresRunOnlyAndOutputRootChanges()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-drift-stable-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var noBaseline = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION", "synthetic-only",
+                "workspace", "plan", root, "--baseline", "none", "--json");
+            Assert.Equal(0, noBaseline.ExitCode);
+            using (var noBaselineJson = JsonDocument.Parse(noBaseline.Output))
+                Assert.Equal("NoBaseline", noBaselineJson.RootElement.GetProperty("semanticDrift")
+                    .GetProperty("status").GetString());
+                Assert.Empty(Directory.EnumerateFileSystemEntries(Path.Combine(root, "runs")));
+
+                var firstRun = await CreatePackageFixtureRunAsync(root, "NOT QUALIFIED", EvidenceResult.Fail);
+            await WorkspaceEvidencePackageService.CreateAsync(root, firstRun.ToString("D"), null,
+                diagnostic: false, TestContext.Current.CancellationToken);
+            var firstManifest = await WorkspaceRunManifestStore.ReadAsync(
+                Path.Combine(root, "runs", firstRun.ToString("D")), TestContext.Current.CancellationToken);
+            var promotion = await RunAsync("workspace", "baseline", "promote", root, firstRun.ToString("D"), "--json");
+            Assert.True(promotion.ExitCode == 0, promotion.Output + promotion.Error);
+            using var firstPromotionJson = JsonDocument.Parse(promotion.Output);
+            var firstBaselineId = firstPromotionJson.RootElement.GetProperty("baselineId").GetGuid();
+            var embeddedPlan = await WorkspaceEvidencePackageService.ReadValidatedEffectivePlanAsync(
+                Path.Combine(root, "evidence", $"{firstRun:D}.zip"), TestContext.Current.CancellationToken);
+            Assert.Equal(firstManifest!.PlanFingerprint, embeddedPlan.Fingerprint);
+            Assert.Equal(firstManifest.ConfigurationHash, embeddedPlan.ConfigurationFingerprint);
+
+            var secondRun = await CreatePackageFixtureRunAsync(root, "NOT QUALIFIED", EvidenceResult.Fail,
+                replayedCheckpoint: false);
+            await WorkspaceEvidencePackageService.CreateAsync(root, secondRun.ToString("D"), null,
+                diagnostic: false, TestContext.Current.CancellationToken);
+            var secondManifest = await WorkspaceRunManifestStore.ReadAsync(
+                Path.Combine(root, "runs", secondRun.ToString("D")), TestContext.Current.CancellationToken);
+            Assert.NotEqual(firstRun, secondRun);
+            Assert.Equal(firstManifest!.PlanFingerprint, secondManifest!.PlanFingerprint);
+            Assert.NotEqual(firstManifest.ReplayedCheckpoint, secondManifest.ReplayedCheckpoint);
+            var secondPromotion = await RunAsync("workspace", "baseline", "promote", root, secondRun.ToString("D"),
+                "--json");
+            Assert.True(secondPromotion.ExitCode == 0, secondPromotion.Output + secondPromotion.Error);
+            var catalogPath = Path.Combine(root, ".proofshift", "baselines", "catalog.json");
+            var catalogBeforePlan = await File.ReadAllBytesAsync(catalogPath, TestContext.Current.CancellationToken);
+
+            var workspaceManifestPath = Path.Combine(root, "proofshift.workspace.json");
+            var workspaceManifest = JsonNode.Parse(await File.ReadAllTextAsync(workspaceManifestPath,
+                TestContext.Current.CancellationToken))!.AsObject();
+            var paths = workspaceManifest["paths"]!.AsObject();
+            paths["runs"] = "run-output";
+            paths["evidence"] = "evidence-output";
+            Directory.CreateDirectory(Path.Combine(root, "run-output"));
+            Directory.CreateDirectory(Path.Combine(root, "evidence-output"));
+            await File.WriteAllTextAsync(workspaceManifestPath, workspaceManifest.ToJsonString(),
+                TestContext.Current.CancellationToken);
+
+            var unchanged = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION", "synthetic-only",
+                "workspace", "plan", root, "--json");
+            Assert.True(unchanged.ExitCode == 0, unchanged.Output + unchanged.Error);
+            using (var unchangedJson = JsonDocument.Parse(unchanged.Output))
+            {
+                var drift = unchangedJson.RootElement.GetProperty("semanticDrift");
+                Assert.Equal("NoSemanticChange", drift.GetProperty("status").GetString());
+                Assert.False(drift.GetProperty("reviewRequired").GetBoolean());
+                Assert.Equal(secondRun, drift.GetProperty("baselineRunId").GetGuid());
+                Assert.Equal(secondManifest.PlanFingerprint,
+                    drift.GetProperty("currentPlanFingerprint").GetString());
+                Assert.Empty(drift.GetProperty("changes").EnumerateArray());
+            }
+            Assert.Equal(catalogBeforePlan,
+                await File.ReadAllBytesAsync(catalogPath, TestContext.Current.CancellationToken));
+
+            var historical = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION", "synthetic-only",
+                "workspace", "plan", root, "--baseline", firstBaselineId.ToString("D"), "--json");
+            Assert.True(historical.ExitCode == 0, historical.Output + historical.Error);
+            using (var historicalJson = JsonDocument.Parse(historical.Output))
+                Assert.Equal(firstRun, historicalJson.RootElement.GetProperty("semanticDrift")
+                    .GetProperty("baselineRunId").GetGuid());
+
+            var runtimeSecretChanged = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION",
+                "runtime-secret-value-must-not-appear", "workspace", "plan", root, "--json");
+            Assert.True(runtimeSecretChanged.ExitCode == 0,
+                runtimeSecretChanged.Output + runtimeSecretChanged.Error);
+            Assert.DoesNotContain("runtime-secret-value-must-not-appear", runtimeSecretChanged.Output,
+                StringComparison.Ordinal);
+            using (var runtimeSecretJson = JsonDocument.Parse(runtimeSecretChanged.Output))
+                Assert.Equal("NoSemanticChange", runtimeSecretJson.RootElement.GetProperty("semanticDrift")
+                    .GetProperty("status").GetString());
+
+            var targetConfigurationPath = Path.Combine(root, "systems", "target.yaml");
+            var targetConfiguration = await File.ReadAllTextAsync(targetConfigurationPath,
+                TestContext.Current.CancellationToken);
+            Assert.Contains("PROOFSHIFT_TARGET_CONNECTION", targetConfiguration, StringComparison.Ordinal);
+            await File.WriteAllTextAsync(targetConfigurationPath,
+                targetConfiguration.Replace("PROOFSHIFT_TARGET_CONNECTION", "PROOFSHIFT_PRIVATE_SENTINEL",
+                    StringComparison.Ordinal), TestContext.Current.CancellationToken);
+            var bindingChanged = await RunWithEnvironmentAsync("PROOFSHIFT_PRIVATE_SENTINEL",
+                "another-runtime-secret-that-must-not-appear", "workspace", "plan", root, "--json");
+            Assert.True(bindingChanged.ExitCode == 0, bindingChanged.Output + bindingChanged.Error);
+            Assert.DoesNotContain("another-runtime-secret-that-must-not-appear", bindingChanged.Output,
+                StringComparison.Ordinal);
+            using (var bindingJson = JsonDocument.Parse(bindingChanged.Output))
+            {
+                var drift = bindingJson.RootElement.GetProperty("semanticDrift");
+                Assert.Equal("ReviewRequired", drift.GetProperty("status").GetString());
+                Assert.Contains(drift.GetProperty("changes").EnumerateArray(), change =>
+                    change.GetProperty("category").GetString() == "configuration-binding");
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspacePlanReviewBindsExactBaselineAndDriftAndBlocksBeforeCheckpointCapture()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-review-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var baselineRun = await CreatePackageFixtureRunAsync(root, "QUALIFIED", EvidenceResult.Pass);
+            await WorkspaceEvidencePackageService.CreateAsync(root, baselineRun.ToString("D"), null,
+                diagnostic: false, TestContext.Current.CancellationToken);
+            var promotion = await RunAsync("workspace", "baseline", "promote", root,
+                baselineRun.ToString("D"), "--json");
+            Assert.Equal(0, promotion.ExitCode);
+            var baselineId = JsonDocument.Parse(promotion.Output).RootElement.GetProperty("baselineId").GetGuid();
+
+            var targetConfigurationPath = Path.Combine(root, "systems", "target.yaml");
+            var targetConfiguration = await File.ReadAllTextAsync(targetConfigurationPath,
+                TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(targetConfigurationPath,
+                targetConfiguration.Replace("PROOFSHIFT_TARGET_CONNECTION", "PROOFSHIFT_PRIVATE_SENTINEL",
+                    StringComparison.Ordinal), TestContext.Current.CancellationToken);
+
+            var driftPlan = await RunWithEnvironmentAsync("PROOFSHIFT_PRIVATE_SENTINEL",
+                "review-test-secret-must-not-persist", "workspace", "plan", root,
+                "--baseline", baselineId.ToString("D"), "--json");
+            Assert.Equal(0, driftPlan.ExitCode);
+            using (var driftPlanJson = JsonDocument.Parse(driftPlan.Output))
+                Assert.Equal("ReviewRequired", driftPlanJson.RootElement.GetProperty("semanticDrift")
+                    .GetProperty("status").GetString());
+
+            var blockedRun = await RunWithEnvironmentAsync("PROOFSHIFT_PRIVATE_SENTINEL",
+                "review-test-secret-must-not-persist", "workspace", "run", root, "--json");
+            Assert.Equal(1, blockedRun.ExitCode);
+            Assert.Contains("PSWORKRUN099", blockedRun.Error, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(Path.Combine(root, ".proofshift", "checkpoints")));
+            Assert.Single(Directory.EnumerateDirectories(Path.Combine(root, "runs")));
+
+            var reviewed = await RunWithEnvironmentAsync("PROOFSHIFT_PRIVATE_SENTINEL",
+                "review-test-secret-must-not-persist", "workspace", "review-plan", root,
+                "--baseline", baselineId.ToString("D"), "--json");
+            Assert.Equal(0, reviewed.ExitCode);
+            using var reviewedJson = JsonDocument.Parse(reviewed.Output);
+            var review = reviewedJson.RootElement.GetProperty("review");
+            var reviewId = review.GetProperty("reviewId").GetGuid();
+            Assert.Equal(baselineId, review.GetProperty("baselineId").GetGuid());
+            Assert.Equal("Reviewed", review.GetProperty("decision").GetString());
+            Assert.Equal("ReviewRequired", review.GetProperty("driftStatus").GetString());
+            Assert.Equal(64, review.GetProperty("semanticDriftIdentityFingerprint").GetString()!.Length);
+            var reviewPath = Path.Combine(root, ".proofshift", "reviews", $"{reviewId:D}.json");
+            var reviewText = await File.ReadAllTextAsync(reviewPath, TestContext.Current.CancellationToken);
+            Assert.DoesNotContain("review-test-secret-must-not-persist", reviewText, StringComparison.Ordinal);
+
+            var currentPlan = await WorkspaceEvaluationService.PlanAsync(root, TestContext.Current.CancellationToken);
+            var exactDrift = await WorkspaceSemanticDriftService.CompareAsync(root, currentPlan,
+                baselineId.ToString("D"), TestContext.Current.CancellationToken);
+            var validatedReview = await WorkspacePlanReviewService.ValidateForExecutionAsync(root,
+                reviewId.ToString("D"), exactDrift, TestContext.Current.CancellationToken);
+            Assert.Equal(review.GetProperty("integrityHash").GetString(), validatedReview.IntegrityHash);
+
+            var laterRun = await CreatePackageFixtureRunAsync(root, "QUALIFIED", EvidenceResult.Pass);
+            await WorkspaceEvidencePackageService.CreateAsync(root, laterRun.ToString("D"), null,
+                diagnostic: false, TestContext.Current.CancellationToken);
+            var laterPromotion = await RunAsync("workspace", "baseline", "promote", root,
+                laterRun.ToString("D"), "--json");
+            Assert.Equal(0, laterPromotion.ExitCode);
+            var laterBaselineId = JsonDocument.Parse(laterPromotion.Output).RootElement.GetProperty("baselineId").GetGuid();
+            var laterPlan = await WorkspaceEvaluationService.PlanAsync(root, TestContext.Current.CancellationToken);
+            var laterDrift = await WorkspaceSemanticDriftService.CompareAsync(root, laterPlan,
+                laterBaselineId.ToString("D"), TestContext.Current.CancellationToken);
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                WorkspacePlanReviewService.ValidateForExecutionAsync(root, reviewId.ToString("D"),
+                    laterDrift, TestContext.Current.CancellationToken));
+
+            await File.WriteAllTextAsync(targetConfigurationPath,
+                targetConfiguration.Replace("PROOFSHIFT_TARGET_CONNECTION", "PROOFSHIFT_PRIVATE_SENTINEL_TWO",
+                    StringComparison.Ordinal), TestContext.Current.CancellationToken);
+            var changedPlan = await WorkspaceEvaluationService.PlanAsync(root, TestContext.Current.CancellationToken);
+            var changedDrift = await WorkspaceSemanticDriftService.CompareAsync(root, changedPlan,
+                baselineId.ToString("D"), TestContext.Current.CancellationToken);
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                WorkspacePlanReviewService.ValidateForExecutionAsync(root, reviewId.ToString("D"),
+                    changedDrift, TestContext.Current.CancellationToken));
+            Assert.False(Directory.Exists(Path.Combine(root, ".proofshift", "checkpoints")));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceRunRejectsBlockingDriftRegardlessOfReview()
+    {
+        var blockingDrift = new WorkspaceSemanticDrift(Guid.NewGuid(), Guid.NewGuid(),
+            new string('a', 64), new string('b', 64), WorkspaceSemanticDriftStatus.Blocking, true,
+            [new WorkspaceSemanticDriftChange("capability", "removed", "source",
+                WorkspaceSemanticDriftClassification.Blocking, "Required source-read capability is unavailable.")],
+            ["Required source-read capability is unavailable."]);
+
+        Assert.Throws<InvalidOperationException>(() => WorkspaceRunService.ValidateDriftCanRun(blockingDrift));
+
+        var explicitNoBaseline = new WorkspaceSemanticDrift(null, null, null, new string('b', 64),
+            WorkspaceSemanticDriftStatus.NoBaseline, false, [], []);
+        WorkspaceRunService.ValidateDriftCanRun(explicitNoBaseline);
+    }
+
+    [Fact]
+    public async Task WorkspacePlanSemanticDriftCategorizesMeaningfulPlanChangesAndBlocksMissingCapabilities()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-drift-categories-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var result = await WorkspaceEvaluationService.PlanAsync(root, TestContext.Current.CancellationToken);
+            var baseline = result.Plan ?? throw new InvalidDataException("Test workspace has no effective plan.");
+
+            var edge = baseline.Edges[0];
+            var field = edge.Fields[0];
+            var changedMapping = baseline with
+            {
+                Edges = baseline.Edges.Select(item => item.Key == edge.Key
+                    ? item with
+                    {
+                        SemanticFingerprint = new string('d', 64),
+                        Fields = item.Fields.Select(mapped => mapped.Target == field.Target
+                            ? mapped with
+                            {
+                                Source = "changed-source",
+                                SemanticFingerprint = new string('a', 64)
+                            }
+                            : mapped).ToArray()
+                    }
+                    : item).ToArray()
+            };
+            Assert.Contains(WorkspaceSemanticDriftService.ComparePlans(baseline, changedMapping),
+                change => change.Category == "mapping" &&
+                    change.Classification == WorkspaceSemanticDriftClassification.ReviewRequired);
+            var changedOperationSemantics = baseline with
+            {
+                Edges = baseline.Edges.Select(item => item.Key == edge.Key
+                    ? item with { SemanticFingerprint = new string('e', 64) }
+                    : item).ToArray()
+            };
+            Assert.Contains(WorkspaceSemanticDriftService.ComparePlans(baseline, changedOperationSemantics),
+                change => change.Category == "mapping" && change.Kind == "semantics-changed");
+
+            var rule = baseline.Rules[0];
+            var changedRule = baseline with
+            {
+                Rules = baseline.Rules.Select(item => item.Id == rule.Id
+                    ? item with { SemanticFingerprint = new string('b', 64) }
+                    : item).ToArray()
+            };
+            Assert.Contains(WorkspaceSemanticDriftService.ComparePlans(baseline, changedRule),
+                change => change.Category == "verification-rule");
+
+            var changedException = baseline with
+            {
+                ExpectedExceptions = baseline.ExpectedExceptions.Append(new WorkspacePlanExpectedException(
+                    "annotation-new", "rule-new", "FindingChanged", "target", new string('c', 64), "scope-new"))
+                    .ToArray()
+            };
+            Assert.Contains(WorkspaceSemanticDriftService.ComparePlans(baseline, changedException),
+                change => change.Category == "expected-exception");
+            var changedExceptionMetadata = baseline with
+            {
+                ExpectedExceptionsFingerprint = new string('f', 64)
+            };
+            Assert.Contains(WorkspaceSemanticDriftService.ComparePlans(baseline, changedExceptionMetadata),
+                change => change.Category == "expected-exception" &&
+                    change.Kind == "annotation-metadata-changed");
+
+            var changedReconciliation = baseline with
+            {
+                ReconciliationRules = baseline.ReconciliationRules
+                    .Append(rule.Id).Distinct(StringComparer.Ordinal).ToArray()
+            };
+            Assert.Contains(WorkspaceSemanticDriftService.ComparePlans(baseline, changedReconciliation),
+                change => change.Category == "reconciliation");
+
+            var node = baseline.Nodes[0];
+            var changedScope = baseline with
+            {
+                Nodes = baseline.Nodes.Select(item => item.Key == node.Key
+                    ? item with { ScopeFingerprint = "changed-scope" }
+                    : item).ToArray()
+            };
+            Assert.Contains(WorkspaceSemanticDriftService.ComparePlans(baseline, changedScope),
+                change => change.Category == "scope");
+            var changedSelector = baseline with
+            {
+                Nodes = baseline.Nodes.Select(item => item.Key == node.Key
+                    ? item with { SelectorFingerprint = new string('9', 64) }
+                    : item).ToArray()
+            };
+            Assert.Contains(WorkspaceSemanticDriftService.ComparePlans(baseline, changedSelector),
+                change => change.Category == "graph" && change.Kind == "node-changed");
+
+            var sourceSystem = baseline.Systems.Single(system => system.Role == "Source");
+            var missingCapability = baseline with
+            {
+                Systems = baseline.Systems.Select(system => system.System == sourceSystem.System &&
+                    system.Endpoint == sourceSystem.Endpoint
+                    ? system with
+                    {
+                        Capabilities = system.Capabilities.Except(["sourceRead"], StringComparer.Ordinal).ToArray()
+                    }
+                    : system).ToArray()
+            };
+            Assert.Contains(WorkspaceSemanticDriftService.ComparePlans(baseline, missingCapability),
+                change => change.Category == "capability" &&
+                    change.Classification == WorkspaceSemanticDriftClassification.Blocking);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspacePlanDeduplicatesSystemsByEndpointIdentityForMultiNodeGraph()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-endpoint-plan-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var scenarioRoot = Path.Combine(DemoScenarioTestPaths.FindRepositoryRoot(),
+                "scenarios", "byom-public-works", "shadow");
+            foreach (var sourcePath in Directory.GetFiles(scenarioRoot, "*", SearchOption.AllDirectories))
+            {
+                var relativePath = Path.GetRelativePath(scenarioRoot, sourcePath);
+                var destinationPath = Path.Combine(root, relativePath);
+                Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+                File.Copy(sourcePath, destinationPath, overwrite: true);
+            }
+
+            var result = await WorkspaceEvaluationService.PlanAsync(root, TestContext.Current.CancellationToken);
+            var plan = Assert.IsType<WorkspaceEvaluationPlan>(result.Plan);
+            Assert.Equal(2, plan.Systems.Count);
+            Assert.Equal(plan.Systems.Count,
+                plan.Systems.Select(system => (system.System, system.Endpoint)).Distinct().Count());
+            Assert.Empty(WorkspaceSemanticDriftService.ComparePlans(plan, plan));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspacePlanComparesPersistedDiscoveryAndReportsMissingHistoryWithoutLiveDiscovery()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-drift-discovery-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var configurationPath = Path.Combine(root, "proofshift.yaml");
+            var firstDiscoveryPath = Path.Combine(root, "discovery", "source-before");
+            var firstDiscovery = await RunAsync("discover", configurationPath, "--system", "source", "--endpoint",
+                "records", "--output", firstDiscoveryPath, "--json");
+            Assert.True(firstDiscovery.ExitCode == 0, firstDiscovery.Output + firstDiscovery.Error);
+            var firstArtifact = await PhysicalDiscoveryStore.ReadAsync(firstDiscoveryPath,
+                TestContext.Current.CancellationToken);
+
+            var run = await CreatePackageFixtureRunAsync(root, "NOT QUALIFIED", EvidenceResult.Fail,
+                discoveryFingerprints: [firstArtifact.Fingerprint]);
+            await WorkspaceEvidencePackageService.CreateAsync(root, run.ToString("D"), null,
+                diagnostic: false, TestContext.Current.CancellationToken);
+            var promotion = await RunAsync("workspace", "baseline", "promote", root, run.ToString("D"), "--json");
+            Assert.True(promotion.ExitCode == 0, promotion.Output + promotion.Error);
+
+            var staleHistory = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION", "synthetic-only",
+                "workspace", "plan", root, "--json");
+            using (var staleJson = JsonDocument.Parse(staleHistory.Output))
+            {
+                Assert.Equal("NotComparable", staleJson.RootElement.GetProperty("semanticDrift")
+                    .GetProperty("status").GetString());
+                Assert.True(staleJson.RootElement.GetProperty("semanticDrift")
+                    .GetProperty("reviewRequired").GetBoolean());
+            }
+
+            var unchangedDiscoveryPath = Path.Combine(root, "discovery", "source-unchanged");
+            var unchangedDiscovery = await RunAsync("discover", configurationPath, "--system", "source", "--endpoint",
+                "records", "--output", unchangedDiscoveryPath, "--json");
+            Assert.True(unchangedDiscovery.ExitCode == 0, unchangedDiscovery.Output + unchangedDiscovery.Error);
+            var unchangedPlan = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION", "synthetic-only",
+                "workspace", "plan", root, "--json");
+            using (var unchangedJson = JsonDocument.Parse(unchangedPlan.Output))
+            {
+                var unchangedDrift = unchangedJson.RootElement.GetProperty("semanticDrift");
+                Assert.Equal("NoSemanticChange", unchangedDrift.GetProperty("status").GetString());
+                Assert.DoesNotContain(unchangedDrift.GetProperty("changes").EnumerateArray(), change =>
+                    change.GetProperty("kind").GetString() == "not-checked");
+            }
+
+            await File.WriteAllTextAsync(Path.Combine(root, "data", "source.csv"), "id;amount;new-field\n",
+                TestContext.Current.CancellationToken);
+            var currentDiscoveryPath = Path.Combine(root, "discovery", "source-after");
+            var currentDiscovery = await RunAsync("discover", configurationPath, "--system", "source", "--endpoint",
+                "records", "--output", currentDiscoveryPath, "--json");
+            Assert.True(currentDiscovery.ExitCode == 0, currentDiscovery.Output + currentDiscovery.Error);
+
+            var plan = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION", "synthetic-only",
+                "workspace", "plan", root, "--json");
+            using (var planJson = JsonDocument.Parse(plan.Output))
+            {
+                var drift = planJson.RootElement.GetProperty("semanticDrift");
+                Assert.Equal("ReviewRequired", drift.GetProperty("status").GetString());
+                Assert.Contains(drift.GetProperty("changes").EnumerateArray(), change =>
+                    change.GetProperty("category").GetString() == "discovery" &&
+                    change.GetProperty("kind").GetString() == "field-added");
+            }
+
+            Directory.Delete(firstDiscoveryPath, recursive: true);
+            var missingHistory = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION", "synthetic-only",
+                "workspace", "plan", root, "--json");
+            using var missingJson = JsonDocument.Parse(missingHistory.Output);
+            var missingDrift = missingJson.RootElement.GetProperty("semanticDrift");
+            Assert.Equal("NotComparable", missingDrift.GetProperty("status").GetString());
+            Assert.Contains(missingDrift.GetProperty("changes").EnumerateArray(), change =>
+                change.GetProperty("category").GetString() == "discovery" &&
+                change.GetProperty("classification").GetString() == "NotChecked");
+
+            var acknowledged = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION", "synthetic-only",
+                "workspace", "review-plan", root, "--json");
+            Assert.Equal(0, acknowledged.ExitCode);
+            using var acknowledgedJson = JsonDocument.Parse(acknowledged.Output);
+            var review = acknowledgedJson.RootElement.GetProperty("review");
+            Assert.Equal("NotComparable", review.GetProperty("driftStatus").GetString());
+            Assert.Equal("ComparisonUnavailableAcknowledged", review.GetProperty("decision").GetString());
+            var currentPlan = await WorkspaceEvaluationService.PlanAsync(root,
+                TestContext.Current.CancellationToken);
+            var exactDrift = await WorkspaceSemanticDriftService.CompareAsync(root, currentPlan, "active",
+                TestContext.Current.CancellationToken);
+            var validatedReview = await WorkspacePlanReviewService.ValidateForExecutionAsync(root,
+                review.GetProperty("reviewId").GetGuid().ToString("D"), exactDrift,
+                TestContext.Current.CancellationToken);
+            Assert.Equal("ComparisonUnavailableAcknowledged", validatedReview.Decision);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspaceBaselinePromotionAndInspectionFailClosedOnIncompleteOrTamperedReferences()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-baseline-invalid-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var incompleteRun = await RunAsync("workspace", "run", root, "--json");
+            Assert.Equal(1, incompleteRun.ExitCode);
+            using var runOutput = JsonDocument.Parse(incompleteRun.Output
+                .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).Last());
+            var incompleteRunId = runOutput.RootElement.GetProperty("run").GetProperty("runId").GetGuid();
+            var incompletePromotion = await RunAsync("workspace", "baseline", "promote", root,
+                incompleteRunId.ToString("D"));
+            Assert.Equal(1, incompletePromotion.ExitCode);
+            Assert.Contains("PSWORKBASE099", incompletePromotion.Error, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(Path.Combine(root, ".proofshift", "baselines")));
+
+            var run = await CreatePackageFixtureRunAsync(root, "QUALIFIED", EvidenceResult.Pass);
+            var missingPackagePromotion = await RunAsync("workspace", "baseline", "promote", root,
+                run.ToString("D"));
+            Assert.Equal(1, missingPackagePromotion.ExitCode);
+            Assert.Contains("PSWORKBASE099", missingPackagePromotion.Error, StringComparison.Ordinal);
+
+            var packagePath = Path.Combine(root, "evidence", $"{run:D}.zip");
+            await WorkspaceEvidencePackageService.CreateAsync(root, run.ToString("D"), packagePath,
+                diagnostic: false, TestContext.Current.CancellationToken);
+            var otherRun = await CreatePackageFixtureRunAsync(root, "QUALIFIED", EvidenceResult.Pass);
+            var otherPackagePath = Path.Combine(root, "evidence", $"{otherRun:D}.zip");
+            await WorkspaceEvidencePackageService.CreateAsync(root, otherRun.ToString("D"), otherPackagePath,
+                diagnostic: false, TestContext.Current.CancellationToken);
+            File.Copy(otherPackagePath, packagePath, overwrite: true);
+            var mismatchedPackagePromotion = await RunAsync("workspace", "baseline", "promote", root,
+                run.ToString("D"));
+            Assert.Equal(1, mismatchedPackagePromotion.ExitCode);
+            Assert.Contains("PSWORKBASE099", mismatchedPackagePromotion.Error, StringComparison.Ordinal);
+            await WorkspaceEvidencePackageService.CreateAsync(root, run.ToString("D"), packagePath,
+                diagnostic: false, TestContext.Current.CancellationToken);
+
+            var runPath = Path.Combine(root, "runs", run.ToString("D"), "run.json");
+            await File.AppendAllTextAsync(runPath, "not-json", TestContext.Current.CancellationToken);
+            var invalidRunPromotion = await RunAsync("workspace", "baseline", "promote", root, run.ToString("D"));
+            Assert.Equal(1, invalidRunPromotion.ExitCode);
+            Assert.Contains("PSWORKBASE099", invalidRunPromotion.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+
+        var tamperedRoot = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-baseline-tamper-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", tamperedRoot)).ExitCode);
+            var run = await CreatePackageFixtureRunAsync(tamperedRoot, "NOT QUALIFIED", EvidenceResult.Fail);
+            var packagePath = Path.Combine(tamperedRoot, "evidence", $"{run:D}.zip");
+            await WorkspaceEvidencePackageService.CreateAsync(tamperedRoot, run.ToString("D"), packagePath,
+                diagnostic: false, TestContext.Current.CancellationToken);
+            var promoted = await RunAsync("workspace", "baseline", "promote", tamperedRoot,
+                run.ToString("D"), "--json");
+            Assert.Equal(0, promoted.ExitCode);
+
+            await File.WriteAllTextAsync(packagePath, "modified evidence archive",
+                TestContext.Current.CancellationToken);
+            var inspection = await RunAsync("workspace", "baseline", "show", tamperedRoot,
+                JsonDocument.Parse(promoted.Output).RootElement.GetProperty("baselineId").GetGuid().ToString("D"));
+            Assert.Equal(1, inspection.ExitCode);
+            Assert.Contains("PSWORKBASE099", inspection.Error, StringComparison.Ordinal);
+            var history = await RunAsync("workspace", "baseline", "list", tamperedRoot);
+            Assert.Equal(1, history.ExitCode);
+            Assert.Contains("PSWORKBASE099", history.Error, StringComparison.Ordinal);
+            var invalidBaselinePlan = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION",
+                "synthetic-only", "workspace", "plan", tamperedRoot, "--json");
+            Assert.Equal(1, invalidBaselinePlan.ExitCode);
+            Assert.Contains("PSPLAN099", invalidBaselinePlan.Error, StringComparison.Ordinal);
+
+            var laterRun = await CreatePackageFixtureRunAsync(tamperedRoot, "QUALIFIED", EvidenceResult.Pass);
+            await WorkspaceEvidencePackageService.CreateAsync(tamperedRoot, laterRun.ToString("D"), null,
+                diagnostic: false, TestContext.Current.CancellationToken);
+            var laterPromotion = await RunAsync("workspace", "baseline", "promote", tamperedRoot,
+                laterRun.ToString("D"));
+            Assert.Equal(1, laterPromotion.ExitCode);
+            Assert.Contains("PSWORKBASE099", laterPromotion.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(tamperedRoot)) Directory.Delete(tamperedRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task WorkspaceEvidencePackageReportsSafeDiagnosticWhenSavedSummaryDisagrees()
     {
         var root = Path.Combine(Path.GetTempPath(), $"proofshift-evidence-package-summary-{Guid.NewGuid():N}");
@@ -793,6 +1828,424 @@ public sealed class AuthoringCliTests
     }
 
     [Fact]
+    public async Task WorkspaceBaselineOutcomeComparisonClassifiesQualificationAndReplayWithoutPromoting()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-outcomes-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var qualifiedBaseline = await PromoteBaselineAsync("QUALIFIED", EvidenceResult.Pass, detailedFindings: false);
+
+            var equivalent = await CompareCandidateAsync(qualifiedBaseline, "QUALIFIED", EvidenceResult.Pass,
+                detailedFindings: false, replayedCheckpoint: false);
+            Assert.Equal("Equivalent", equivalent.OutcomeClassification);
+            Assert.True(equivalent.DetailedComparison.ExecutionModeChanged);
+            Assert.Equal(qualifiedBaseline.BaselineId, equivalent.BaselineId);
+
+            var changedStillQualified = await CompareCandidateAsync(qualifiedBaseline, "QUALIFIED",
+                EvidenceResult.Pass, detailedFindings: false, discoveryFingerprints: ["new-schema"]);
+            Assert.Equal("ChangedStillQualified", changedStillQualified.OutcomeClassification);
+            Assert.True(changedStillQualified.DetailedComparison.DiscoveryChanged);
+
+            var regressed = await CompareCandidateAsync(qualifiedBaseline, "NOT QUALIFIED", EvidenceResult.Fail,
+                detailedFindings: true);
+            Assert.Equal("Regressed", regressed.OutcomeClassification);
+            Assert.Contains(regressed.DetailedComparison.Findings, item => item.Category == "Added" &&
+                item.RuleId == "budget-attributes");
+
+            var notQualifiedBaseline = await PromoteBaselineAsync("NOT QUALIFIED", EvidenceResult.Fail,
+                detailedFindings: true);
+            var improved = await CompareCandidateAsync(notQualifiedBaseline, "QUALIFIED", EvidenceResult.Pass,
+                detailedFindings: false);
+            Assert.Equal("Improved", improved.OutcomeClassification);
+            Assert.Contains(improved.DetailedComparison.Findings, item => item.Category == "Resolved");
+            var improvedSummary = await WorkspaceEvaluationSummaryService.CreateAsync(root,
+                improved.CandidateRunId.ToString("D"), null, TestContext.Current.CancellationToken);
+            var improvedSummaryText = await File.ReadAllTextAsync(improvedSummary.SummaryPath,
+                TestContext.Current.CancellationToken);
+            Assert.Contains("disposition **NOT QUALIFIED**", improvedSummaryText, StringComparison.Ordinal);
+            Assert.Contains("Candidate disposition: **QUALIFIED**", improvedSummaryText, StringComparison.Ordinal);
+            Assert.Contains("Post-run outcome: **Improved**", improvedSummaryText, StringComparison.Ordinal);
+
+            var notComparable = await CompareCandidateAsync(qualifiedBaseline, null, EvidenceResult.Pass,
+                detailedFindings: false);
+            Assert.Equal("NotComparable", notComparable.OutcomeClassification);
+
+            var unavailableDrift = await CompareCandidateAsync(qualifiedBaseline, "QUALIFIED", EvidenceResult.Pass,
+                detailedFindings: false, preRunDriftStatus: "NotComparable");
+            Assert.Equal("NotComparable", unavailableDrift.OutcomeClassification);
+            var unavailableSummary = await WorkspaceEvaluationSummaryService.CreateAsync(root,
+                unavailableDrift.CandidateRunId.ToString("D"), null, TestContext.Current.CancellationToken);
+            var unavailableText = await File.ReadAllTextAsync(unavailableSummary.SummaryPath,
+                TestContext.Current.CancellationToken);
+            Assert.Contains("Baseline comparison was not fully available", unavailableText, StringComparison.Ordinal);
+            Assert.Contains("Post-run outcome: **NotComparable**", unavailableText, StringComparison.Ordinal);
+            Assert.DoesNotContain("Post-run outcome: **Equivalent**", unavailableText, StringComparison.Ordinal);
+
+            var stillNotQualified = await CompareCandidateAsync(notQualifiedBaseline, "NOT QUALIFIED",
+                EvidenceResult.Fail, detailedFindings: false);
+            Assert.Equal("StillNotQualified", stillNotQualified.OutcomeClassification);
+            Assert.Contains(stillNotQualified.DetailedComparison.Findings, item => item.Category == "Resolved");
+            var notQualifiedSummary = await WorkspaceEvaluationSummaryService.CreateAsync(root,
+                stillNotQualified.CandidateRunId.ToString("D"), null, TestContext.Current.CancellationToken);
+            var notQualifiedSummaryText = await File.ReadAllTextAsync(notQualifiedSummary.SummaryPath,
+                TestContext.Current.CancellationToken);
+            Assert.Contains("disposition **NOT QUALIFIED**", notQualifiedSummaryText, StringComparison.Ordinal);
+            Assert.Contains("Post-run outcome: **StillNotQualified**", notQualifiedSummaryText, StringComparison.Ordinal);
+            Assert.Contains("Finding resolved:", notQualifiedSummaryText, StringComparison.Ordinal);
+            Assert.Contains("Expected-exception annotation removed:", notQualifiedSummaryText, StringComparison.Ordinal);
+
+            var incompleteRunId = await CreatePackageFixtureRunAsync(root, "QUALIFIED", EvidenceResult.Pass);
+            var incompleteRunDirectory = Path.Combine(root, "runs", incompleteRunId.ToString("D"));
+            var incompleteRun = await WorkspaceRunManifestStore.ReadAsync(incompleteRunDirectory,
+                TestContext.Current.CancellationToken);
+            incompleteRun = incompleteRun with
+            {
+                State = "Interrupted",
+                BaselineId = qualifiedBaseline.BaselineId
+            };
+            await WorkspaceRunManifestStore.WriteAsync(incompleteRunDirectory, incompleteRun, createNew: false,
+                TestContext.Current.CancellationToken);
+            incompleteRun = await WorkspaceRunManifestStore.ReadAsync(incompleteRunDirectory,
+                TestContext.Current.CancellationToken);
+            Assert.Null(await WorkspaceBaselineComparisonService.CompareAndPersistAsync(root, incompleteRun,
+                TestContext.Current.CancellationToken));
+            Assert.False(File.Exists(Path.Combine(root, ".proofshift", "comparisons",
+                $"{incompleteRunId:D}.json")));
+
+            var stored = await WorkspaceBaselineComparisonService.ReadAsync(root, changedStillQualified.CandidateRunId,
+                await WorkspaceRunManifestStore.ReadAsync(
+                    Path.Combine(root, "runs", changedStillQualified.CandidateRunId.ToString("D")),
+                    TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+            Assert.Equal(changedStillQualified.IntegrityHash, stored!.IntegrityHash);
+            var summary = await WorkspaceEvaluationSummaryService.CreateAsync(root,
+                changedStillQualified.CandidateRunId.ToString("D"), null, TestContext.Current.CancellationToken);
+            Assert.Equal("ChangedStillQualified", summary.OutcomeClassification);
+            var summaryText = await File.ReadAllTextAsync(summary.SummaryPath, TestContext.Current.CancellationToken);
+            Assert.Contains("Post-run outcome: **ChangedStillQualified**", summaryText, StringComparison.Ordinal);
+            Assert.Equal(notQualifiedBaseline.BaselineId,
+                (await WorkspaceBaselineService.ActiveAsync(root, TestContext.Current.CancellationToken))!.BaselineId);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+
+        async Task<WorkspaceBaselineRecord> PromoteBaselineAsync(string disposition, EvidenceResult result,
+            bool detailedFindings)
+        {
+            var run = await CreatePackageFixtureRunAsync(root, disposition, result, detailedFindings);
+            await WorkspaceEvidencePackageService.CreateAsync(root, run.ToString("D"), null,
+                diagnostic: false, TestContext.Current.CancellationToken);
+            var promotion = await RunAsync("workspace", "baseline", "promote", root, run.ToString("D"), "--json");
+            Assert.Equal(0, promotion.ExitCode);
+            var baselineId = JsonDocument.Parse(promotion.Output).RootElement.GetProperty("baselineId").GetGuid();
+            return await WorkspaceBaselineService.ShowAsync(root, baselineId.ToString("D"),
+                TestContext.Current.CancellationToken);
+        }
+
+        async Task<WorkspaceBaselineComparisonRecord> CompareCandidateAsync(WorkspaceBaselineRecord baseline,
+            string? disposition, EvidenceResult result, bool detailedFindings,
+            IReadOnlyList<string>? discoveryFingerprints = null, bool replayedCheckpoint = true,
+            string preRunDriftStatus = "NoSemanticChange")
+        {
+            var runId = await CreatePackageFixtureRunAsync(root, disposition, result, detailedFindings,
+                discoveryFingerprints: discoveryFingerprints, replayedCheckpoint: replayedCheckpoint);
+            var runDirectory = Path.Combine(root, "runs", runId.ToString("D"));
+            var run = await WorkspaceRunManifestStore.ReadAsync(runDirectory, TestContext.Current.CancellationToken);
+            run = run with
+            {
+                BaselineId = baseline.BaselineId,
+                BaselineRunId = baseline.RunId,
+                BaselineRunManifestIdentityFingerprint = baseline.RunManifestIdentityFingerprint,
+                BaselinePlanFingerprint = baseline.EffectivePlanFingerprint,
+                BaselineEvidencePackageIdentity = baseline.EvidencePackageIdentity,
+                PreRunSemanticDriftIdentityFingerprint = new string('a', 64),
+                PreRunSemanticDriftStatus = preRunDriftStatus,
+                ReviewDecision = "NotRequired"
+            };
+            await WorkspaceRunManifestStore.WriteAsync(runDirectory, run, createNew: false,
+                TestContext.Current.CancellationToken);
+            var boundRun = await WorkspaceRunManifestStore.ReadAsync(runDirectory, TestContext.Current.CancellationToken);
+            var manifestPath = Path.Combine(runDirectory, "run.json");
+            var tamperedManifest = JsonNode.Parse(
+                await File.ReadAllTextAsync(manifestPath, TestContext.Current.CancellationToken))
+                ?? throw new InvalidDataException("Test run manifest was empty.");
+            tamperedManifest["preRunSemanticDriftIdentityFingerprint"] = new string('b', 64);
+            Assert.Throws<InvalidDataException>(() => WorkspaceRunManifestStore.ReadAndValidate(
+                Encoding.UTF8.GetBytes(tamperedManifest.ToJsonString())));
+            return await WorkspaceBaselineComparisonService.CompareAndPersistAsync(root, boundRun,
+                TestContext.Current.CancellationToken)
+                ?? throw new InvalidDataException("Expected a persisted baseline outcome comparison.");
+        }
+    }
+
+    [Fact]
+    public async Task BaselineGovernancePackageValidatesAndComparesOffline()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-offline-governance-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Equal(0, (await RunAsync("workspace", "init", root)).ExitCode);
+            var baselineRunId = await CreatePackageFixtureRunAsync(root, "QUALIFIED", EvidenceResult.Pass);
+            var baselinePackage = await WorkspaceEvidencePackageService.CreateAsync(root,
+                baselineRunId.ToString("D"), null, diagnostic: false,
+                TestContext.Current.CancellationToken);
+            var baselinePackagePath = baselinePackage.PackagePath;
+            Assert.True((await WorkspaceEvidencePackageService.ValidateAsync(baselinePackagePath,
+                TestContext.Current.CancellationToken)).Valid);
+            var promotion = await RunAsync("workspace", "baseline", "promote", root,
+                baselineRunId.ToString("D"), "--json");
+            Assert.Equal(0, promotion.ExitCode);
+            var baselineId = JsonDocument.Parse(promotion.Output).RootElement.GetProperty("baselineId").GetGuid();
+            var baseline = await WorkspaceBaselineService.ShowAsync(root, baselineId.ToString("D"),
+                TestContext.Current.CancellationToken);
+
+            var targetConfigurationPath = Path.Combine(root, "systems", "target.yaml");
+            var originalTargetConfiguration = await File.ReadAllTextAsync(targetConfigurationPath,
+                TestContext.Current.CancellationToken);
+            var changedTargetConfiguration = originalTargetConfiguration.Replace(
+                "PROOFSHIFT_TARGET_CONNECTION", "PROOFSHIFT_REVIEWED_TARGET_CONNECTION",
+                StringComparison.Ordinal);
+            await File.WriteAllTextAsync(targetConfigurationPath, changedTargetConfiguration,
+                TestContext.Current.CancellationToken);
+            var driftPlan = await WorkspaceEvaluationService.PlanAsync(root, TestContext.Current.CancellationToken);
+            var drift = await WorkspaceSemanticDriftService.CompareAsync(root, driftPlan, "active",
+                TestContext.Current.CancellationToken);
+            Assert.Equal(WorkspaceSemanticDriftStatus.ReviewRequired, drift.Status);
+            var review = await WorkspacePlanReviewService.ReviewAsync(root, "active",
+                TestContext.Current.CancellationToken);
+
+            var candidateRunId = await CreatePackageFixtureRunAsync(root, "QUALIFIED", EvidenceResult.Pass);
+            var workspace = await EvaluationWorkspaceManifestStore.ReadAsync(root)
+                ?? throw new InvalidDataException("Test workspace manifest is missing.");
+            var driftArtifact = await WorkspaceSemanticDriftArtifactStore.WriteAsync(root, workspace.WorkspaceId,
+                candidateRunId, drift, TestContext.Current.CancellationToken);
+            var candidateRunDirectory = Path.Combine(root, "runs", candidateRunId.ToString("D"));
+            var candidateRun = await WorkspaceRunManifestStore.ReadAsync(candidateRunDirectory,
+                TestContext.Current.CancellationToken);
+            candidateRun = candidateRun with
+            {
+                BaselineId = baseline.BaselineId,
+                BaselineRunId = baseline.RunId,
+                BaselineRunManifestIdentityFingerprint = baseline.RunManifestIdentityFingerprint,
+                BaselinePlanFingerprint = baseline.EffectivePlanFingerprint,
+                BaselineEvidencePackageIdentity = baseline.EvidencePackageIdentity,
+                PreRunSemanticDriftIdentityFingerprint = WorkspacePlanReviewService.IdentityFingerprint(drift),
+                PreRunSemanticDriftStatus = drift.Status.ToString(),
+                SemanticDriftArtifactReference = driftArtifact.Reference,
+                SemanticDriftArtifactIntegrityHash = driftArtifact.IntegrityHash,
+                ReviewRecordId = review.Review.ReviewId,
+                ReviewRecordIntegrityHash = review.Review.IntegrityHash,
+                ReviewDecision = review.Review.Decision
+            };
+            await WorkspaceRunManifestStore.WriteAsync(candidateRunDirectory, candidateRun, createNew: false,
+                TestContext.Current.CancellationToken);
+            candidateRun = await WorkspaceRunManifestStore.ReadAsync(candidateRunDirectory,
+                TestContext.Current.CancellationToken);
+            var outcome = await WorkspaceBaselineComparisonService.CompareAndPersistAsync(root, candidateRun,
+                TestContext.Current.CancellationToken);
+            Assert.NotNull(outcome);
+
+            var candidatePackagePath = Path.Combine(root, "candidate.zip");
+            var candidatePackage = await WorkspaceEvidencePackageService.CreateAsync(root,
+                candidateRunId.ToString("D"), candidatePackagePath, diagnostic: false,
+                TestContext.Current.CancellationToken);
+            Assert.Equal(candidatePackage.PackageIdentity,
+                (await WorkspaceEvidencePackageService.CreateAsync(root, candidateRunId.ToString("D"),
+                    Path.Combine(root, "candidate-repeat.zip"), diagnostic: false,
+                    TestContext.Current.CancellationToken)).PackageIdentity);
+            var validation = await WorkspaceEvidencePackageService.ValidateAsync(candidatePackagePath,
+                TestContext.Current.CancellationToken);
+            Assert.True(validation.Valid, string.Join("; ", validation.Failures));
+            var candidateEntries = await ReadPackageEntriesAsync(candidatePackagePath);
+            using (var packageManifest = JsonDocument.Parse(candidateEntries["package.json"]))
+            {
+                var roles = packageManifest.RootElement.GetProperty("artifacts").EnumerateArray()
+                    .Select(item => item.GetProperty("role").GetString()).ToHashSet(StringComparer.Ordinal);
+                Assert.Contains("baseline-reference", roles);
+                Assert.Contains("pre-run-semantic-drift", roles);
+                Assert.Contains("plan-review", roles);
+                Assert.Contains("baseline-outcome-comparison", roles);
+                Assert.Equal("proofshift-baseline-governance-package-v1",
+                    packageManifest.RootElement.GetProperty("governanceFormat").GetString());
+            }
+
+            var offline = await WorkspacePackageComparisonService.CompareAsync(baselinePackagePath,
+                candidatePackagePath, TestContext.Current.CancellationToken);
+            Assert.Equal("BaselineGoverned", offline.ComparisonMode);
+            Assert.True(offline.BaselineGovernanceBindingValid);
+            Assert.Equal(baselinePackage.PackageIdentity, offline.BaselinePackageIdentity);
+            Assert.Equal("Reviewed", offline.ReviewDecision);
+            Assert.Equal("ChangedStillQualified", offline.OutcomeClassification);
+            Assert.False(offline.DetailedComparison.MaterializedStateFindingAdded);
+            var cliComparison = await RunAsync("workspace", "evidence", "compare-packages",
+                baselinePackagePath, candidatePackagePath, "--json");
+            Assert.Equal(0, cliComparison.ExitCode);
+            using (var cliJson = JsonDocument.Parse(cliComparison.Output))
+                Assert.Equal("BaselineGoverned", cliJson.RootElement.GetProperty("comparisonMode").GetString());
+
+            var defectiveRunId = await CreatePackageFixtureRunAsync(root, "NOT QUALIFIED", EvidenceResult.Fail,
+                detailedFindings: true);
+            var defectiveDrift = await WorkspaceSemanticDriftArtifactStore.WriteAsync(root, workspace.WorkspaceId,
+                defectiveRunId, drift, TestContext.Current.CancellationToken);
+            var defectiveRunDirectory = Path.Combine(root, "runs", defectiveRunId.ToString("D"));
+            var defectiveRun = await WorkspaceRunManifestStore.ReadAsync(defectiveRunDirectory,
+                TestContext.Current.CancellationToken);
+            defectiveRun = defectiveRun with
+            {
+                BaselineId = baseline.BaselineId,
+                BaselineRunId = baseline.RunId,
+                BaselineRunManifestIdentityFingerprint = baseline.RunManifestIdentityFingerprint,
+                BaselinePlanFingerprint = baseline.EffectivePlanFingerprint,
+                BaselineEvidencePackageIdentity = baseline.EvidencePackageIdentity,
+                PreRunSemanticDriftIdentityFingerprint = WorkspacePlanReviewService.IdentityFingerprint(drift),
+                PreRunSemanticDriftStatus = drift.Status.ToString(),
+                SemanticDriftArtifactReference = defectiveDrift.Reference,
+                SemanticDriftArtifactIntegrityHash = defectiveDrift.IntegrityHash,
+                ReviewRecordId = review.Review.ReviewId,
+                ReviewRecordIntegrityHash = review.Review.IntegrityHash,
+                ReviewDecision = review.Review.Decision
+            };
+            await WorkspaceRunManifestStore.WriteAsync(defectiveRunDirectory, defectiveRun, createNew: false,
+                TestContext.Current.CancellationToken);
+            defectiveRun = await WorkspaceRunManifestStore.ReadAsync(defectiveRunDirectory,
+                TestContext.Current.CancellationToken);
+            Assert.NotNull(await WorkspaceBaselineComparisonService.CompareAndPersistAsync(root, defectiveRun,
+                TestContext.Current.CancellationToken));
+            var defectivePackagePath = Path.Combine(root, "defective-candidate.zip");
+            await WorkspaceEvidencePackageService.CreateAsync(root, defectiveRunId.ToString("D"),
+                defectivePackagePath, diagnostic: false, TestContext.Current.CancellationToken);
+            var defectiveOffline = await WorkspacePackageComparisonService.CompareAsync(baselinePackagePath,
+                defectivePackagePath, TestContext.Current.CancellationToken);
+            Assert.Equal("Regressed", defectiveOffline.OutcomeClassification);
+            Assert.True(defectiveOffline.MaterializedStateFindingAdded);
+            Assert.Contains(defectiveOffline.DetailedComparison.Findings, item =>
+                item.Category == "Added" && item.RuleId == "proofshift.verification.materialized-state");
+            Assert.Contains(defectiveOffline.DetailedComparison.ExpectedExceptions, item =>
+                item.Category == "Added");
+
+            var interruptedRunId = await CreatePackageFixtureRunAsync(root, "QUALIFIED", EvidenceResult.Pass);
+            var interruptedDrift = await WorkspaceSemanticDriftArtifactStore.WriteAsync(root,
+                workspace.WorkspaceId, interruptedRunId, drift, TestContext.Current.CancellationToken);
+            var interruptedDirectory = Path.Combine(root, "runs", interruptedRunId.ToString("D"));
+            var interrupted = await WorkspaceRunManifestStore.ReadAsync(interruptedDirectory,
+                TestContext.Current.CancellationToken);
+            interrupted = interrupted with
+            {
+                State = "Interrupted",
+                Disposition = null,
+                BaselineId = baseline.BaselineId,
+                BaselineRunId = baseline.RunId,
+                BaselineRunManifestIdentityFingerprint = baseline.RunManifestIdentityFingerprint,
+                BaselinePlanFingerprint = baseline.EffectivePlanFingerprint,
+                BaselineEvidencePackageIdentity = baseline.EvidencePackageIdentity,
+                PreRunSemanticDriftIdentityFingerprint = WorkspacePlanReviewService.IdentityFingerprint(drift),
+                PreRunSemanticDriftStatus = drift.Status.ToString(),
+                SemanticDriftArtifactReference = interruptedDrift.Reference,
+                SemanticDriftArtifactIntegrityHash = interruptedDrift.IntegrityHash,
+                ReviewRecordId = review.Review.ReviewId,
+                ReviewRecordIntegrityHash = review.Review.IntegrityHash,
+                ReviewDecision = review.Review.Decision
+            };
+            await WorkspaceRunManifestStore.WriteAsync(interruptedDirectory, interrupted, createNew: false,
+                TestContext.Current.CancellationToken);
+            var diagnosticPath = Path.Combine(root, "interrupted-diagnostic.zip");
+            await WorkspaceEvidencePackageService.CreateAsync(root, interruptedRunId.ToString("D"),
+                diagnosticPath, diagnostic: true, TestContext.Current.CancellationToken);
+            var diagnosticValidation = await WorkspaceEvidencePackageService.ValidateAsync(diagnosticPath,
+                TestContext.Current.CancellationToken);
+            Assert.True(diagnosticValidation.Valid, string.Join("; ", diagnosticValidation.Failures));
+            var diagnosticEntries = await ReadPackageEntriesAsync(diagnosticPath);
+            using (var diagnosticManifest = JsonDocument.Parse(diagnosticEntries["package.json"]))
+            {
+                Assert.Equal("diagnostic", diagnosticManifest.RootElement.GetProperty("packageType").GetString());
+                Assert.DoesNotContain(diagnosticManifest.RootElement.GetProperty("artifacts").EnumerateArray(),
+                    item => item.GetProperty("role").GetString() == "baseline-outcome-comparison");
+            }
+
+            var unrelatedBaselineRun = await CreatePackageFixtureRunAsync(root, "QUALIFIED", EvidenceResult.Pass);
+            var unrelatedBaselinePackage = await WorkspaceEvidencePackageService.CreateAsync(root,
+                unrelatedBaselineRun.ToString("D"), null, diagnostic: false,
+                TestContext.Current.CancellationToken);
+            var unrelatedBaselinePath = unrelatedBaselinePackage.PackagePath;
+            var unrelatedPromotion = await RunAsync("workspace", "baseline", "promote", root,
+                unrelatedBaselineRun.ToString("D"), "--json");
+            Assert.Equal(0, unrelatedPromotion.ExitCode);
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                WorkspacePackageComparisonService.CompareAsync(unrelatedBaselinePath, candidatePackagePath,
+                    TestContext.Current.CancellationToken));
+
+            var unrelatedCandidateRun = await CreatePackageFixtureRunAsync(root, "QUALIFIED", EvidenceResult.Pass);
+            var unrelatedCandidatePath = Path.Combine(root, "unrelated-candidate.zip");
+            await WorkspaceEvidencePackageService.CreateAsync(root, unrelatedCandidateRun.ToString("D"),
+                unrelatedCandidatePath, diagnostic: false, TestContext.Current.CancellationToken);
+            var adHoc = await WorkspacePackageComparisonService.CompareAsync(baselinePackagePath,
+                unrelatedCandidatePath, TestContext.Current.CancellationToken);
+            Assert.Equal("AdHoc", adHoc.ComparisonMode);
+            Assert.Null(adHoc.BaselineGovernanceBindingValid);
+            Assert.Null(adHoc.OutcomeClassification);
+
+            var currentTargetConfiguration = await File.ReadAllTextAsync(targetConfigurationPath,
+                TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(targetConfigurationPath,
+                currentTargetConfiguration.Replace("PROOFSHIFT_REVIEWED_TARGET_CONNECTION",
+                    "PROOFSHIFT_OTHER_REVIEW_TARGET_CONNECTION", StringComparison.Ordinal),
+                TestContext.Current.CancellationToken);
+            var substitutedReview = await WorkspacePlanReviewService.ReviewAsync(root, "active",
+                TestContext.Current.CancellationToken);
+            Assert.NotEqual(review.Review.ReviewId, substitutedReview.Review.ReviewId);
+            await RejectArtifactSubstitutionAsync("plan-review",
+                WorkspacePlanReviewService.SerializeRecord(substitutedReview.Review));
+            await RejectArtifactSubstitutionAsync("pre-run-semantic-drift",
+                await ReadGovernanceArtifactFromPackageAsync(diagnosticPath, "pre-run-semantic-drift"));
+            await RejectArtifactSubstitutionAsync("baseline-outcome-comparison",
+                await ReadGovernanceArtifactFromPackageAsync(defectivePackagePath,
+                    "baseline-outcome-comparison"));
+            await RejectArtifactSubstitutionAsync("baseline-outcome-comparison",
+                Encoding.UTF8.GetBytes("comparison from another pair"));
+            var otherBaselineId = JsonDocument.Parse(unrelatedPromotion.Output).RootElement
+                .GetProperty("baselineId").GetGuid();
+            await RejectArtifactSubstitutionAsync("baseline-reference",
+                await File.ReadAllBytesAsync(WorkspaceBaselineService.GetBaselineRecordPath(root, otherBaselineId),
+                    TestContext.Current.CancellationToken));
+            var summaryText = Encoding.UTF8.GetString(candidateEntries["artifacts/summary.md"])
+                .Replace("ChangedStillQualified", "Improved", StringComparison.Ordinal);
+            await RejectArtifactSubstitutionAsync(WorkspaceEvaluationSummaryService.SummaryRole,
+                Encoding.UTF8.GetBytes(summaryText));
+
+            async Task RejectArtifactSubstitutionAsync(string role, byte[] replacement)
+            {
+                var tamperedEntries = await ReadPackageEntriesAsync(candidatePackagePath);
+                using var candidateManifest = JsonDocument.Parse(tamperedEntries["package.json"]);
+                var artifactPath = candidateManifest.RootElement.GetProperty("artifacts").EnumerateArray()
+                    .Single(item => item.GetProperty("role").GetString() == role)
+                    .GetProperty("path").GetString()!;
+                tamperedEntries[artifactPath] = replacement;
+                var tamperedPath = Path.Combine(root, $"tampered-{role}.zip");
+                await WritePackageEntriesAsync(tamperedPath, tamperedEntries);
+                var result = await WorkspaceEvidencePackageService.ValidateAsync(tamperedPath,
+                    TestContext.Current.CancellationToken);
+                Assert.False(result.Valid, $"Tampered {role} artifact unexpectedly validated.");
+            }
+
+            async Task<byte[]> ReadGovernanceArtifactFromPackageAsync(string packagePath, string role)
+            {
+                var entries = await ReadPackageEntriesAsync(packagePath);
+                using var sourceManifest = JsonDocument.Parse(entries["package.json"]);
+                var artifactPath = sourceManifest.RootElement.GetProperty("artifacts").EnumerateArray()
+                    .Single(item => item.GetProperty("role").GetString() == role)
+                    .GetProperty("path").GetString()!;
+                return entries[artifactPath];
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task WorkspaceCleanupPreviewsAndRemovesOnlyOwnedTemporaryData()
     {
         var root = Path.Combine(Path.GetTempPath(), $"proofshift-workspace-cleanup-{Guid.NewGuid():N}");
@@ -804,6 +2257,15 @@ public sealed class AuthoringCliTests
             var package = Path.Combine(root, "evidence", "retained.zip");
             await WorkspaceEvidencePackageService.CreateAsync(root, runId.ToString("D"), package,
                 diagnostic: false, TestContext.Current.CancellationToken);
+            var baselinePackage = await WorkspaceEvidencePackageService.CreateAsync(root, runId.ToString("D"),
+                null, diagnostic: false, TestContext.Current.CancellationToken);
+            var baselinePromotion = await RunAsync("workspace", "baseline", "promote", root,
+                runId.ToString("D"), "--json");
+            Assert.Equal(0, baselinePromotion.ExitCode);
+            var activeBaselineId = JsonDocument.Parse(baselinePromotion.Output)
+                .RootElement.GetProperty("baselineId").GetGuid();
+            var baselinePackageBytes = await File.ReadAllBytesAsync(baselinePackage.PackagePath,
+                TestContext.Current.CancellationToken);
             var run = await WorkspaceRunManifestStore.ReadAsync(runDirectory, TestContext.Current.CancellationToken);
             await WorkspaceCleanupService.MarkTemporaryOwnedAsync(runDirectory, run,
                 TestContext.Current.CancellationToken);
@@ -834,6 +2296,10 @@ public sealed class AuthoringCliTests
                 .VerificationRunId!.Replace("-", string.Empty, StringComparison.Ordinal), "manifest.json")));
             Assert.True((await WorkspaceEvidencePackageService.ValidateAsync(package,
                 TestContext.Current.CancellationToken)).Valid);
+            Assert.Equal(baselinePackageBytes, await File.ReadAllBytesAsync(baselinePackage.PackagePath,
+                TestContext.Current.CancellationToken));
+            Assert.Equal(activeBaselineId, (await WorkspaceBaselineService.ActiveAsync(root,
+                TestContext.Current.CancellationToken))!.BaselineId);
 
             var retried = await WorkspaceCleanupService.RunAsync(root, runId.ToString("D"), execute: true,
                 TestContext.Current.CancellationToken);
@@ -1971,9 +3437,10 @@ public sealed class AuthoringCliTests
         finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
     }
 
-    private static async Task<Guid> CreatePackageFixtureRunAsync(string root, string disposition,
+    private static async Task<Guid> CreatePackageFixtureRunAsync(string root, string? disposition,
         EvidenceResult evidenceResult, bool detailedFindings = false, string evidenceValue = "fixture-result",
-        string exceptionReason = "sensitive note")
+        string exceptionReason = "sensitive note", IReadOnlyList<string>? discoveryFingerprints = null,
+        bool replayedCheckpoint = true)
     {
         var workspace = await EvaluationWorkspaceManifestStore.ReadAsync(root)
             ?? throw new InvalidDataException("Test workspace manifest is missing.");
@@ -2112,13 +3579,14 @@ public sealed class AuthoringCliTests
             UpdatedAt = DateTimeOffset.UnixEpoch,
             State = "Completed",
             PlanFingerprint = plan.Fingerprint,
-            ConfigurationHash = new string('b', 64),
+            ConfigurationHash = plan.ConfigurationFingerprint,
             GraphHash = plan.GraphHash,
+            DiscoveryFingerprints = discoveryFingerprints ?? [],
             CheckpointId = checkpointId.ToString("D"),
             CheckpointManifestHash = new string('c', 64),
             CheckpointSourceFingerprint = new string('d', 64),
             CheckpointStoreScope = "workspace",
-            ReplayedCheckpoint = true,
+            ReplayedCheckpoint = replayedCheckpoint,
             ProjectionRunId = projectionId.Value.ToString("D"),
             ProjectionManifestReference = $"runs/{runId:D}/.proofshift/projections/{projectionId.Value:N}/run.json",
             ProjectionManifestHash = projectionManifestHash,

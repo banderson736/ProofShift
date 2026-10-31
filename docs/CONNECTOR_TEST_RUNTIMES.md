@@ -37,7 +37,7 @@ Connector validation is against the repository's MinIO, Azurite 3.35.0 and OpenS
 
 ## CI
 
-`ci.yml` runs core tests separately from required `oracle-integration` and `db2-integration` jobs. Oracle is built at test time through the official Oracle source repository and official Free download endpoint. Db2 uses the pinned Community image and explicit test-time license acceptance. Neither vendor suite is part of a skip-on-unavailable path.
+`ci.yml` runs core tests separately from required `oracle-integration` and `db2-integration` jobs. Oracle is built at test time through the official Oracle source repository and official Free download endpoint. Db2 uses the pinned Community image and explicit test-time license acceptance. The Db2 job is pinned to Ubuntu 24.04 because IBM's Linux client requires the `libxml2.so.2` ABI, which is absent from newer Ubuntu runner images. Neither vendor suite is part of a skip-on-unavailable path.
 
 ## Customer-facing compatibility
 

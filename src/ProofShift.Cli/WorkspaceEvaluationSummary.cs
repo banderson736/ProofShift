@@ -25,7 +25,23 @@ internal sealed record WorkspaceEvaluationSummaryResult(
     string ReportIdentity,
     string State,
     string? Disposition,
-    int FailedFindingCount);
+    int FailedFindingCount)
+{
+    public Guid? BaselineId { get; init; }
+    public string? BaselineDisposition { get; init; }
+    public string? PreRunSemanticDriftStatus { get; init; }
+    public string? ReviewDecision { get; init; }
+    public Guid? ReviewRecordId { get; init; }
+    public string? OutcomeClassification { get; init; }
+    public IReadOnlyList<WorkspaceFindingDelta> NewFindings { get; init; } = [];
+    public IReadOnlyList<WorkspaceFindingDelta> ResolvedFindings { get; init; } = [];
+    public IReadOnlyList<WorkspaceFindingDelta> OtherFindingChanges { get; init; } = [];
+    public IReadOnlyList<WorkspaceExpectedExceptionDelta> ExpectedExceptionChanges { get; init; } = [];
+    public IReadOnlyList<string> ReconciliationFailuresAdded { get; init; } = [];
+    public IReadOnlyList<string> ReconciliationFailuresResolved { get; init; } = [];
+    public bool MaterializedStateFindingAdded { get; init; }
+    public bool MaterializedStateFindingResolved { get; init; }
+}
 
 internal sealed record WorkspaceEvaluationFinding(
     string RuleId,
@@ -88,7 +104,15 @@ internal static class WorkspaceEvaluationSummaryService
         if (run.PlanFingerprint != plan.Fingerprint || run.GraphHash != plan.GraphHash)
             throw new InvalidDataException("Current workspace plan does not match the run; refusing to generate a contradictory summary.");
 
-        var content = await CreateContentAsync(runDirectory, run, plan, cancellationToken).ConfigureAwait(false);
+        var baselineComparison = await WorkspaceBaselineComparisonService.ReadAsync(root, runId, run,
+            cancellationToken).ConfigureAwait(false);
+        var baselineRecord = run.BaselineId is { } baselineId
+            ? await WorkspaceBaselineService.ShowAsync(root, baselineId.ToString("D"), cancellationToken)
+                .ConfigureAwait(false)
+            : null;
+        var content = await CreateContentAsync(runDirectory, run, plan, cancellationToken,
+            includeBaselineOutcome: true, baselineComparison: baselineComparison,
+            baselineRecord: baselineRecord).ConfigureAwait(false);
         var destination = outputPath is null
             ? Path.Combine(runDirectory, "summary.md")
             : Path.GetFullPath(outputPath);
@@ -112,17 +136,42 @@ internal static class WorkspaceEvaluationSummaryService
         }
         var metadata = ReadMetadata(content);
         var evidence = await ReadEvidenceAsync(runDirectory, run, cancellationToken).ConfigureAwait(false);
-        return new(destination, runId, metadata.ReportIdentity, run.State, run.Disposition, evidence.Findings.Count);
+        return new WorkspaceEvaluationSummaryResult(destination, runId, metadata.ReportIdentity, run.State,
+            run.Disposition, evidence.Findings.Count)
+        {
+            BaselineId = run.BaselineId,
+            BaselineDisposition = baselineComparison?.DetailedComparison.BeforeDisposition,
+            PreRunSemanticDriftStatus = run.PreRunSemanticDriftStatus,
+            ReviewDecision = run.ReviewDecision,
+            ReviewRecordId = run.ReviewRecordId,
+            OutcomeClassification = run.BaselineId is null ? null :
+                run.PreRunSemanticDriftStatus == WorkspaceSemanticDriftStatus.NotComparable.ToString()
+                    ? "NotComparable"
+                    : baselineComparison?.OutcomeClassification ?? "NotEstablished",
+            NewFindings = baselineComparison?.DetailedComparison.Findings.Where(item => item.Category == "Added").ToArray() ?? [],
+            ResolvedFindings = baselineComparison?.DetailedComparison.Findings.Where(item => item.Category == "Resolved").ToArray() ?? [],
+            OtherFindingChanges = baselineComparison?.DetailedComparison.Findings
+                .Where(item => item.Category is not ("Added" or "Resolved")).ToArray() ?? [],
+            ExpectedExceptionChanges = baselineComparison?.DetailedComparison.ExpectedExceptions
+                .Where(item => item.Category != "Persisting").ToArray() ?? [],
+            ReconciliationFailuresAdded = baselineComparison?.DetailedComparison.ReconciliationFailuresAdded ?? [],
+            ReconciliationFailuresResolved = baselineComparison?.DetailedComparison.ReconciliationFailuresResolved ?? [],
+            MaterializedStateFindingAdded = baselineComparison?.DetailedComparison.MaterializedStateFindingAdded ?? false,
+            MaterializedStateFindingResolved = baselineComparison?.DetailedComparison.MaterializedStateFindingResolved ?? false
+        };
     }
 
     internal static async Task<string> CreateContentAsync(string runDirectory, WorkspaceRunManifest run,
-        WorkspaceEvaluationPlan plan, CancellationToken cancellationToken)
+        WorkspaceEvaluationPlan plan, CancellationToken cancellationToken,
+        bool includeBaselineOutcome = false,
+        WorkspaceBaselineComparisonRecord? baselineComparison = null,
+        WorkspaceBaselineRecord? baselineRecord = null)
     {
         if (run.PlanFingerprint != plan.Fingerprint || run.GraphHash != plan.GraphHash)
             throw new InvalidDataException("Effective plan identity does not match the authoritative run.");
         ValidateDisposition(run);
         var evidence = await ReadEvidenceAsync(runDirectory, run, cancellationToken).ConfigureAwait(false);
-        var body = RenderBody(run, plan, evidence);
+        var body = RenderBody(run, plan, evidence, baselineComparison, includeBaselineOutcome, baselineRecord);
         var bodyHash = Hash(Encoding.UTF8.GetBytes(body));
         var provisional = new WorkspaceEvaluationSummaryMetadata(SummaryFormat, run.RunId,
             run.IdentityFingerprint, run.ManifestHash!, run.PlanFingerprint, evidence.EvidenceFingerprint,
@@ -230,6 +279,65 @@ internal static class WorkspaceEvaluationSummaryService
             manifest.Fingerprint);
     }
 
+    internal static async Task<WorkspaceEvaluationEvidence> ReadPackagedEvidenceAsync(Stream recordsStream,
+        WorkspaceRunManifest run, CancellationToken cancellationToken)
+    {
+        var findings = new List<WorkspaceEvaluationFinding>();
+        var findingsByEvidenceId = new Dictionary<string, WorkspaceEvaluationFinding>(StringComparer.Ordinal);
+        var pendingExceptions = new List<PendingExpectedException>();
+        using var reader = new StreamReader(recordsStream, Encoding.UTF8, detectEncodingFromByteOrderMarks: false,
+            bufferSize: 64 * 1024, leaveOpen: true);
+        while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(line))
+                throw new InvalidDataException("Packaged Evidence contains an empty record line.");
+            using var document = JsonDocument.Parse(line);
+            var record = document.RootElement;
+            var ruleId = GetString(record, "ruleId");
+            var code = GetNullableString(record, "code");
+            var result = GetString(record, "result");
+            var inputs = GetArray(record, "inputs");
+            if (ruleId == "proofshift.verification.expected-exception-annotation")
+            {
+                var targetIdentity = ArtifactIdentity(inputs);
+                var relatedFinding = inputs.EnumerateArray().Select(input => GetNullableString(input, "evidenceId"))
+                    .FirstOrDefault(id => id is not null);
+                var explanation = GetString(record, "explanation");
+                var annotationRule = inputs.EnumerateArray().Select(input => GetNullableString(input, "ruleId"))
+                    .FirstOrDefault(value => value is not null);
+                pendingExceptions.Add(new PendingExpectedException(
+                    ParseAnnotationIdentity(explanation) ?? GetString(record, "id"), result, annotationRule,
+                    targetIdentity, relatedFinding, Hash(explanation)));
+                continue;
+            }
+            if (result != "Fail") continue;
+            var finding = new WorkspaceEvaluationFinding(ruleId, code, GetString(record, "severity"),
+                ArtifactIdentity(inputs), Hash($"{GetRawValue(record, "expected")}\n{GetRawValue(record, "actual")}"),
+                GetString(record, "id"));
+            findings.Add(finding);
+            findingsByEvidenceId.Add(finding.EvidenceId, finding);
+        }
+
+        var exceptions = pendingExceptions.Select(annotation =>
+        {
+            var linked = annotation.FindingEvidenceId is not null &&
+                findingsByEvidenceId.TryGetValue(annotation.FindingEvidenceId, out var finding)
+                ? finding
+                : null;
+            return new WorkspaceExpectedException(annotation.AnnotationIdentity, annotation.Result,
+                linked?.RuleId ?? annotation.RuleId, linked?.Code, annotation.TargetIdentity,
+                annotation.FindingEvidenceId, annotation.AnnotationFingerprint);
+        }).ToArray();
+        return new WorkspaceEvaluationEvidence(
+            findings.OrderBy(item => item.RuleId, StringComparer.Ordinal)
+                .ThenBy(item => item.Code, StringComparer.Ordinal)
+                .ThenBy(item => item.TargetIdentity, StringComparer.Ordinal).ToArray(),
+            exceptions.OrderBy(item => item.AnnotationIdentity, StringComparer.Ordinal)
+                .ThenBy(item => item.TargetIdentity, StringComparer.Ordinal).ToArray(),
+            run.VerificationEvidenceFingerprint);
+    }
+
     private sealed record PendingExpectedException(
         string AnnotationIdentity,
         string Result,
@@ -239,7 +347,8 @@ internal static class WorkspaceEvaluationSummaryService
         string AnnotationFingerprint);
 
     internal static string RenderBody(WorkspaceRunManifest run, WorkspaceEvaluationPlan plan,
-        WorkspaceEvaluationEvidence evidence)
+        WorkspaceEvaluationEvidence evidence, WorkspaceBaselineComparisonRecord? baselineComparison = null,
+        bool includeBaselineOutcome = false, WorkspaceBaselineRecord? baselineRecord = null)
     {
         var builder = new StringBuilder();
         builder.AppendLine("# ProofShift evaluation summary").AppendLine();
@@ -304,6 +413,34 @@ internal static class WorkspaceEvaluationSummaryService
             item.RuleId.Contains("materialized-state", StringComparison.OrdinalIgnoreCase) ||
             item.Code?.Contains("MaterializedTargetChanged", StringComparison.OrdinalIgnoreCase) == true);
         builder.AppendLine(CultureInfo.InvariantCulture, $"- Materialized-state/integrity change detected: {(materializedStateChanged ? "yes" : "no failed materialized-state finding recorded")}.");
+        if (includeBaselineOutcome && run.BaselineId is { } baselineId)
+        {
+            builder.AppendLine();
+            builder.AppendLine("## Baseline comparison").AppendLine();
+            builder.AppendLine(CultureInfo.InvariantCulture, $"- Baseline: `{baselineId:D}`; disposition **{baselineComparison?.DetailedComparison.BeforeDisposition ?? baselineRecord?.Disposition ?? "not loaded"}**.");
+            builder.AppendLine(CultureInfo.InvariantCulture, $"- Candidate disposition: **{run.Disposition ?? "not established"}**.");
+            builder.AppendLine(CultureInfo.InvariantCulture, $"- Pre-run semantic drift: **{Escape(run.PreRunSemanticDriftStatus ?? "unavailable")}**.");
+            builder.AppendLine(CultureInfo.InvariantCulture, $"- Review required: **{(run.ReviewDecision is "Reviewed" or "ComparisonUnavailableAcknowledged" ? "yes" : "no")}**.");
+            builder.AppendLine(CultureInfo.InvariantCulture, $"- Exact review/acknowledgement: **{Escape(run.ReviewDecision ?? "NotRequired")}**; identity `{run.ReviewRecordId?.ToString("D") ?? "not applicable"}`.");
+            var outcomeClassification = run.PreRunSemanticDriftStatus == WorkspaceSemanticDriftStatus.NotComparable.ToString()
+                ? "NotComparable"
+                : baselineComparison?.OutcomeClassification ?? "NotEstablished";
+            builder.AppendLine(CultureInfo.InvariantCulture, $"- Post-run outcome: **{Escape(outcomeClassification)}**.");
+            if (outcomeClassification == "NotComparable")
+                builder.AppendLine("- Baseline comparison was not fully available; no equivalence, improvement, or regression conclusion is asserted.");
+            if (baselineComparison is { } outcome)
+            {
+                foreach (var finding in outcome.DetailedComparison.Findings)
+                    builder.AppendLine(CultureInfo.InvariantCulture, $"- Finding {finding.Category.ToLowerInvariant()}: `{Escape(finding.RuleId)}` / `{Escape(finding.BeforeCode ?? finding.AfterCode ?? "no-code")}`; target `{finding.TargetIdentity}`; count {finding.Count}.");
+                foreach (var annotation in outcome.DetailedComparison.ExpectedExceptions.Where(item => item.Category != "Persisting"))
+                    builder.AppendLine(CultureInfo.InvariantCulture, $"- Expected-exception annotation {annotation.Category.ToLowerInvariant()}: count {annotation.Count}; annotations never waive findings.");
+                foreach (var rule in outcome.DetailedComparison.ReconciliationFailuresAdded)
+                    builder.AppendLine(CultureInfo.InvariantCulture, $"- Reconciliation failure added: `{Escape(rule)}`.");
+                foreach (var rule in outcome.DetailedComparison.ReconciliationFailuresResolved)
+                    builder.AppendLine(CultureInfo.InvariantCulture, $"- Reconciliation failure resolved: `{Escape(rule)}`.");
+                builder.AppendLine(CultureInfo.InvariantCulture, $"- Materialized-state finding added/resolved: {outcome.DetailedComparison.MaterializedStateFindingAdded}/{outcome.DetailedComparison.MaterializedStateFindingResolved}.");
+            }
+        }
         builder.AppendLine(CultureInfo.InvariantCulture, $"- Recovery qualification: **{Escape(run.RecoveryQualification ?? "not assessed")}**.");
         if (run.EvidenceReference is not null)
         {

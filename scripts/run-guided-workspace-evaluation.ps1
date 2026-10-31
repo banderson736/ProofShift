@@ -75,7 +75,14 @@ function Invoke-PackagedJson {
 
     $text = Invoke-Packaged $Arguments $ExpectedExitCode
     try { return $text | ConvertFrom-Json }
-    catch { throw "Packaged workspace command did not return valid JSON; output omitted." }
+    catch {
+        $command = $Arguments -join " "
+        $parseExceptionType = $_.Exception.GetType().Name
+        $safeDiagnostic = $text -split '\r?\n' |
+            Where-Object { $_ -match '^\s*PS[A-Z0-9]+:' } | Select-Object -First 1
+        $diagnosticText = if ($safeDiagnostic) { " $($safeDiagnostic.Trim())" } else { "" }
+        throw "Packaged workspace command '$command' did not return valid JSON ($parseExceptionType).$diagnosticText Output omitted."
+    }
 }
 
 function Invoke-PackagedWorkspaceRun {
@@ -83,11 +90,15 @@ function Invoke-PackagedWorkspaceRun {
         [string] $Workspace,
         [string] $CheckpointId,
         [string] $Purpose,
+        [string] $Baseline,
+        [string] $Review,
         [int] $ExpectedExitCode = 0
     )
 
     $arguments = @("workspace", "run", $Workspace, "--json")
     if ($CheckpointId) { $arguments += @("--checkpoint", $CheckpointId) }
+    if ($Baseline) { $arguments += @("--baseline", $Baseline) }
+    if ($Review) { $arguments += @("--review", $Review) }
     Push-Location $script:PackageRoot
     try {
         $previousErrorActionPreference = $ErrorActionPreference
@@ -108,6 +119,7 @@ function Invoke-PackagedWorkspaceRun {
         $failureCode = "unavailable"
         $verificationOutcome = "unavailable"
         $recoveryQualification = "unavailable"
+        $blockedChecks = ""
         if ($resultLines.Count -eq 1) {
             try {
                 $runResult = $resultLines[0] | ConvertFrom-Json -ErrorAction Stop
@@ -122,12 +134,18 @@ function Invoke-PackagedWorkspaceRun {
                 if ($runResult.run.recoveryQualification) {
                     $recoveryQualification = "$($runResult.run.recoveryQualification)"
                 }
+                $blockedChecks = @($runResult.readinessChecks | Where-Object {
+                    $_.status -eq "BLOCKED"
+                } | ForEach-Object {
+                    "$($_.id)/$($_.category): $($_.message)"
+                } | Sort-Object -Unique) -join ","
             }
             catch [System.Management.Automation.RuntimeException] {
                 $runState = "result-json-invalid"
             }
         }
-        throw "Packaged $Purpose guided workspace run returned exit code $exitCode (expected $ExpectedExitCode); state=$runState disposition=$disposition failureCode=$failureCode verification=$verificationOutcome recovery=$recoveryQualification; output omitted."
+        $blockedChecksSummary = if ($blockedChecks) { " blockedChecks=[$blockedChecks]" } else { "" }
+        throw "Packaged $Purpose guided workspace run returned exit code $exitCode (expected $ExpectedExitCode); state=$runState disposition=$disposition failureCode=$failureCode verification=$verificationOutcome recovery=$recoveryQualification$blockedChecksSummary; output omitted."
     }
     $script:CommandOutputs.Add(($output -join [Environment]::NewLine))
     $resultLines = @($output | ForEach-Object { "$_" } | Where-Object {
@@ -257,7 +275,7 @@ function Start-DefectiveWorkspaceReplay {
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
     $quotedArguments = @($script:CliPath, "workspace", "run", $Workspace,
-        "--checkpoint", $CheckpointId, "--json") | ForEach-Object {
+        "--checkpoint", $CheckpointId, "--baseline", "none", "--json") | ForEach-Object {
         '"' + $_.Replace('"', '\"') + '"'
     }
     $startInfo.Arguments = $quotedArguments -join " "
@@ -374,6 +392,15 @@ try {
     $null = Invoke-Packaged @("workspace", "init", $workspace)
     Copy-Item -Path (Join-Path $scenarioRoot "*") -Destination $workspace -Recurse -Force
 
+    [Environment]::SetEnvironmentVariable($sourceConnectionName, $sourceConnection, "Process")
+    [Environment]::SetEnvironmentVariable($targetConnectionName, $targetConnection, "Process")
+    $initialSourceDiscovery = Join-Path (Join-Path $workspace "discovery") "source-initial"
+    $initialShadowDiscovery = Join-Path (Join-Path $workspace "discovery") "shadow-initial"
+    $null = Invoke-Packaged @("discover", (Join-Path $workspace "proofshift.yaml"), "--system", "source",
+        "--endpoint", "records", "--output", $initialSourceDiscovery, "--json")
+    $null = Invoke-Packaged @("discover", (Join-Path $workspace "proofshift.yaml"), "--system", "shadow",
+        "--endpoint", "records", "--output", $initialShadowDiscovery, "--json")
+
     [Environment]::SetEnvironmentVariable($sourceConnectionName, $null, "Process")
     [Environment]::SetEnvironmentVariable($targetConnectionName, $null, "Process")
     $structure = Invoke-PackagedJson @("workspace", "validate", $workspace, "--json")
@@ -435,9 +462,9 @@ try {
     Assert-Equal $cleanProjection.targetArtifactCount $expectations.shadow.sourceArtifacts "Clean projection target record count"
     Assert-Equal (Get-ShadowBudgetTotal $cleanManifest.projectionRunId) `
         "$($expectations.shadow.budgetRows):$($expectations.shadow.budgetTotal)" "Clean projected budget aggregate"
-    $cleanPackage = Join-Path (Join-Path $workspace "evidence") "clean.zip"
+    $cleanPackage = Join-Path (Join-Path $workspace "evidence") "$($cleanManifest.runId).zip"
     $cleanPackageResult = Invoke-PackagedJson @("workspace", "evidence", "package", $workspace,
-        $cleanManifest.runId, "--output", $cleanPackage, "--json")
+        $cleanManifest.runId, "--json")
     $cleanValidation = Assert-PackageValid $cleanPackage "QUALIFIED"
     $knownSecrets = @($script:SourcePassword, $script:TargetPassword, $sourceConnection, $targetConnection)
     Assert-PackageContainsNoCredentials $cleanPackage $knownSecrets "clean"
@@ -446,6 +473,191 @@ try {
         throw "Clean customer summary was not written by the extracted package."
     }
     Assert-Equal $cleanPackageResult.packageIdentity $cleanValidation.packageIdentity "Clean package identity validation"
+
+    $cleanBaseline = Invoke-PackagedJson @("workspace", "baseline", "promote", $workspace,
+        $cleanManifest.runId, "--json")
+    Assert-Equal $cleanBaseline.promotionStatus "Promoted" "Initial clean baseline promotion"
+    Assert-Equal $cleanBaseline.disposition "QUALIFIED" "Initial baseline disposition"
+    Assert-Equal $cleanBaseline.evidencePackageIdentity $cleanValidation.packageIdentity "Initial baseline package identity"
+    $cleanBaselineRecordPath = Join-Path (Join-Path $workspace ".proofshift/baselines") `
+        "$($cleanBaseline.baselineId).json"
+    $cleanBaselineRecordHash = (Get-FileHash -LiteralPath $cleanBaselineRecordPath -Algorithm SHA256).Hash
+
+    $schemaDriftSql = "ALTER TABLE public.assets ADD COLUMN pilot_schema_review text"
+    $null = Invoke-Docker @("exec", "--env", "PGPASSWORD=$script:TargetPassword",
+        $script:TargetContainer, "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres",
+        "-d", "byom_shadow", "-c", $schemaDriftSql)
+    $updatedSourceDiscovery = Join-Path (Join-Path $workspace "discovery") "source-after"
+    $null = Invoke-Packaged @("discover", (Join-Path $workspace "proofshift.yaml"), "--system", "source",
+        "--endpoint", "records", "--output", $updatedSourceDiscovery, "--json")
+    $updatedShadowDiscovery = Join-Path (Join-Path $workspace "discovery") "shadow-after"
+    $null = Invoke-Packaged @("discover", (Join-Path $workspace "proofshift.yaml"), "--system", "shadow",
+        "--endpoint", "records", "--output", $updatedShadowDiscovery, "--json")
+    $updatedShadowArtifact = Get-Content -LiteralPath (Join-Path $updatedShadowDiscovery "manifest.json") -Raw |
+        ConvertFrom-Json
+    $driftPlan = Invoke-PackagedJson @("workspace", "plan", $workspace, "--baseline", "active", "--json")
+    if ($driftPlan.semanticDrift.status -ne "ReviewRequired") {
+        $changeSummary = @($driftPlan.semanticDrift.changes | ForEach-Object {
+            "$($_.category)/$($_.kind)/$($_.classification)"
+        } | Sort-Object -Unique) -join ", "
+        throw "Physical-discovery drift classification expected 'ReviewRequired', found '$($driftPlan.semanticDrift.status)' (changes: $changeSummary)."
+    }
+    if (@($driftPlan.semanticDrift.changes | Where-Object {
+        $_.category -eq "discovery" -and $_.kind -eq "field-added"
+    }).Count -eq 0) {
+        throw "Workspace planning did not identify the added physical target column."
+    }
+
+    $planReview = Invoke-PackagedJson @("workspace", "review-plan", $workspace,
+        "--baseline", "active", "--json")
+    Assert-Equal $planReview.review.baselineId $cleanBaseline.baselineId "Plan review baseline identity"
+    Assert-Equal $planReview.review.driftStatus "ReviewRequired" "Exact physical-drift review status"
+    $candidateResult = Invoke-PackagedWorkspaceRun -Workspace $workspace -CheckpointId $null `
+        -Purpose "baseline-governed candidate" -Baseline $cleanBaseline.baselineId `
+        -Review $planReview.review.reviewId
+    Assert-Equal $candidateResult.state "Completed" "Baseline-governed candidate execution state"
+    Assert-Equal $candidateResult.run.disposition "QUALIFIED" "Baseline-governed candidate disposition"
+    Assert-Equal $candidateResult.run.baselineId $cleanBaseline.baselineId "Candidate baseline binding"
+    Assert-Equal $candidateResult.baselineComparison.outcomeClassification "ChangedStillQualified" `
+        "Completed run's persisted baseline comparison"
+    $candidateManifest = Get-RunManifest $workspace $candidateResult.runPath
+    Assert-Equal $candidateManifest.preRunSemanticDriftStatus "ReviewRequired" "Candidate pre-run physical drift status"
+    Assert-Equal $candidateManifest.reviewRecordId $planReview.review.reviewId "Candidate exact review binding"
+    $reviewPath = Join-Path (Join-Path $workspace ".proofshift/reviews") `
+        "$($candidateManifest.reviewRecordId).json"
+    if (-not (Test-Path -LiteralPath $reviewPath -PathType Leaf)) {
+        throw "Candidate review record was not persisted."
+    }
+    $reviewRecord = Get-Content -LiteralPath $reviewPath -Raw | ConvertFrom-Json
+    Assert-Equal $reviewRecord.reviewId $candidateManifest.reviewRecordId "Persisted review record identity"
+    Assert-Equal $reviewRecord.workspaceId $candidateManifest.workspaceId "Persisted review workspace binding"
+    Assert-Equal $reviewRecord.baselineId $candidateManifest.baselineId "Persisted review baseline binding"
+    Assert-Equal $reviewRecord.baselinePlanFingerprint $candidateManifest.baselinePlanFingerprint `
+        "Persisted review baseline plan binding"
+    Assert-Equal $reviewRecord.currentPlanFingerprint $candidateManifest.planFingerprint `
+        "Persisted review candidate plan binding"
+    Assert-Equal $reviewRecord.semanticDriftIdentityFingerprint `
+        $candidateManifest.preRunSemanticDriftIdentityFingerprint "Persisted review drift binding"
+    Assert-Equal $reviewRecord.decision $candidateManifest.reviewDecision "Persisted review decision binding"
+    Assert-Equal $reviewRecord.integrityHash $candidateManifest.reviewRecordIntegrityHash `
+        "Persisted review integrity binding"
+    if ($reviewRecord.integrityHash -notmatch '^[0-9a-f]{64}$') {
+        throw "Persisted review record did not expose a SHA-256 integrity identity."
+    }
+
+    $comparisonPath = Join-Path (Join-Path $workspace ".proofshift/comparisons") `
+        "$($candidateManifest.runId).json"
+    if (-not (Test-Path -LiteralPath $comparisonPath -PathType Leaf)) {
+        throw "Candidate post-run comparison record was not persisted."
+    }
+    $comparisonRecord = Get-Content -LiteralPath $comparisonPath -Raw | ConvertFrom-Json
+    Assert-Equal $comparisonRecord.format "proofshift-baseline-outcome-comparison-v1" `
+        "Persisted post-run comparison format"
+    Assert-Equal $comparisonRecord.baselineId $candidateManifest.baselineId `
+        "Persisted post-run comparison baseline binding"
+    Assert-Equal $comparisonRecord.candidateRunId $candidateManifest.runId `
+        "Persisted post-run comparison candidate binding"
+    Assert-Equal $comparisonRecord.candidateRunManifestIdentityFingerprint $candidateManifest.identityFingerprint `
+        "Persisted post-run comparison manifest binding"
+    Assert-Equal $comparisonRecord.preRunSemanticDriftIdentityFingerprint `
+        $candidateManifest.preRunSemanticDriftIdentityFingerprint "Persisted post-run comparison drift binding"
+    Assert-Equal $comparisonRecord.outcomeClassification "ChangedStillQualified" `
+        "Persisted post-run comparison outcome"
+    Assert-Equal $comparisonRecord.detailedComparison.beforeRunId $candidateManifest.baselineRunId `
+        "Persisted post-run comparison baseline run"
+    Assert-Equal $comparisonRecord.detailedComparison.afterRunId $candidateManifest.runId `
+        "Persisted post-run comparison candidate run"
+    Assert-Equal $comparisonRecord.integrityHash $candidateResult.baselineComparison.integrityHash `
+        "Returned post-run comparison integrity identity"
+    Assert-Equal $comparisonRecord.detailedComparisonIdentityFingerprint `
+        $candidateResult.baselineComparison.detailedComparisonIdentityFingerprint `
+        "Returned detailed-comparison identity"
+    foreach ($comparisonHash in @($comparisonRecord.integrityHash,
+        $comparisonRecord.detailedComparisonIdentityFingerprint)) {
+        if ($comparisonHash -notmatch '^[0-9a-f]{64}$') {
+            throw "Persisted post-run comparison did not expose a SHA-256 identity."
+        }
+    }
+    $candidatePackage = Join-Path (Join-Path $workspace "evidence") "$($candidateManifest.runId).zip"
+    $candidatePackageResult = Invoke-PackagedJson @("workspace", "evidence", "package", $workspace,
+        $candidateManifest.runId, "--json")
+    $candidateValidation = Assert-PackageValid $candidatePackage "QUALIFIED"
+    Assert-Equal $candidatePackageResult.packageIdentity $candidateValidation.packageIdentity "Candidate package identity"
+    Assert-PackageContainsNoCredentials $candidatePackage $knownSecrets "baseline-governed-candidate"
+
+    $governedPackageComparison = Invoke-PackagedJson @("workspace", "evidence", "compare-packages",
+        $cleanPackage, $candidatePackage, "--json")
+    Assert-Equal $governedPackageComparison.comparisonMode "BaselineGoverned" "Offline package comparison mode"
+    Assert-Equal $governedPackageComparison.baselineGovernanceBindingValid $true "Offline baseline package binding"
+    Assert-Equal $governedPackageComparison.semanticDriftStatus "ReviewRequired" "Packaged physical-drift status"
+    Assert-Equal $governedPackageComparison.reviewDecision "Reviewed" "Packaged exact-review decision"
+    Assert-Equal $governedPackageComparison.outcomeClassification "ChangedStillQualified" `
+        "Baseline-governed candidate outcome"
+    if (@($governedPackageComparison.semanticDriftChanges | Where-Object {
+        $_.category -eq "discovery" -and $_.kind -eq "field-added"
+    }).Count -eq 0) {
+        throw "Offline package comparison omitted the reviewed physical schema drift."
+    }
+
+    $candidateSummary = Invoke-PackagedJson @("workspace", "summary", $workspace,
+        $candidateManifest.runId, "--json")
+    Assert-Equal $candidateSummary.outcomeClassification "ChangedStillQualified" "Candidate summary outcome"
+    $runHistory = Invoke-PackagedJson @("workspace", "runs", $workspace, "--json")
+    $candidateHistory = @($runHistory | Where-Object { $_.runId -eq $candidateManifest.runId })
+    Assert-Equal $candidateHistory.Count 1 "Candidate run-history entry count"
+    Assert-Equal $candidateHistory[0].trusted $true "Candidate history trust"
+    Assert-Equal $candidateHistory[0].packageStatus "Valid" "Candidate history package status"
+    Assert-Equal $candidateHistory[0].comparisonStatus "Valid" "Candidate history comparison status"
+    Assert-Equal $candidateHistory[0].outcomeClassification "ChangedStillQualified" "Candidate history outcome"
+
+    $newBaseline = Invoke-PackagedJson @("workspace", "baseline", "promote", $workspace,
+        $candidateManifest.runId, "--json")
+    Assert-Equal $newBaseline.promotionStatus "Promoted" "Candidate baseline promotion"
+    Assert-Equal $newBaseline.previousActiveBaselineId $cleanBaseline.baselineId "Baseline progression predecessor"
+    Assert-Equal $newBaseline.promotionComparisonOutcomeClassification "ChangedStillQualified" `
+        "Promotion preserves candidate outcome"
+    Assert-Equal $newBaseline.disposition "QUALIFIED" "Promotion preserves candidate disposition"
+    Assert-Equal (Get-FileHash -LiteralPath $cleanBaselineRecordPath -Algorithm SHA256).Hash `
+        $cleanBaselineRecordHash "Historical baseline record immutability"
+    $idempotentPromotion = Invoke-PackagedJson @("workspace", "baseline", "promote", $workspace,
+        $candidateManifest.runId, "--json")
+    Assert-Equal $idempotentPromotion.promotionStatus "AlreadyActive" "Active-run promotion idempotency"
+    $historicalPromotion = Invoke-Packaged @("workspace", "baseline", "promote", $workspace,
+        $cleanManifest.runId, "--json") 1
+    if ([string]::IsNullOrWhiteSpace($historicalPromotion)) {
+        throw "Historical baseline re-promotion returned no diagnostic."
+    }
+    $baselineHistory = Invoke-PackagedJson @("workspace", "baseline", "list", $workspace, "--json")
+    Assert-Equal $baselineHistory.Count 2 "Explicit baseline progression history count"
+    $selectedBaseline = @($baselineHistory | Where-Object { $_.isActive -eq $true })
+    Assert-Equal $selectedBaseline.Count 1 "Active baseline history selection count"
+    Assert-Equal $selectedBaseline[0].baselineId $newBaseline.baselineId "Latest baseline selection"
+
+    $shadowBeforeReplayDiscovery = Join-Path (Join-Path $workspace "discovery") "shadow-before-replay"
+    $null = Invoke-Packaged @("discover", (Join-Path $workspace "proofshift.yaml"), "--system", "shadow",
+        "--endpoint", "records", "--output", $shadowBeforeReplayDiscovery, "--json")
+    $derivedWorkspace = Join-Path $script:WorkRoot "derived-workspace"
+    $null = Invoke-Packaged @("workspace", "init", $derivedWorkspace, "--from", $workspace)
+    $derivedValidation = Invoke-PackagedJson @("workspace", "validate", $derivedWorkspace, "--json")
+    Assert-Equal $derivedValidation.valid $true "Derived workspace structural validation"
+    $sourceWorkspaceManifest = Get-Content -LiteralPath (Join-Path $workspace "proofshift.workspace.json") -Raw |
+        ConvertFrom-Json
+    $derivedWorkspaceManifest = Get-Content -LiteralPath (Join-Path $derivedWorkspace "proofshift.workspace.json") -Raw |
+        ConvertFrom-Json
+    if ($sourceWorkspaceManifest.workspaceId -eq $derivedWorkspaceManifest.workspaceId) {
+        throw "Derived workspace reused the source workspace identity."
+    }
+    $sourceConfigurationBytes = [IO.File]::ReadAllBytes((Join-Path $workspace "proofshift.yaml"))
+    $derivedConfigurationBytes = [IO.File]::ReadAllBytes((Join-Path $derivedWorkspace "proofshift.yaml"))
+    Assert-Equal ([Convert]::ToBase64String($derivedConfigurationBytes)) `
+        ([Convert]::ToBase64String($sourceConfigurationBytes)) "Derived workspace project configuration"
+    foreach ($emptyPath in @("discovery", "runs", "evidence", ".proofshift/baselines", ".proofshift/reviews")) {
+        $path = Join-Path $derivedWorkspace $emptyPath
+        if (Test-Path -LiteralPath $path) {
+            $entries = @(Get-ChildItem -LiteralPath $path -Force -ErrorAction SilentlyContinue)
+            if ($entries.Count -gt 0) { throw "Derived workspace copied runtime state into '$emptyPath'." }
+        }
+    }
 
     $packageExtract = Join-Path $script:WorkRoot "clean-package-inspection"
     Expand-Archive -LiteralPath $cleanPackage -DestinationPath $packageExtract
@@ -475,7 +687,8 @@ try {
     [Environment]::SetEnvironmentVariable($targetConnectionName, $targetConnection, "Process")
 
     $checkpoint = $cleanManifest.checkpointId
-    $replayResult = Invoke-PackagedWorkspaceRun -Workspace $workspace -CheckpointId $checkpoint -Purpose "offline replay"
+    $replayResult = Invoke-PackagedWorkspaceRun -Workspace $workspace -CheckpointId $checkpoint `
+        -Purpose "offline replay" -Baseline "none"
     Assert-Equal $replayResult.state "Completed" "Offline replay execution state"
     Assert-Equal $replayResult.run.disposition "QUALIFIED" "Offline replay disposition"
     Assert-Equal $replayResult.run.replayedCheckpoint $true "Offline replay flag"
@@ -508,6 +721,10 @@ try {
     Assert-Equal $cleanReplayComparison.semanticallyEquivalent $false `
         "Fresh-capture/replay equivalence boundary"
 
+    $shadowBeforeDefectiveReplayDiscovery = Join-Path (Join-Path $workspace "discovery") `
+        "shadow-before-defective-replay"
+    $null = Invoke-Packaged @("discover", (Join-Path $workspace "proofshift.yaml"), "--system", "shadow",
+        "--endpoint", "records", "--output", $shadowBeforeDefectiveReplayDiscovery, "--json")
     $defectiveExecution = Start-DefectiveWorkspaceReplay $workspace $checkpoint
     $defectiveResult = $defectiveExecution.Result
     Assert-Equal $defectiveResult.state "Completed" "Defective guided run execution state"
@@ -646,9 +863,13 @@ try {
     Remove-Item -LiteralPath $unownedFile -Force
     Remove-Item -LiteralPath $unownedTemporary -Recurse -Force
 
+    $shadowBeforeUnavailableSourceDiscovery = Join-Path (Join-Path $workspace "discovery") `
+        "shadow-before-unavailable-source"
+    $null = Invoke-Packaged @("discover", (Join-Path $workspace "proofshift.yaml"), "--system", "shadow",
+        "--endpoint", "records", "--output", $shadowBeforeUnavailableSourceDiscovery, "--json")
     [Environment]::SetEnvironmentVariable($sourceConnectionName, $unavailableSourceConnection, "Process")
     $incomplete = Invoke-PackagedWorkspaceRun -Workspace $workspace -CheckpointId $null `
-        -Purpose "unavailable-source" -ExpectedExitCode 1
+        -Purpose "unavailable-source" -Baseline "none" -ExpectedExitCode 1
     if ($incomplete.state -notin @("PreflightBlocked", "Failed", "Interrupted") -or $incomplete.run.disposition) {
         throw "Unavailable-source run fabricated a final business disposition."
     }
@@ -688,8 +909,35 @@ try {
         cleanProjectionRunId = $cleanManifest.projectionRunId
         cleanState = $cleanManifest.state
         cleanDisposition = $cleanManifest.disposition
+        cleanBaselineId = $cleanBaseline.baselineId
+        cleanBaselineDisposition = $cleanBaseline.disposition
         cleanSourceArtifactCount = 114
         cleanBudgetRowsAndAggregate = "12:12780.00"
+        initialDiscoveryFingerprints = $cleanManifest.discoveryFingerprints
+        physicalSchemaDriftFingerprint = $updatedShadowArtifact.fingerprint
+        physicalSchemaDriftReviewed = $planReview.review.driftStatus -eq "ReviewRequired"
+        baselineGovernedCandidateRunId = $candidateManifest.runId
+        baselineGovernedCandidateReviewRecordId = $candidateManifest.reviewRecordId
+        baselineGovernedCandidateReviewRecordIntegrityHash = $reviewRecord.integrityHash
+        baselineGovernedCandidateReviewDriftIdentityFingerprint = $reviewRecord.semanticDriftIdentityFingerprint
+        baselineGovernedCandidateDisposition = $candidateManifest.disposition
+        baselineGovernedCandidateOutcome = $candidateSummary.outcomeClassification
+        postRunComparisonId = $comparisonRecord.candidateRunId
+        postRunComparisonIntegrityHash = $comparisonRecord.integrityHash
+        postRunComparisonIdentityFingerprint = $comparisonRecord.detailedComparisonIdentityFingerprint
+        postRunComparisonOutcomeClassification = $comparisonRecord.outcomeClassification
+        baselineGovernedCandidatePackageValidation = $candidateValidation.valid
+        offlineBaselineGovernedComparison = $governedPackageComparison.comparisonMode
+        offlineBaselineComparisonOutcome = $governedPackageComparison.outcomeClassification
+        candidatePromotedAsBaselineId = $newBaseline.baselineId
+        historicalBaselinePreserved = $true
+        activePromotionIdempotent = $idempotentPromotion.promotionStatus -eq "AlreadyActive"
+        historicalRepromotionRejected = $historicalPromotion -ne $null
+        baselineHistoryCount = $baselineHistory.Count
+        activeBaselineId = $selectedBaseline[0].baselineId
+        derivedWorkspaceId = $derivedWorkspaceManifest.workspaceId
+        derivedWorkspaceConfigurationReused = $true
+        derivedWorkspaceRuntimeStateCopied = $false
         replayRunId = $replayManifest.runId
         replayCheckpointId = $replayManifest.checkpointId
         sourceUnavailableBeforeReplay = $true

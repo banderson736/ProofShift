@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using ProofShift.Configuration;
 using ProofShift.Connectors.Abstractions;
@@ -36,13 +37,18 @@ internal sealed record WorkspacePlanNode(
     string Connector,
     string SemanticType,
     string SelectorKind,
+    string SelectorFingerprint,
     IReadOnlyList<string> IdentityFields,
     string? ScopeId,
     string? ScopeType,
     string? ScopeFingerprint,
     IReadOnlyList<WorkspacePlanScopePredicate> ScopePredicates);
 
-internal sealed record WorkspacePlanField(string? Source, string Target, IReadOnlyList<string> Transformations);
+internal sealed record WorkspacePlanField(
+    string? Source,
+    string Target,
+    IReadOnlyList<string> Transformations,
+    string SemanticFingerprint);
 
 internal sealed record WorkspacePlanEdge(
     string Key,
@@ -50,7 +56,8 @@ internal sealed record WorkspacePlanEdge(
     IReadOnlyList<string> Targets,
     string Operation,
     IReadOnlyList<WorkspacePlanField> Fields,
-    string? RecoveryMode);
+    string? RecoveryMode,
+    string SemanticFingerprint);
 
 internal sealed record WorkspacePlanSystem(
     string System,
@@ -58,14 +65,25 @@ internal sealed record WorkspacePlanSystem(
     string Role,
     string Connector,
     string ConnectorVersion,
-    IReadOnlyList<string> Capabilities);
+    IReadOnlyList<string> Capabilities,
+    string ConfigurationFingerprint);
 
 internal sealed record WorkspacePlanPack(string Id, string Version);
 
-internal sealed record WorkspacePlanRule(string Id, string Type, string Version, string Severity);
+internal sealed record WorkspacePlanRule(string Id, string Type, string Version, string Severity,
+    string SemanticFingerprint);
+
+internal sealed record WorkspacePlanExpectedException(
+    string Id,
+    string RuleId,
+    string FindingCode,
+    string TargetNode,
+    string ArtifactIdSha256,
+    string EvaluationScopeId);
 
 internal sealed record WorkspaceEvaluationPlan(
     Guid WorkspaceId,
+    string ConfigurationFingerprint,
     string ProjectId,
     string ProjectName,
     string ConfigurationFile,
@@ -92,14 +110,22 @@ internal sealed record WorkspaceEvaluationPlan(
     IReadOnlyList<WorkspacePlanNode> Nodes,
     IReadOnlyList<WorkspacePlanEdge> Edges,
     IReadOnlyList<WorkspacePlanRule> Rules,
+    IReadOnlyList<WorkspacePlanExpectedException> ExpectedExceptions,
     IReadOnlyList<WorkspacePreflightCheck> PreflightChecks,
-    string Fingerprint);
+    string Fingerprint)
+{
+    public const string CurrentSemanticModelVersion = "proofshift-effective-plan-semantic-v2";
+    public string? SemanticModelVersion { get; init; }
+}
 
 internal sealed record WorkspacePlanResult(
     bool Completed,
     string Status,
     WorkspacePreflightResult Preflight,
-    WorkspaceEvaluationPlan? Plan);
+    WorkspaceEvaluationPlan? Plan)
+{
+    public WorkspaceSemanticDrift? SemanticDrift { get; init; }
+}
 
 internal static class WorkspaceEvaluationService
 {
@@ -151,9 +177,10 @@ internal static class WorkspaceEvaluationService
                     system.Role.ToString(),
                     endpoint.Connector.Value,
                     capability?.Version ?? "unknown",
-                    CapabilityNames(capability));
+                    CapabilityNames(capability),
+                    FingerprintSettings(endpoint.Configuration));
             })
-            .Distinct()
+            .DistinctBy(item => (item.System, item.Endpoint))
             .OrderBy(item => item.System, StringComparer.Ordinal)
             .ThenBy(item => item.Endpoint, StringComparer.Ordinal)
             .ToArray();
@@ -166,6 +193,7 @@ internal static class WorkspaceEvaluationService
                 endpointByNode[node.Name].Connector.Value,
                 node.SemanticType,
                 node.Selector.Kind,
+                FingerprintSettings(node.Selector.Properties),
                 node.Selector.IdentityFields.Order(StringComparer.Ordinal).ToArray(),
                 node.Selector.EvaluationScope?.Id,
                 node.Selector.EvaluationScope?.Type.ToString(),
@@ -186,12 +214,15 @@ internal static class WorkspaceEvaluationService
                     .Select(field => new WorkspacePlanField(
                         field.Source,
                         field.Target,
-                        field.Pipeline.Select(step => step.Type.ToString()).ToArray()))
+                        field.Pipeline.Select(step => step.Type.ToString()).ToArray(),
+                        FingerprintField(field)))
                     .ToArray(),
-                edge.Recovery?.Mode.ToString()))
+                edge.Recovery?.Mode.ToString(),
+                FingerprintEdge(edge)))
             .ToArray();
         var rules = analysis.RuleConfiguration.OrderBy(rule => rule.Id.Value, StringComparer.Ordinal)
-            .Select(rule => new WorkspacePlanRule(rule.Id.Value, rule.Type, rule.Version, rule.Severity.ToString()))
+            .Select(rule => new WorkspacePlanRule(rule.Id.Value, rule.Type, rule.Version, rule.Severity.ToString(),
+                FingerprintRule(analysis.Configuration, rule.Id.Value)))
             .ToArray();
         var packs = configuration.Root.Packs
             .Select(pack => new WorkspacePlanPack(pack.Id ?? "unspecified", pack.Version ?? "unspecified"))
@@ -199,6 +230,12 @@ internal static class WorkspaceEvaluationService
             .ThenBy(pack => pack.Version, StringComparer.Ordinal)
             .ToArray();
         var expectedExceptionsFingerprint = ExpectedExceptionsFingerprint(analysis.RuleSet.ExpectedExceptions);
+        var expectedExceptions = analysis.RuleSet.ExpectedExceptions
+            .Select(annotation => new WorkspacePlanExpectedException(annotation.Id, annotation.RuleId.Value,
+                annotation.FindingCode, annotation.TargetNode, annotation.ArtifactIdSha256,
+                annotation.EvaluationScopeId))
+            .OrderBy(item => item.Id, StringComparer.Ordinal)
+            .ToArray();
         var reconciliationRules = analysis.RuleConfiguration.Where(rule =>
             rule.Type.Contains("reconciliation", StringComparison.OrdinalIgnoreCase)).ToArray();
         var omitted = new[]
@@ -216,6 +253,8 @@ internal static class WorkspaceEvaluationService
         var expectedExceptionSemantics = $"{analysis.RuleSet.ExpectedExceptions.Count} expected-exception annotations are listed in configuration; annotations never waive findings.";
         var fingerprintInput = new PlanFingerprintInput(
             analysis.Manifest.WorkspaceId,
+            WorkspaceEvaluationPlan.CurrentSemanticModelVersion,
+            configuration.ConfigurationHash,
             configuration.Root.Project?.Id ?? string.Empty,
             configuration.Root.Project?.Name ?? string.Empty,
             configuration.Root.Version?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown",
@@ -228,6 +267,7 @@ internal static class WorkspaceEvaluationService
             nodes,
             edges,
             rules,
+            expectedExceptions,
             analysis.RuleConfiguration.ExpectedExceptions.Count,
             analysis.RecoveryPolicy!.RequireRecoveryForDestructiveOperations,
             analysis.RecoveryPolicy.AllowIrreversibleOperations,
@@ -236,13 +276,12 @@ internal static class WorkspaceEvaluationService
             replayBehavior,
             projectionStrategy,
             reconciliationRules.Select(rule => rule.Id.Value).Order(StringComparer.Ordinal).ToArray(),
-            analysis.Manifest.Paths.Runs,
-            analysis.Manifest.Paths.Evidence,
             omitted);
         var fingerprint = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(fingerprintInput, PlanJsonOptions)))
             .ToLowerInvariant();
         var plan = new WorkspaceEvaluationPlan(
             analysis.Manifest.WorkspaceId,
+            configuration.ConfigurationHash,
             configuration.Root.Project?.Id ?? string.Empty,
             configuration.Root.Project?.Name ?? string.Empty,
             analysis.Manifest.ProjectConfiguration,
@@ -269,8 +308,12 @@ internal static class WorkspaceEvaluationService
             nodes,
             edges,
             rules,
+            expectedExceptions,
             analysis.Preflight.Checks,
-            fingerprint);
+            fingerprint)
+        {
+            SemanticModelVersion = WorkspaceEvaluationPlan.CurrentSemanticModelVersion
+        };
         return new(true, analysis.Preflight.Status, analysis.Preflight, plan);
     }
 
@@ -586,6 +629,7 @@ internal static class WorkspaceEvaluationService
             return;
         }
 
+        var artifacts = new List<(string Directory, PhysicalDiscoveryArtifact Artifact, string EndpointKey)>();
         foreach (var directory in artifactDirectories)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -603,22 +647,57 @@ internal static class WorkspaceEvaluationService
                     continue;
                 }
 
-                if (!connect)
-                {
-                    checks.Add(Ready("PSPREF011", "discovery",
-                        $"Persisted discovery integrity and endpoint binding are valid ({artifact.Fingerprint}).",
-                        Path.GetRelativePath(root, directory)));
-                    continue;
-                }
+                artifacts.Add((directory, artifact, $"{artifact.SystemId}/{artifact.EndpointId}"));
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+                System.Text.Json.JsonException or InvalidDataException or ArgumentException or
+                System.Data.Common.DbException or System.Net.Sockets.SocketException or TimeoutException or
+                InvalidOperationException)
+            {
+                checks.Add(Blocked("PSPREF011", "discovery",
+                    $"A persisted discovery artifact could not be validated or compared ({exception.GetType().Name}); no connector configuration values were included.",
+                    Path.GetRelativePath(root, directory), connect
+                        ? "Check endpoint access and validate or deliberately regenerate the persisted artifact."
+                        : "Restore a valid discovery artifact or remove it deliberately."));
+            }
+        }
 
+        var latestDirectories = artifacts
+            .GroupBy(item => item.EndpointKey, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key,
+                group => group.OrderByDescending(item => item.Artifact.ObservedAt)
+                    .ThenBy(item => item.Directory, StringComparer.Ordinal).First().Directory,
+                StringComparer.Ordinal);
+        foreach (var item in artifacts)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var (directory, artifact, endpointKey) = item;
+            if (!connect)
+            {
+                checks.Add(Ready("PSPREF011", "discovery",
+                    $"Persisted discovery integrity and endpoint binding are valid ({artifact.Fingerprint}).",
+                    Path.GetRelativePath(root, directory)));
+                continue;
+            }
+
+            try
+            {
                 var nodes = graph.Nodes.Where(node => node.SystemId.Value == artifact.SystemId &&
                     node.EndpointId.Value == artifact.EndpointId).OrderBy(node => node.Name, StringComparer.Ordinal).ToArray();
-                var descriptor = connectors.Capabilities.SingleOrDefault(item => item.Id == artifact.ConnectorId);
+                var descriptor = connectors.Capabilities.SingleOrDefault(capability => capability.Id == artifact.ConnectorId);
                 if (nodes.Length == 0 || descriptor is null || !descriptor.Discovery)
                 {
                     checks.Add(NotChecked("PSPREF011", "discovery",
                         "Current discovery cannot be compared because no configured graph node or discovery capability applies.",
                         Path.GetRelativePath(root, directory), null));
+                    continue;
+                }
+
+                if (!string.Equals(latestDirectories[endpointKey], directory, StringComparison.Ordinal))
+                {
+                    checks.Add(Ready("PSPREF011", "discovery",
+                        "Historical persisted discovery integrity and endpoint binding are valid; live comparison uses the latest artifact.",
+                        Path.GetRelativePath(root, directory)));
                     continue;
                 }
 
@@ -758,6 +837,86 @@ internal static class WorkspaceEvaluationService
             .ToLowerInvariant();
     }
 
+    private static string FingerprintSettings(IReadOnlyDictionary<string, string> settings)
+    {
+        var identity = settings.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(pair => new { pair.Key, pair.Value }).ToArray();
+        return Hash(JsonSerializer.SerializeToUtf8Bytes(identity, PlanJsonOptions));
+    }
+
+    private static string FingerprintField(TransformationFieldDefinition field)
+    {
+        var identity = new
+        {
+            field.Source,
+            field.Target,
+            Pipeline = field.Pipeline.Select(step => new
+            {
+                Type = step.Type.ToString(),
+                step.Version,
+                Parameters = step.Parameters.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                    .Select(pair => new { pair.Key, pair.Value }).ToArray()
+            }).ToArray()
+        };
+        return Hash(JsonSerializer.SerializeToUtf8Bytes(identity, PlanJsonOptions));
+    }
+
+    private static string FingerprintEdge(MigrationEdge edge)
+    {
+        var identity = new
+        {
+            edge.Name,
+            Sources = edge.Sources.Select(source => source.Value.ToString()).Order(StringComparer.Ordinal).ToArray(),
+            Targets = edge.Targets.Select(target => target.Value.ToString()).Order(StringComparer.Ordinal).ToArray(),
+            Operation = edge.Operation.Type.ToString(),
+            Parameters = edge.Operation.Parameters.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .Select(pair => new { pair.Key, pair.Value }).ToArray(),
+            Steps = edge.Operation.Steps.Select(step => new
+            {
+                Type = step.Type.ToString(),
+                step.Version,
+                Parameters = step.Parameters.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                    .Select(pair => new { pair.Key, pair.Value }).ToArray()
+            }).ToArray(),
+            edge.Operation.IsDestructive,
+            Recovery = edge.Recovery is null ? null : new
+            {
+                Mode = edge.Recovery.Mode.ToString(),
+                edge.Recovery.Strategy,
+                edge.Recovery.RequiresSnapshot,
+                edge.Recovery.Justification
+            },
+            Fields = edge.Operation.Fields.OrderBy(field => field.Target, StringComparer.Ordinal)
+                .Select(field => new { field.Target, Fingerprint = FingerprintField(field) }).ToArray()
+        };
+        return Hash(JsonSerializer.SerializeToUtf8Bytes(identity, PlanJsonOptions));
+    }
+
+    private static string FingerprintRule(LoadedProjectConfiguration configuration, string ruleId)
+    {
+        var ruleFile = configuration.ReferencedFiles.SingleOrDefault(file =>
+            file.Kind == ConfigurationFileKind.VerificationRules);
+        if (ruleFile?.Document is not ConfigurationMappingNode root ||
+            !root.Values.TryGetValue("rules", out var rulesNode) ||
+            rulesNode is not ConfigurationMappingNode rules ||
+            !rules.Values.TryGetValue(ruleId, out var ruleNode))
+            throw new InvalidDataException($"Verification rule '{ruleId}' could not be bound to its configuration identity.");
+        return Hash(Encoding.UTF8.GetBytes(CanonicalDocumentNode(ruleNode)));
+    }
+
+    private static string CanonicalDocumentNode(ConfigurationDocumentNode node) => node switch
+    {
+        ConfigurationScalarNode scalar => JsonSerializer.Serialize(new { kind = scalar.Kind.ToString(), scalar.Value }),
+        ConfigurationSequenceNode sequence => "[" + string.Join(",", sequence.Values.Select(CanonicalDocumentNode)) + "]",
+        ConfigurationMappingNode mapping => "{" + string.Join(",", mapping.Values
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(pair => JsonSerializer.Serialize(pair.Key) + ":" + CanonicalDocumentNode(pair.Value))) + "}",
+        _ => throw new InvalidDataException("Unsupported configuration node in semantic fingerprint.")
+    };
+
+    private static string Hash(ReadOnlySpan<byte> bytes) =>
+        Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
     private static void ValidateOutputPaths(EvaluationWorkspaceManifest manifest, List<WorkspacePreflightCheck> checks)
     {
         checks.Add(NotChecked("PSPREF013", "output",
@@ -802,6 +961,8 @@ internal static class WorkspaceEvaluationService
 
     private sealed record PlanFingerprintInput(
         Guid WorkspaceId,
+        string SemanticModelVersion,
+        string ConfigurationFingerprint,
         string ProjectId,
         string ProjectName,
         string ConfigurationVersion,
@@ -814,6 +975,7 @@ internal static class WorkspaceEvaluationService
         IReadOnlyList<WorkspacePlanNode> Nodes,
         IReadOnlyList<WorkspacePlanEdge> Edges,
         IReadOnlyList<WorkspacePlanRule> Rules,
+        IReadOnlyList<WorkspacePlanExpectedException> ExpectedExceptions,
         int ExpectedExceptionCount,
         bool RequireRecoveryForDestructiveOperations,
         bool AllowIrreversibleOperations,
@@ -822,8 +984,6 @@ internal static class WorkspaceEvaluationService
         string ReplayBehavior,
         string ProjectionStrategy,
         IReadOnlyList<string> ReconciliationRules,
-        string RunOutput,
-        string EvidenceOutput,
         IReadOnlyList<string> IntentionallyOmittedCapabilities);
 
     internal sealed record WorkspaceAnalysis(
