@@ -480,6 +480,9 @@ try {
     $null = Invoke-Docker @("exec", "--env", "PGPASSWORD=$script:TargetPassword",
         $script:TargetContainer, "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres",
         "-d", "byom_shadow", "-c", $schemaDriftSql)
+    $updatedSourceDiscovery = Join-Path (Join-Path $workspace "discovery") "source-after"
+    $null = Invoke-Packaged @("discover", (Join-Path $workspace "proofshift.yaml"), "--system", "source",
+        "--endpoint", "records", "--output", $updatedSourceDiscovery, "--json")
     $updatedShadowDiscovery = Join-Path (Join-Path $workspace "discovery") "shadow-after"
     $null = Invoke-Packaged @("discover", (Join-Path $workspace "proofshift.yaml"), "--system", "shadow",
         "--endpoint", "records", "--output", $updatedShadowDiscovery, "--json")
