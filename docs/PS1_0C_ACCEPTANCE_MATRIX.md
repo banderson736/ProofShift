@@ -18,7 +18,7 @@ claim.
 | 7 | Baseline records do not copy raw customer data, Evidence values, or resolved secrets | PASS | The focused test asserts that synthetic sensitive Evidence values and exception text are absent from the persisted baseline record. |
 | 8 | Promotion appends immutable history and updates active selection without rewriting earlier records | PASS | The focused test promotes two runs, byte-compares the first record before/after, and verifies the second record points to the prior active baseline. |
 | 9 | `list`, `show`, and `active` inspect retained baselines and fail closed on broken references | PASS | The focused test exercises empty and populated list/active, historical show, and tampered-reference rejection. |
-| 10 | Existing workspace manifest, run, evidence-package, and PS-1.0B behavior remains compatible | PASS | The latest complete `AuthoringCliTests` class run passed 59 tests with 0 failures; 2 host-capability symlink tests were skipped. Existing B.4 package tests remain part of the class. |
+| 10 | Existing workspace manifest, run, evidence-package, and PS-1.0B behavior remains compatible | PASS | The latest complete `AuthoringCliTests` class run passed 60 tests with 0 failures; 2 host-capability symlink tests were skipped. Existing B.4 package tests remain part of the class. |
 | 11 | Focused tests and `git diff --check` pass | PASS | The focused class passed and `git diff --check` passed. |
 
 ## C.2 semantic-drift planning gates
@@ -30,7 +30,7 @@ claim.
 | 3 | Run-only identity, replay ancestry, `QUALIFIED`/`NOT QUALIFIED` outcome, and output-root changes do not create plan drift | PASS | The regression uses two `NOT QUALIFIED` runs with different run IDs and checkpoint replay ancestry, changes run/evidence roots, and verifies `NoSemanticChange`. |
 | 4 | Configuration, mapping, verification-rule, expected-exception, reconciliation, and scope changes are deterministically categorized | PASS | `WorkspacePlanSemanticDriftCategorizesMeaningfulPlanChangesAndBlocksMissingCapabilities` exercises each plan category. |
 | 5 | Required capability removal blocks; ordinary semantic changes require review | PASS | The typed plan comparison test verifies blocking classification for removed `sourceRead` and review classification for mapping changes. |
-| 6 | Discovery drift uses persisted, integrity-checked artifacts; missing history is not comparable and planning performs no live discovery | PASS | `WorkspacePlanComparesPersistedDiscoveryAndReportsMissingHistoryWithoutLiveDiscovery` detects an added field, then removes the baseline artifact and verifies `NotComparable`. |
+| 6 | Discovery drift uses persisted, integrity-checked artifacts; missing history is not comparable and planning performs no live discovery | PASS | `WorkspacePlanComparesPersistedDiscoveryAndReportsMissingHistoryWithoutLiveDiscovery` verifies unchanged rediscovery remains comparable despite an identical structural fingerprint, detects a later added field, then removes the baseline artifact and verifies `NotComparable`. |
 | 7 | Runtime secret values are excluded; configuration-binding changes are visible without exposing values | PASS | The output-root regression changes the runtime value without drift, then changes the secret reference and verifies categorized drift with both runtime values absent from JSON. |
 | 8 | Invalid active baseline references fail closed during planning | PASS | `WorkspaceBaselinePromotionAndInspectionFailClosedOnIncompleteOrTamperedReferences` asserts planning returns `PSPLAN099` after the active package is tampered. |
 | 9 | Assigned local validation: focused C.2, Configuration, Graph, Verification, applicable discovery tests, CLI build, docs/link validation, and whitespace checks | PASS | All feasible local validations listed below passed. The PostgreSQL/SQL Server discovery cases require Docker, which is unavailable locally; exact-candidate CI and owner acceptance remain pending. |
@@ -48,7 +48,7 @@ claim.
 | 7 | Incomplete runs receive no business comparison or persisted outcome | PASS | The outcome regression sets a candidate to `Interrupted`, verifies no comparison record is returned or written, and existing incomplete-summary coverage reports `NotEstablished`. |
 | 8 | Local summaries expose pre-run drift separately from post-run outcomes; no baseline is automatically promoted | PASS | The outcome regression checks the post-run summary classification and confirms the active baseline remains unchanged. |
 | 9 | Expected-exception annotations remain non-waiving; external Verification remains read-only and does not qualify Recovery | PASS | Existing B.5 and workspace tests assert findings remain active under expected-exception annotations; C.3 changes do not modify those runtime contracts. |
-| 10 | Assigned focused C.3 regressions and full authoring CLI regression class pass | PASS | Focused review/acknowledgement/outcome/blocking tests passed; the latest complete `AuthoringCliTests` class run passed 59 tests with 0 failures and 2 host-capability symlink skips. |
+| 10 | Assigned focused C.3 regressions and full authoring CLI regression class pass | PASS | Focused review/acknowledgement/outcome/blocking tests passed; the latest complete `AuthoringCliTests` class run passed 60 tests with 0 failures and 2 host-capability symlink skips. |
 
 ## C.4 portable governance packages and offline comparison gates
 
@@ -61,7 +61,7 @@ claim.
 | 5 | Offline outcome preserves finding, expected-exception, and materialized-state changes | PASS | The regression asserts `Regressed`, the added materialized-state finding, and the expected-exception delta for the defective candidate. |
 | 6 | Package generation is deterministic and legacy package behavior remains valid | PASS | Repeated candidate packaging produces the same package identity; existing B.4 package validation regressions pass in the full authoring class. |
 | 7 | Baseline-aware summaries report outcome transitions and explicitly avoid conclusions when comparison is unavailable | PASS | `WorkspaceBaselineOutcomeComparisonClassifiesQualificationAndReplayWithoutPromoting` checks improved/not-qualified outcomes and asserts `NotComparable` is not reported as `Equivalent`. |
-| 8 | Focused C.4 regressions and the full authoring CLI regression class pass | PASS | Both focused C.4/C.3 regression tests passed; the latest complete `AuthoringCliTests` class run passed 59 tests with 0 failures and 2 host-capability symlink skips. |
+| 8 | Focused C.4 regressions and the full authoring CLI regression class pass | PASS | Both focused C.4/C.3 regression tests passed; the latest complete `AuthoringCliTests` class run passed 60 tests with 0 failures and 2 host-capability symlink skips. |
 
 ## C.5 repeatable pilot history and re-baselining gates
 
@@ -75,13 +75,13 @@ claim.
 | 6 | Derived workspaces reuse only validated configuration references, get a new identity, and exclude all source execution/history/data outputs | PASS | `WorkspaceInitFromReusesConfigurationWithoutCopyingHistoryDataOrSecrets` asserts copied config bytes, new ID, empty runtime/history directories, no baseline/review state, and preserved source data. |
 | 7 | Workspace derivation rejects overlapping source/destination roots and nonempty destinations without overwriting existing files | PASS | `WorkspaceInitFromReusesConfigurationWithoutCopyingHistoryDataOrSecrets` asserts overlapping roots fail before creating output and a nonempty destination's sentinel file remains unchanged. |
 | 8 | Workspace derivation rejects source-configuration and destination symlink/reparse-point traversal | PARTIAL | Both guards and regression tests are implemented; source-configuration and destination symlink cases were skipped because this Windows host does not permit symlink creation. Linux CI evidence is pending. |
-| 9 | C.5 regressions and the complete authoring CLI class pass | PASS | The latest `AuthoringCliTests` run passed 59 tests with 0 failures; both symlink-capability tests were skipped on this Windows host. |
+| 9 | C.5 regressions and the complete authoring CLI class pass | PASS | The latest `AuthoringCliTests` run passed 60 tests with 0 failures; both symlink-capability tests were skipped on this Windows host. |
 
 ## Validation evidence
 
 | Validation | Result |
 |---|---|
-| Focused workspace/CLI regression suite | `dotnet test --project tests\ProofShift.EndToEnd.Tests\ProofShift.EndToEnd.Tests.csproj --filter-class ProofShift.EndToEnd.Tests.AuthoringCliTests`: 59 passed, 0 failed, 2 skipped (source-configuration and destination symlink creation unavailable on this Windows host). SDK 10.0.403 was selected with temporary same-band roll-forward; `global.json` was restored byte-for-byte. |
+| Focused workspace/CLI regression suite | `dotnet test --project .\tests\ProofShift.EndToEnd.Tests\ProofShift.EndToEnd.Tests.csproj --no-restore --filter-class ProofShift.EndToEnd.Tests.AuthoringCliTests`: 60 passed, 0 failed, 2 skipped (source-configuration and destination symlink creation unavailable on this Windows host). SDK 10.0.403 was selected by temporarily changing the pinned SDK from 10.0.402; `global.json` was restored byte-for-byte. |
 | Focused C.4 governance/offline comparison and C.3 summary outcome regressions | 2 passed, 0 failed, 0 skipped |
 | C.3 review/acknowledgement/outcome/blocking regressions | 4 passed, 0 failed, 0 skipped |
 | Configuration and Graph tests | Configuration 12 and Graph 30 passed; 0 failed and 0 skipped. |
@@ -90,7 +90,7 @@ claim.
 | Docker-backed PostgreSQL/SQL Server discovery tests | Not run successfully: Docker endpoint `npipe://./pipe/docker_engine` was unavailable. The full `PhysicalDiscoveryTests` class was attempted and those two tests failed at container startup. |
 | CLI build | `dotnet build src\ProofShift.Cli\ProofShift.Cli.csproj --no-restore` using installed .NET SDK 10.0.403: passed, 0 warnings, 0 errors. |
 | End-to-end test-project build | `dotnet build tests\ProofShift.EndToEnd.Tests\ProofShift.EndToEnd.Tests.csproj --no-restore` using installed .NET SDK 10.0.403: passed, 0 warnings, 0 errors. |
-| C.5 authoring CLI tests | `dotnet test --project tests\ProofShift.EndToEnd.Tests\ProofShift.EndToEnd.Tests.csproj --filter-class ProofShift.EndToEnd.Tests.AuthoringCliTests`: passed, 59 passed, 0 failed, 2 skipped (symlink creation unavailable). SDK 10.0.403 was selected with temporary same-band roll-forward; `global.json` was restored byte-for-byte. |
+| C.5 authoring CLI tests | `dotnet test --project .\tests\ProofShift.EndToEnd.Tests\ProofShift.EndToEnd.Tests.csproj --no-restore --filter-class ProofShift.EndToEnd.Tests.AuthoringCliTests`: passed, 60 passed, 0 failed, 2 skipped (symlink creation unavailable). SDK 10.0.403 was selected by temporarily changing the pinned SDK from 10.0.402; `global.json` was restored byte-for-byte. |
 | Documentation/link validation | Relative links in six product documentation files passed. `.github/copilot-instructions.md` retains pre-existing `docs/...` links that do not resolve relative to `.github`; no new links were added there. |
 | Whitespace/error check | `git diff --check`: passed. |
 | Exact-candidate CI / owner acceptance | Pending; no product acceptance is claimed. |
@@ -99,8 +99,8 @@ claim.
 
 | # | C.6 acceptance gate | Status | Evidence |
 |---:|---|---|---|
-| 1 | C.1-C.5 source and documentation diff has a complete final review with no unrelated behavior changes | PASS | Final review found and fixed successful baseline-bound runs not persisting their comparison; the run now reloads its authoritative manifest before comparison, and the packaged workflow asserts the returned outcome. No unrelated behavior changes were identified. |
-| 2 | Focused authoring CLI regressions, including latest parser and symlink guard changes, build and pass | PASS | Latest complete `AuthoringCliTests` run: 59 passed, 0 failed, 2 host-capability symlink skips. |
+| 1 | C.1-C.5 source and documentation diff has a complete final review with no unrelated behavior changes | PASS | Final review found and fixed successful baseline-bound runs not persisting their comparison; the run now reloads its authoritative manifest before comparison, and the packaged workflow asserts the returned outcome. Same-fingerprint rediscovery now anchors historical selection to baseline promotion time; the regression covers unchanged rediscovery followed by real drift. No unrelated behavior changes were identified. |
+| 2 | Focused authoring CLI regressions, including latest parser and symlink guard changes, build and pass | PASS | Latest complete `AuthoringCliTests` run: 60 passed, 0 failed, 2 host-capability symlink skips. |
 | 3 | Packaged workflow scripts parse and `git diff --check` passes | PASS | PowerShell parsing passed for `scripts/run-guided-workspace-evaluation.ps1` and `scripts/smoke-evaluation-package.ps1`; `git diff --check` passed after the final lifecycle assertion. |
 | 4 | Extracted Linux package creates real source/shadow discovery artifacts and a qualified packaged baseline | NOT YET | Docker is unavailable locally; exact-candidate Linux package workflow has not run. |
 | 5 | Physical schema change is detected as `ReviewRequired`, planning remains offline/read-only, and exact review binds the candidate | NOT YET | Provider-backed workflow is implemented in the packaged runner but not yet executed. |

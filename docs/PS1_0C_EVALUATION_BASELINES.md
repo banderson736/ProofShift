@@ -80,6 +80,12 @@ required connector capability and an invalid current plan are blocking.
 Other semantic changes are visibly marked as requiring review; a plan is not
 an authorization to execute a run.
 
+For each baseline endpoint, planning selects the latest integrity-checked
+discovery matching the baseline fingerprint that was observed no later than
+the baseline promotion. It requires the latest persisted observation to be
+newer than that promotion, so an unchanged structural fingerprint cannot
+make a post-baseline rediscovery appear to be the historical observation.
+
 Run-only identities (run, checkpoint, Verification, and evidence identities)
 are not semantic plan drift. The plan fingerprint includes canonical
 configuration and safe endpoint-binding fingerprints, but excludes workspace

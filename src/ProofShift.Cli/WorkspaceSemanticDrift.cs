@@ -413,7 +413,8 @@ internal static class WorkspaceSemanticDriftService
                 return changes;
             }
             var baselineArtifacts = artifacts.Where(artifact =>
-                    baseline.DiscoveryFingerprints.Contains(artifact.Fingerprint, StringComparer.Ordinal))
+                    baseline.DiscoveryFingerprints.Contains(artifact.Fingerprint, StringComparer.Ordinal) &&
+                    artifact.ObservedAt <= baseline.PromotedAt)
                 .GroupBy(EndpointKey, StringComparer.Ordinal)
                 .Select(group => group.OrderByDescending(artifact => artifact.ObservedAt).First())
                 .ToDictionary(EndpointKey, StringComparer.Ordinal);
@@ -433,7 +434,7 @@ internal static class WorkspaceSemanticDriftService
                     NotChecked($"Current persisted discovery is missing for {endpoint}; no live discovery was generated.");
                     continue;
                 }
-                if (newArtifact.ObservedAt <= oldArtifact.ObservedAt)
+                if (newArtifact.ObservedAt <= baseline.PromotedAt)
                 {
                     NotChecked($"Current persisted discovery for {endpoint} is not newer than its baseline; no live discovery was generated.");
                     continue;

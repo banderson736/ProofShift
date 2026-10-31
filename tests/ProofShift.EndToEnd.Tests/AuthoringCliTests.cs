@@ -1428,6 +1428,20 @@ public sealed class AuthoringCliTests
                     .GetProperty("reviewRequired").GetBoolean());
             }
 
+            var unchangedDiscoveryPath = Path.Combine(root, "discovery", "source-unchanged");
+            var unchangedDiscovery = await RunAsync("discover", configurationPath, "--system", "source", "--endpoint",
+                "records", "--output", unchangedDiscoveryPath, "--json");
+            Assert.True(unchangedDiscovery.ExitCode == 0, unchangedDiscovery.Output + unchangedDiscovery.Error);
+            var unchangedPlan = await RunWithEnvironmentAsync("PROOFSHIFT_TARGET_CONNECTION", "synthetic-only",
+                "workspace", "plan", root, "--json");
+            using (var unchangedJson = JsonDocument.Parse(unchangedPlan.Output))
+            {
+                var unchangedDrift = unchangedJson.RootElement.GetProperty("semanticDrift");
+                Assert.Equal("NoSemanticChange", unchangedDrift.GetProperty("status").GetString());
+                Assert.DoesNotContain(unchangedDrift.GetProperty("changes").EnumerateArray(), change =>
+                    change.GetProperty("kind").GetString() == "not-checked");
+            }
+
             await File.WriteAllTextAsync(Path.Combine(root, "data", "source.csv"), "id;amount;new-field\n",
                 TestContext.Current.CancellationToken);
             var currentDiscoveryPath = Path.Combine(root, "discovery", "source-after");
