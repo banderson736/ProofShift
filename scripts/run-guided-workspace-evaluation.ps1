@@ -489,7 +489,12 @@ try {
     $updatedShadowArtifact = Get-Content -LiteralPath (Join-Path $updatedShadowDiscovery "manifest.json") -Raw |
         ConvertFrom-Json
     $driftPlan = Invoke-PackagedJson @("workspace", "plan", $workspace, "--baseline", "active", "--json")
-    Assert-Equal $driftPlan.semanticDrift.status "ReviewRequired" "Physical-discovery drift classification"
+    if ($driftPlan.semanticDrift.status -ne "ReviewRequired") {
+        $changeSummary = @($driftPlan.semanticDrift.changes | ForEach-Object {
+            "$($_.category)/$($_.kind)/$($_.classification)"
+        } | Sort-Object -Unique) -join ", "
+        throw "Physical-discovery drift classification expected 'ReviewRequired', found '$($driftPlan.semanticDrift.status)' (changes: $changeSummary)."
+    }
     if (@($driftPlan.semanticDrift.changes | Where-Object {
         $_.category -eq "discovery" -and $_.kind -eq "field-added"
     }).Count -eq 0) {
