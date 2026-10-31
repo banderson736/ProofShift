@@ -622,7 +622,8 @@ try {
     [Environment]::SetEnvironmentVariable($targetConnectionName, $targetConnection, "Process")
 
     $checkpoint = $cleanManifest.checkpointId
-    $replayResult = Invoke-PackagedWorkspaceRun -Workspace $workspace -CheckpointId $checkpoint -Purpose "offline replay"
+    $replayResult = Invoke-PackagedWorkspaceRun -Workspace $workspace -CheckpointId $checkpoint `
+        -Purpose "offline replay" -Baseline "none"
     Assert-Equal $replayResult.state "Completed" "Offline replay execution state"
     Assert-Equal $replayResult.run.disposition "QUALIFIED" "Offline replay disposition"
     Assert-Equal $replayResult.run.replayedCheckpoint $true "Offline replay flag"
