@@ -15,7 +15,7 @@ This is a release-engineering milestone, not an assurance-feature milestone. Pre
 ## Release contract
 
 - `Directory.Build.props` is the one product-version authority. It drives assembly metadata, CLI version commands, package identity, manifests, sidecars, and validation.
-- Use exact .NET SDK `10.0.402` with roll-forward disabled. Lock every participating project dependency graph and require locked restores in CI. Projects whose dependency graph varies by host OS use separate committed Windows and Linux lock files; common graphs use one committed `packages.lock.json`.
+- Use the exact .NET SDK pinned in `global.json` with roll-forward disabled. The November 1, 2026 owner-authorized maintenance update advances the current pin to `10.0.403`; the accepted PS-0.11C evidence remains bound to `10.0.402`. See [ADR-0033](adr/0033-product-release-identity-and-reproducible-distribution.md#sdk-maintenance-update---november-1-2026). Lock every participating project dependency graph and require locked restores in CI. Projects whose dependency graph varies by host OS use separate committed Windows and Linux lock files; common graphs use one committed `packages.lock.json`.
 - Packages are framework-dependent .NET 10 artifacts. Operators need the compatible .NET 10 runtime; package build and development still require the SDK. Do not ship `global.json`.
 - Name archives and archive roots from the product version and target platform. Keep package format `proofshift-evaluation-package-v2` independent from product version.
 - Record source revision and Git tree separately, along with SDK, framework, dependency-lock fingerprint, content digest, platform, entry point, and scenario runner. Sidecars also record archive name and archive SHA-256.

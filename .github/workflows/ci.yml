@@ -21,7 +21,7 @@ jobs:
           test "$actual_sha" = "$GITHUB_SHA"
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: 10.0.402
+          global-json-file: global.json
       - name: Record build identity
         shell: bash
         run: |
@@ -69,7 +69,7 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $actualSha -ne $env:GITHUB_SHA) { throw "Checked-out commit does not match the workflow candidate SHA." }
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: 10.0.402
+          global-json-file: global.json
       - name: Record build identity
         shell: pwsh
         run: |
@@ -148,7 +148,7 @@ jobs:
           test "$actual_sha" = "$GITHUB_SHA"
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: 10.0.402
+          global-json-file: global.json
       - name: Record build identity
         shell: bash
         run: |
@@ -228,7 +228,7 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $actualSha -ne $env:GITHUB_SHA) { throw "Checked-out commit does not match the workflow candidate SHA." }
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: 10.0.402
+          global-json-file: global.json
       - name: Record independent build identity
         shell: pwsh
         run: |
@@ -265,7 +265,7 @@ jobs:
           test "$actual_sha" = "$GITHUB_SHA"
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: 10.0.402
+          global-json-file: global.json
       - name: Record independent build identity
         shell: bash
         run: |
@@ -387,7 +387,7 @@ jobs:
           test "$actual_sha" = "$GITHUB_SHA"
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: 10.0.402
+          global-json-file: global.json
       - name: Record build identity
         shell: bash
         run: |
@@ -423,7 +423,7 @@ jobs:
           test "$actual_sha" = "$GITHUB_SHA"
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: 10.0.402
+          global-json-file: global.json
       - name: Record build identity
         shell: bash
         run: |
@@ -452,7 +452,7 @@ jobs:
           test "$actual_sha" = "$GITHUB_SHA"
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: 10.0.402
+          global-json-file: global.json
       - name: Record build identity
         shell: bash
         run: |

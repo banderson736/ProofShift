@@ -436,16 +436,22 @@ run scratch. See the [architecture proposal](PS1_0B_GUIDED_CUSTOMER_EVALUATION.m
 unaccepted pending explicit owner acceptance. Production migration/rollback
 remains unauthorized. PS-1.0C.1-C.6 technical validation is complete on
 candidate `5062a6a317c2bcd8b1c0d09e1d221635210568e4`; exact-head push and PR
-CI passed all required jobs. Explicit owner acceptance remains pending, and
-PS-1.0D has not started.
+CI passed all required jobs. The repository owner accepted PS-1.0C by merging
+PR #23 on October 31, 2026; PS-1.0D has not started.
 
 ### PS-1.0C Repeatable Pilot Evaluation Baselines
 
-Status: **C.1-C.6 technical validation complete; explicit owner acceptance
-pending.** Candidate `5062a6a317c2bcd8b1c0d09e1d221635210568e4` passed
-exact-head push CI run `41169254780` and PR CI run `41169259744`, with all 11
-required jobs passing in each; `build-and-test` passed 362 tests with 0
-failures and 0 skips. Work starts from
+Status: **Accepted October 31, 2026, by explicit repository-owner direction
+through merging PR #23.** Final PR-head candidate
+`1e0068ced5d93edd89d8c97fd6c9dcf09655ce77` (tree
+`9cf76e41327dfa3dfee5f914dc541c0a84d7e77d`) was merged to `main` as
+`99884685865b24e4b092cb508bde5fb209420bdf` with the same tree. Its
+documentation-closure push run `41171454825` and PR run `41171457392` passed
+all required jobs. Implementation candidate
+`5062a6a317c2bcd8b1c0d09e1d221635210568e4` passed exact-head push CI run
+`41169254780` and PR CI run `41169259744`, with all 11 required jobs passing
+in each; `build-and-test` passed 362 tests with 0 failures and 0 skips. Work
+starts from
 merged PS-1.0B baseline `ef90706638e38bb770af4bb0e880011f67aa04f3`. C.1 adds
 explicit promotion of a completed run with its valid final Evidence package,
 immutable identity-only baseline records, fail-closed validation, inspection
@@ -532,13 +538,13 @@ Linux packaged Docker demos. Windows evidence remains package-only; Linux
 evidence remains limited to packaged Docker evaluation. The packaged workflow
 uses synthetic data and test containers only.
 
-Status: **Technical validation complete; explicit owner acceptance pending.**
+Status: **Accepted October 31, 2026, by the repository owner through PR #23.**
 The exact candidate, extracted-package Docker rehearsal, reproducible Linux
 and Windows package evidence, and protected CI are recorded in the
 [acceptance matrix](PS1_0C_ACCEPTANCE_MATRIX.md). Windows evidence remains
 package-only; Linux scenario evidence remains limited to packaged Docker
-evaluation. No PS-1.0C acceptance is claimed. PS-1.0D, production
-migration/rollback, publication, tagging, and signing remain unauthorized.
+evaluation. PS-1.0D, production migration/rollback, publication, tagging, and
+signing remain unauthorized.
 
 ### Potential future product areas (unassigned)
 
