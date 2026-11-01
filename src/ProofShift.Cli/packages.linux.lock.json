@@ -9,8 +9,8 @@
       },
       "AWSSDK.Core": {
         "type": "Transitive",
-        "resolved": "4.0.102.13",
-        "contentHash": "vaYs/kwfB+Lv9PeVKYE4g2mQlzVtHImXLWgfTG8UgeCybUAPkew5kwb8GS6RhuzwvImbolyLHT+IM34WoM9lJg=="
+        "resolved": "4.0.102.14",
+        "contentHash": "pRYOOIyj40UdQ6G9iq8AOU30sFPqWS/umM/sFTmAl4n1S6AVbVa67DJpJTxD+9qJFqweHPcyVW7Qb4BbUBLJdg=="
       },
       "Azure.Core": {
         "type": "Transitive",
@@ -382,7 +382,7 @@
       "proofshift.connectors.db2": {
         "type": "Project",
         "dependencies": {
-          "Net.IBM.Data.Db2-lnx": "[10.0.0.300, )",
+          "Net.IBM.Data.Db2-lnx": "[10.0.0.400, )",
           "ProofShift.Connectors.Abstractions": "[0.1.0-preview.1, )"
         }
       },
@@ -436,7 +436,7 @@
       "proofshift.connectors.s3": {
         "type": "Project",
         "dependencies": {
-          "AWSSDK.S3": "[4.0.104.6, )",
+          "AWSSDK.S3": "[4.0.104.8, )",
           "ProofShift.Connectors.Abstractions": "[0.1.0-preview.1, )",
           "ProofShift.Connectors.RemoteObjects": "[0.1.0-preview.1, )"
         }
@@ -604,11 +604,11 @@
       },
       "AWSSDK.S3": {
         "type": "CentralTransitive",
-        "requested": "[4.0.104.6, )",
-        "resolved": "4.0.104.6",
-        "contentHash": "fSqAOkftU8jKemilzLGZDU0zLEJXHjAemU+8Nd29+sUwRxVK04w6/GY3O4f9S1+JIYwEnHDGcW66VK4AZ2kx6g==",
+        "requested": "[4.0.104.8, )",
+        "resolved": "4.0.104.8",
+        "contentHash": "ER6j94bekBn/YWpcUFArckk+JSObzMZHqHvj1djy5KAMeaG71BBDOJvEQNGFRvc4CUITfJmD/9T87t8b+xnlkg==",
         "dependencies": {
-          "AWSSDK.Core": "[4.0.102.13, 5.0.0)"
+          "AWSSDK.Core": "[4.0.102.14, 5.0.0)"
         }
       },
       "Azure.Identity": {
@@ -669,9 +669,9 @@
       },
       "Net.IBM.Data.Db2-lnx": {
         "type": "CentralTransitive",
-        "requested": "[10.0.0.300, )",
-        "resolved": "10.0.0.300",
-        "contentHash": "8oWivoJgeLC3KDt3MtkdW5/ZSQVoEjmA60BQQK7gz+Bn3WuSdDej336zVkZ2pHQIsCpEXqsjXMeeBIzrXCLCWw=="
+        "requested": "[10.0.0.400, )",
+        "resolved": "10.0.0.400",
+        "contentHash": "Zi7pOduBxJ0jUhhN79SzFfTS2ss67cIKgZe1ASCsF+PqZrgPxG85wUOLSiRy6XTohBtNSePWnDdfP/CmW0Cuow=="
       },
       "Npgsql": {
         "type": "CentralTransitive",
