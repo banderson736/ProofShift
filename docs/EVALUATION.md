@@ -26,7 +26,7 @@ for explicit cleanup and retention steps.
 
 ## Requirements
 
-- Operators need the compatible **.NET 10 runtime**, not the SDK, to run the framework-dependent package. Basic CLI operations are proven in an isolated runtime-only environment. Package build and development use the exact .NET SDK pinned in repository `global.json` (`10.0.402`).
+- Operators need the compatible **.NET 10 runtime**, not the SDK, to run the framework-dependent package. Basic CLI operations are proven in an isolated runtime-only environment. Package build and development use the exact .NET SDK pinned in repository `global.json` (`10.0.403`), with roll-forward disabled. CI setup and package smoke expectations read that same pin.
 - Full physical demos require the .NET 10 runtime and Linux-container Docker in the Ubuntu workflow. Running full Docker-backed demos manually on Windows also requires compatible Docker setup, but that path is not part of the Windows package-only acceptance claim.
 - Network access on the first Linux demo run may be needed to pull the synthetic SQL Server/PostgreSQL test images; no image is redistributed. The package contains the NuGet runtime dependencies for the published CLI and DemoRunner/DemoScenarios, including Testcontainers where required by fixture lifecycle code. It does not package a test runner.
 

@@ -1,6 +1,6 @@
 # ADR-0038: Evaluation Baseline Promotion and History
 
-- Status: Accepted architecture for PS-1.0C.1-C.5; C.6 technical validation complete, owner acceptance pending
+- Status: Accepted architecture for PS-1.0C.1-C.5; PS-1.0C accepted by repository-owner direction through PR #23 on 2026-10-31
 - Date: 2026-10-30
 
 ## Context
@@ -193,8 +193,10 @@ authorize production migration or rollback.
 C.1-C.5 implementation and C.6 technical validation are complete. The exact
 candidate passed push CI run `41169254780` and PR CI run `41169259744`, with
 all 11 required jobs passing in each; `build-and-test` passed 362 tests with
-0 failures and 0 skips. Explicit owner acceptance remains pending. This ADR
-records architecture decisions and does not claim PS-1.0C acceptance.
+0 failures and 0 skips. The repository owner accepted PS-1.0C by merging PR
+#23 on 2026-10-31 as `99884685865b24e4b092cb508bde5fb209420bdf`. The final
+documentation-closure push run `41171454825` and PR run `41171457392` also
+passed all required jobs.
 
 ## C.4 portable governance packages and offline comparison addendum
 
@@ -246,9 +248,9 @@ discovery, or customer-system access.
    roles preserve existing package validation and legacy package compatibility.
 
 C.4 implementation and validation are recorded in the acceptance matrix.
-C.1-C.6 technical validation is complete; explicit owner acceptance remains
-pending. This ADR does not claim PS-1.0C acceptance or authorize production
-migration/rollback.
+C.1-C.6 technical validation is complete, and PS-1.0C was accepted by the
+repository owner through PR #23 on 2026-10-31. This ADR does not authorize
+PS-1.0D or production migration/rollback.
 
 ## C.5 repeatable pilot history and re-baselining addendum
 
@@ -304,5 +306,5 @@ C.6 validated the complete packaged lifecycle, including physical schema
 drift and latest-per-endpoint connected discovery, baseline-governed review
 and execution, offline comparison, explicit progression, and isolated
 workspace derivation. Exact-candidate push and PR CI passed all 11 required
-jobs; explicit owner acceptance remains pending. This ADR does not claim
-PS-1.0C acceptance or authorize production migration/rollback.
+jobs. The repository owner accepted PS-1.0C through PR #23 on 2026-10-31.
+This ADR does not authorize PS-1.0D or production migration/rollback.

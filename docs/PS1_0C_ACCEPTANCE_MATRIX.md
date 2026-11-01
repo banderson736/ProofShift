@@ -1,14 +1,17 @@
 # PS-1.0C Acceptance Matrix
 
-Status: **C.1-C.6 technical validation gates pass; explicit owner acceptance
-remains pending.** Candidate `5062a6a317c2bcd8b1c0d09e1d221635210568e4`
-(tree `312ddd47cc81f62be942e7b5342e08ceef010538`) passed exact-head push CI
+Status: **Accepted October 31, 2026, by explicit repository-owner direction
+through merging PR #23.** Final PR-head candidate
+`1e0068ced5d93edd89d8c97fd6c9dcf09655ce77` (tree
+`9cf76e41327dfa3dfee5f914dc541c0a84d7e77d`) was merged to `main` as
+`99884685865b24e4b092cb508bde5fb209420bdf` with the same tree. Final
+documentation-closure push run `41171454825` and PR run `41171457392`
+passed all required jobs. The implementation candidate
+`5062a6a317c2bcd8b1c0d09e1d221635210568e4` also passed exact-head push CI
 run `41169254780` and PR CI run `41169259744`, with all 11 required jobs
-passing in each. The PR synthetic merge commit
-`69e496ecafb602408e309e93340b95373dcef9b1` has the same tree as the
-candidate. `build-and-test` passed 362 tests, 0 failed, 0 skipped. The
-extracted-package rehearsal and persisted governance identities are recorded
-below. This matrix records technical evidence, not owner acceptance.
+passing in each; `build-and-test` passed 362 tests, 0 failed, 0 skipped.
+All C.1-C.6 acceptance gates pass. This record preserves the evidence and
+the acceptance boundaries.
 
 | # | C.1 acceptance gate | Status | Evidence |
 |---:|---|---|---|
@@ -96,7 +99,7 @@ below. This matrix records technical evidence, not owner acceptance.
 | C.5 authoring CLI tests | `dotnet test --project .\tests\ProofShift.EndToEnd.Tests\ProofShift.EndToEnd.Tests.csproj --no-restore --filter-class ProofShift.EndToEnd.Tests.AuthoringCliTests`: passed, 60 passed, 0 failed, 2 skipped (symlink creation unavailable). SDK 10.0.403 was selected by temporarily changing the pinned SDK from 10.0.402; `global.json` was restored byte-for-byte. |
 | Documentation/link validation | Relative links in six product documentation files passed. `.github/copilot-instructions.md` retains pre-existing `docs/...` links that do not resolve relative to `.github`; no new links were added there. |
 | Whitespace/error check | `git diff --check`: passed. |
-| Exact-head package/CI evidence / owner acceptance | Candidate `5062a6a317c2bcd8b1c0d09e1d221635210568e4` passed push run `41169254780` and PR run `41169259744`; all 11 required jobs passed in both. `build-and-test` passed 362 tests with 0 failures and 0 skips. Explicit owner acceptance remains pending. |
+| Exact-head package/CI evidence / owner acceptance | Candidate `5062a6a317c2bcd8b1c0d09e1d221635210568e4` passed push run `41169254780` and PR run `41169259744`; all 11 required jobs passed in both. `build-and-test` passed 362 tests with 0 failures and 0 skips. The repository owner accepted PS-1.0C by merging PR #23 as `99884685865b24e4b092cb508bde5fb209420bdf` on October 31, 2026; final documentation-closure push/PR runs `41171454825` / `41171457392` also passed all required jobs. |
 | Persisted packaged-pilot governance identities | PR smoke artifact `13030972332`; candidate run `63dce8b0-1c5d-4be7-a798-98999ed0f032`, `QUALIFIED`, outcome `ChangedStillQualified`. Review ID `5aa4b6ed-d15c-43fb-815f-48368fd61389`, integrity SHA-256 `148a1bad7458d71cf49669d0c9f9d591c695228b25a38e4f0780e89aeacf695f`, drift identity `54e81ad1d61f128a09bd56a54dda1a9f7fe84552bead9defc4d12bb460e0d7f5`. Comparison index key/ID is the candidate run ID; record integrity SHA-256 `499a088ce1853b3393d735a6c3f4dca4c181f3258f80f7e887e66f1dad1ffb0d`, detailed-comparison identity fingerprint `85d466f4aded35b9a099e8ae614d1ae8ef67d22b0d53bc75cb356db68acbc86d`. |
 | PR package reproducibility and platform-scoped smoke | PR packages were built from synthetic merge SHA `69e496ecafb602408e309e93340b95373dcef9b1`, whose tree equals candidate tree `312ddd47cc81f62be942e7b5342e08ceef010538`. Linux archive/content SHA-256: `d7dae91095d9bb2efb9ef8a5263ba187d7b403be1c5d18a799c7dca2c41005db` / `e544e76aa04412c30f56990b99478d6a88cd96498c952da015554782b75b26a7`. Windows `win-x64` package-only archive/content SHA-256: `1e95e20c22a2d866f3bc298f8ecdea54b15731edefc383b669ad720ac1422186` / `a076ad7d24a3cebbd62cb02986ad05f6bf0c6503c10e5b33646c06fd4ce47bce`. |
 
@@ -116,7 +119,7 @@ below. This matrix records technical evidence, not owner acceptance.
 | 10 | Source and destination symlink tests pass on a symlink-capable runner with no skip | PASS | Both symlink/reparse tests passed on the exact-head Linux CI runner; the Windows local capability skips are documented separately. |
 | 11 | Linux and Windows packages build reproducibly; Windows remains package-only and Linux claims remain packaged-Docker scoped | PASS | Exact-head push/PR CI passed Linux and Windows package A/B reproducibility, Linux packaged Docker demos, and Windows package-only smoke. Platform claims remain scoped accordingly. |
 | 12 | Full required tests and protected CI pass on the exact candidate; candidate SHA/tree match PR head | PASS | Candidate `5062a6a317c2bcd8b1c0d09e1d221635210568e4` (tree `312ddd47cc81f62be942e7b5342e08ceef010538`) passed push run `41169254780` and PR run `41169259744`, 11/11 jobs each. The PR synthetic merge SHA `69e496ecafb602408e309e93340b95373dcef9b1` has the identical tree. `build-and-test`: 362 passed, 0 failed, 0 skipped. |
-| 13 | Final docs and acceptance evidence reconcile technical results and scope; owner decision remains separate | PASS | This matrix and linked status documents record the completed technical evidence and preserve owner acceptance as a separate pending decision. No merge or PS-1.0C acceptance is claimed. |
+| 13 | Final docs and acceptance evidence reconcile technical results and scope; owner decision remains separate | PASS | The repository owner accepted PS-1.0C by merging PR #23 on October 31, 2026. This matrix and linked documents record that decision separately from the technical evidence. |
 
 ## Scope boundary
 
@@ -125,8 +128,6 @@ C.2 read-only semantic-drift planning, C.3 baseline-aware
 execution/review/outcome comparison, C.4 portable governance packages and
 offline comparison, and C.5 rebuildable run history, explicit
 baseline progression, safe configuration-only workspace reuse, and assigned
-C.6 final validation. The matrix records evidence, not PS-1.0C acceptance.
-The technical workflow evidence above does not constitute PS-1.0C acceptance.
-The exact-head CI and documentation reconciliation are complete. Explicit
-owner acceptance remains separate and pending; no merge, production
-migration, or production rollback is implied.
+C.6 final validation. The repository owner accepted this milestone by
+merging PR #23 on October 31, 2026. Acceptance does not authorize PS-1.0D,
+production migration/rollback, publication, tagging, or signing.

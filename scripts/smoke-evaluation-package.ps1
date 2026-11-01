@@ -272,9 +272,10 @@ Assert-Equal $provenance.packageFormat $manifest.format "Provenance package form
 if ($manifest.productVersion -notmatch '^\d+\.\d+\.\d+-preview\.\d+$') {
     throw "Product version is not a preview semantic version: $($manifest.productVersion)"
 }
+$sdkPolicy = Get-Content -LiteralPath (Join-Path $checkoutPath "global.json") -Raw | ConvertFrom-Json
 if ($manifest.sourceTree -notmatch '^[0-9a-f]{40}$' -or
     $manifest.dependencyLockSha256 -notmatch '^[0-9a-f]{64}$' -or
-    $manifest.buildSdkVersion -ne "10.0.402" -or $manifest.targetFramework -ne "net10.0") {
+    $manifest.buildSdkVersion -ne $sdkPolicy.sdk.version -or $manifest.targetFramework -ne "net10.0") {
     throw "Package provenance contains invalid source, lock, SDK, or framework identity."
 }
 if (-not $manifest.sourceWorktreeClean) { throw "Package was not built from a clean source worktree." }

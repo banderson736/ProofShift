@@ -30,11 +30,15 @@ configuration-only workspaces without copying execution/history/data outputs.
 C.1-C.6 technical validation is complete on candidate
 `5062a6a317c2bcd8b1c0d09e1d221635210568e4`; push run `41169254780` and PR run
 `41169259744` passed all 11 required jobs, and `build-and-test` passed 362
-tests with 0 failures and 0 skips. Connected preflight validates all persisted
-discovery artifacts but compares only the newest artifact per endpoint with a
-fresh read-only observation, retaining earlier records for historical drift
-comparison. Explicit owner acceptance remains pending; PS-1.0C is not
-accepted.
+tests with 0 failures and 0 skips. Final PR-head candidate
+`1e0068ced5d93edd89d8c97fd6c9dcf09655ce77` was merged as
+`99884685865b24e4b092cb508bde5fb209420bdf` with the same tree; its push and
+PR CI runs `41171454825` and `41171457392` passed all required jobs. The
+repository owner accepted PS-1.0C through that merge on October 31, 2026.
+Connected preflight validates all persisted discovery artifacts but compares
+only the newest artifact per endpoint with a fresh read-only observation,
+retaining earlier records for historical drift comparison. PS-1.0D remains
+unassigned.
 
 ## Accepted decisions
 

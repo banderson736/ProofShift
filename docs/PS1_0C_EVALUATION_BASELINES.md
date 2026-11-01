@@ -2,9 +2,15 @@
 
 ## Status
 
-**Technical validation complete; explicit owner acceptance remains pending.**
-Candidate `5062a6a317c2bcd8b1c0d09e1d221635210568e4` passed exact-head push CI
-run `41169254780` and PR CI run `41169259744`, with all 11 required jobs
+**Accepted October 31, 2026, by explicit repository-owner direction through
+merging PR #23.** Final PR-head candidate
+`1e0068ced5d93edd89d8c97fd6c9dcf09655ce77` (tree
+`9cf76e41327dfa3dfee5f914dc541c0a84d7e77d`) was merged to `main` as
+`99884685865b24e4b092cb508bde5fb209420bdf` with the same tree. Its
+documentation-closure push run `41171454825` and PR run `41171457392` passed
+all required jobs. Implementation candidate
+`5062a6a317c2bcd8b1c0d09e1d221635210568e4` passed exact-head push CI run
+`41169254780` and PR CI run `41169259744`, with all 11 required jobs
 passing in each; `build-and-test` passed 362 tests with 0 failures and 0 skips.
 Work starts from merged PS-1.0B baseline
 `ef90706638e38bb770af4bb0e880011f67aa04f3`. It adds explicit promotion of
@@ -16,10 +22,10 @@ configuration-only workspace reuse. C.1-C.5 local implementation and
 validation do not claim PS-1.0C acceptance. C.6 validates the complete
 baseline-governed workflow using the extracted product package, provider-backed
 discovery and schema drift, cross-platform package evidence, and an exact
-candidate in protected CI. Technical evidence is complete; owner acceptance
-and merge remain separate and pending. See the
+candidate in protected CI. The acceptance decision is recorded separately
+from the technical evidence in the
 [acceptance matrix](PS1_0C_ACCEPTANCE_MATRIX.md) for the detailed evidence and
-scope boundaries. This status is not an acceptance claim.
+scope boundaries.
 
 ## Goal
 
@@ -332,6 +338,5 @@ separate explicit choice. Review is not production approval.
   not classified as a qualified outcome.
 - A `QUALIFIED` candidate is not automatically promoted; promotion remains a
   separate explicit C.1 operation.
-- Exact-candidate technical validation is complete, but explicit owner
-  acceptance remains pending. PS-1.0C remains unaccepted; PS-1.0D has not
-  started.
+- PS-1.0C is accepted by the repository owner through PR #23. PS-1.0D has
+  not started and requires a new explicit assignment.

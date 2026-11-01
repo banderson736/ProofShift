@@ -39,4 +39,17 @@ The evaluator package has historically exposed internal milestone labels as prod
 
 ## Validation
 
+### SDK maintenance update - November 1, 2026
+
+By explicit repository-owner direction, the current SDK pin advances from
+`10.0.402` to `10.0.403` to match the installed development SDK. Roll-forward
+remains disabled and locked restore remains required. CI setup and package
+smoke expectations now read `global.json` rather than duplicating the SDK
+version. Package construction already enforces that policy and records the
+actual SDK in its manifest and provenance. Independent package reproducibility
+must be revalidated for the new candidate; historical acceptance evidence below
+continues to describe builds made with `10.0.402`. This maintenance update does
+not change product identity, runtime support, package format, or authorization
+to publish, tag, or sign.
+
 Accepted on exact source candidate `286ea550e559b360fd9c85c2a65e2b1394a95408`, tree `d32fab40faa4bfc08c28b0742c46f8f372ae26c7`, after [GitHub Actions run 40178365888](https://github.com/banderson736/ProofShift/actions/runs/40178365888) passed. The candidate was merged to `main` as `5a1a3ec064aca98266cf0abb3c7749f7416da67e` with the same tree. The [PS-0.11C acceptance matrix](../PS0_11C_ACCEPTANCE_MATRIX.md) records all 37 passing gates, exact test totals, runtime-only evidence, independent Windows/Linux archive and content hashes, and platform-specific dependency-lock fingerprints.
