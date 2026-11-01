@@ -4,9 +4,9 @@
     "net10.0": {
       "Net.IBM.Data.Db2-lnx": {
         "type": "Direct",
-        "requested": "[10.0.0.300, )",
-        "resolved": "10.0.0.300",
-        "contentHash": "8oWivoJgeLC3KDt3MtkdW5/ZSQVoEjmA60BQQK7gz+Bn3WuSdDej336zVkZ2pHQIsCpEXqsjXMeeBIzrXCLCWw=="
+        "requested": "[10.0.0.400, )",
+        "resolved": "10.0.0.400",
+        "contentHash": "Zi7pOduBxJ0jUhhN79SzFfTS2ss67cIKgZe1ASCsF+PqZrgPxG85wUOLSiRy6XTohBtNSePWnDdfP/CmW0Cuow=="
       },
       "proofshift.connectors.abstractions": {
         "type": "Project",

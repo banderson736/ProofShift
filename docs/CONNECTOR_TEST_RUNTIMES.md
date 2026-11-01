@@ -14,7 +14,7 @@ These runtimes are used only for synthetic development, automated tests and inte
 ## IBM Db2
 
 - Server image: `icr.io/db2_community/db2:11.5.9.0` (Db2 LUW Community Edition, Linux AMD64 in CI).
-- Provider: `Net.IBM.Data.Db2-lnx` 10.0.0.300 on Linux AMD64 and `Net.IBM.Data.Db2` 10.0.0.300 on Windows x64; both target .NET 10.
+- Provider: `Net.IBM.Data.Db2-lnx` 10.0.0.400 on Linux AMD64 and `Net.IBM.Data.Db2` 10.0.0.300 on Windows x64; both target .NET 10.
 - Test database: `PS010C`; the fixture's `LICENSE=accept` environment setting is explicit in the test container definition.
 - Runtime limits/documented purpose: IBM describes this Community image as unsupported and non-production, with published 4-core/16-GB limits. See [IBM Db2 Community Edition for Docker](https://www.ibm.com/docs/en/db2/11.5.x?topic=deployments-db2-community-edition-docker).
 - Runtime purpose: Db2 LUW source discovery, inspection, streamed reads, checkpoint capture/replay and read-only target observation. No Db2 shadow writing is provided. z/OS, IBM i and Db2 Connect-dependent targets are excluded.

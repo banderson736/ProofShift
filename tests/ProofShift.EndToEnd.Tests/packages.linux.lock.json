@@ -14,11 +14,11 @@
       },
       "Testcontainers.MsSql": {
         "type": "Direct",
-        "requested": "[4.15.0, )",
-        "resolved": "4.15.0",
-        "contentHash": "lpRFX62aTuf91WT+WxqTIRHI/HO+xgxxZ6lNtXP6SYTt/5KmoY2Qdt3vZj41IDx4MwSlupDMlofjW9yoQPmpyQ==",
+        "requested": "[4.16.0, )",
+        "resolved": "4.16.0",
+        "contentHash": "UVLYLyq9CDSfLZUeu+CyDmwV7wo2LMNlpBLP8ZO9HG42WT3KTMI/p7qYesiCAZmo6GUeWH/Z6SOIw66Y4qnWuw==",
         "dependencies": {
-          "Testcontainers": "4.15.0"
+          "Testcontainers": "4.16.0"
         }
       },
       "Testcontainers.PostgreSql": {
@@ -46,8 +46,8 @@
       },
       "AWSSDK.Core": {
         "type": "Transitive",
-        "resolved": "4.0.102.13",
-        "contentHash": "vaYs/kwfB+Lv9PeVKYE4g2mQlzVtHImXLWgfTG8UgeCybUAPkew5kwb8GS6RhuzwvImbolyLHT+IM34WoM9lJg=="
+        "resolved": "4.0.102.14",
+        "contentHash": "pRYOOIyj40UdQ6G9iq8AOU30sFPqWS/umM/sFTmAl4n1S6AVbVa67DJpJTxD+9qJFqweHPcyVW7Qb4BbUBLJdg=="
       },
       "Azure.Core": {
         "type": "Transitive",
@@ -651,7 +651,7 @@
       "proofshift.connectors.db2": {
         "type": "Project",
         "dependencies": {
-          "Net.IBM.Data.Db2-lnx": "[10.0.0.300, )",
+          "Net.IBM.Data.Db2-lnx": "[10.0.0.400, )",
           "ProofShift.Connectors.Abstractions": "[0.1.0-preview.1, )"
         }
       },
@@ -705,7 +705,7 @@
       "proofshift.connectors.s3": {
         "type": "Project",
         "dependencies": {
-          "AWSSDK.S3": "[4.0.104.6, )",
+          "AWSSDK.S3": "[4.0.104.8, )",
           "ProofShift.Connectors.Abstractions": "[0.1.0-preview.1, )",
           "ProofShift.Connectors.RemoteObjects": "[0.1.0-preview.1, )"
         }
@@ -762,7 +762,7 @@
           "ProofShift.Reporting": "[0.1.0-preview.1, )",
           "ProofShift.Snapshots": "[0.1.0-preview.1, )",
           "ProofShift.Verification": "[0.1.0-preview.1, )",
-          "Testcontainers.MsSql": "[4.15.0, )",
+          "Testcontainers.MsSql": "[4.16.0, )",
           "Testcontainers.PostgreSql": "[4.15.0, )",
           "YamlDotNet": "[18.1.0, )"
         }
@@ -903,11 +903,11 @@
       },
       "AWSSDK.S3": {
         "type": "CentralTransitive",
-        "requested": "[4.0.104.6, )",
-        "resolved": "4.0.104.6",
-        "contentHash": "fSqAOkftU8jKemilzLGZDU0zLEJXHjAemU+8Nd29+sUwRxVK04w6/GY3O4f9S1+JIYwEnHDGcW66VK4AZ2kx6g==",
+        "requested": "[4.0.104.8, )",
+        "resolved": "4.0.104.8",
+        "contentHash": "ER6j94bekBn/YWpcUFArckk+JSObzMZHqHvj1djy5KAMeaG71BBDOJvEQNGFRvc4CUITfJmD/9T87t8b+xnlkg==",
         "dependencies": {
-          "AWSSDK.Core": "[4.0.102.13, 5.0.0)"
+          "AWSSDK.Core": "[4.0.102.14, 5.0.0)"
         }
       },
       "Azure.Identity": {
@@ -968,9 +968,9 @@
       },
       "Net.IBM.Data.Db2-lnx": {
         "type": "CentralTransitive",
-        "requested": "[10.0.0.300, )",
-        "resolved": "10.0.0.300",
-        "contentHash": "8oWivoJgeLC3KDt3MtkdW5/ZSQVoEjmA60BQQK7gz+Bn3WuSdDej336zVkZ2pHQIsCpEXqsjXMeeBIzrXCLCWw=="
+        "requested": "[10.0.0.400, )",
+        "resolved": "10.0.0.400",
+        "contentHash": "Zi7pOduBxJ0jUhhN79SzFfTS2ss67cIKgZe1ASCsF+PqZrgPxG85wUOLSiRy6XTohBtNSePWnDdfP/CmW0Cuow=="
       },
       "Npgsql": {
         "type": "CentralTransitive",
@@ -1023,9 +1023,9 @@
       },
       "Testcontainers": {
         "type": "CentralTransitive",
-        "requested": "[4.15.0, )",
-        "resolved": "4.15.0",
-        "contentHash": "8tCZKMm++C/9dHIr8lsE1iDBIBmthbo2XlGFDr4gorT1vgZrJwU36fNkCGuX7h7V39rpQoTK/aG+FhJz3jhY3A==",
+        "requested": "[4.16.0, )",
+        "resolved": "4.16.0",
+        "contentHash": "JmMUZk6ZXQovbGQjaMB+YxOR0PbJTdYjOYjRcrm5LrA2dhLVMuCbhVGGunzCGIQfFMUB5Lno2LPOHMMuaGmuIg==",
         "dependencies": {
           "Docker.DotNet.Enhanced": "4.3.3",
           "Docker.DotNet.Enhanced.X509": "4.3.3",
