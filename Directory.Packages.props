@@ -14,7 +14,7 @@
     <PackageVersion Include="CsvHelper" Version="33.1.0" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.14" />
     <PackageVersion Include="Testcontainers.PostgreSql" Version="4.15.0" />
-    <PackageVersion Include="Testcontainers.MsSql" Version="4.15.0" />
+    <PackageVersion Include="Testcontainers.MsSql" Version="4.16.0" />
     <PackageVersion Include="Testcontainers" Version="4.15.0" />
     <PackageVersion Include="AWSSDK.S3" Version="4.0.104.6" />
     <PackageVersion Include="Azure.Storage.Blobs" Version="12.30.1" />
